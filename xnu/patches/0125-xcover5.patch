@@ -431,14 +431,190 @@ index dcbd143..61de944 100644
  					int down = !(sample & bit);
  					printf("A5XELTE KEYS: key=%u down=%d gpio=%#x\n",
 diff --git a/bsd/dev/a5xelte_touch.c b/bsd/dev/a5xelte_touch.c
-index ba647a8..a9ca3a0 100644
+index ba647a8..e54b05f 100644
 --- a/bsd/dev/a5xelte_touch.c
 +++ b/bsd/dev/a5xelte_touch.c
-@@ -920,6 +920,19 @@ dreamlte_touch_start(void)
+@@ -920,11 +920,203 @@ dreamlte_touch_start(void)
  }
  #endif /* DREAMLTE */
  
 +#if defined(XCOVER5)
++/*
++ * Galaxy XCover5 touch: Novatek NT36525 (TDDI) on SPI1 = USI_CMGP0 at
++ * 0x11d00000. The loader (shim/xcover5) sets up clocks, USI mode and pins,
++ * downloads the firmware Samsung ships in vendor/firmware (appended to the
++ * BOOT payload) and adds xc5touch=1 when the firmware reports ready. Here
++ * the event buffer (NT36672A map, 0x21c00) is polled every 10 ms: one byte
++ * status then 6 bytes per finger (id << 3 | state, x/y in 12 bits). The
++ * panel is 720x1480; the HID digitizer takes 1080x1920 for the whole
++ * presented display (iPhone X size scaled to 683x1480 at x 18, or the
++ * panel itself with sweetfb_native=1).
++ */
++#define XC5_SPI         0x11d00000u
++#define XC5_CMGP_PIN    0x11c30000u     /* gpm3 DAT at 0x64: CS */
++#define XC5_EVENT_BUF   0x21c00u
++#define XC5_FINGERS     10
++static vm_offset_t xc5ts_spi, xc5ts_pin;
++static int xc5ts_sleep, xc5ts_native;
++static bool xc5ts_down[XC5_FINGERS];
++static uint16_t xc5ts_x[XC5_FINGERS], xc5ts_y[XC5_FINGERS];
++
++static inline uint32_t
++xc5ts_rd(vm_offset_t base, uint32_t off)
++{
++	return *(volatile uint32_t *)(base + off);
++}
++
++static inline void
++xc5ts_wr(vm_offset_t base, uint32_t off, uint32_t v)
++{
++	*(volatile uint32_t *)(base + off) = v;
++}
++
++static void
++xc5ts_cs(int level)
++{
++	uint32_t d = xc5ts_rd(xc5ts_pin, 0x64);
++	xc5ts_wr(xc5ts_pin, 0x64, level ? (d | 1u) : (d & ~1u));
++	delay(2);
++}
++
++/* One byte full duplex, polled (FIFO levels: TX [14:6], RX [23:15]). */
++static int
++xc5ts_xfer(uint8_t tx)
++{
++	for (int i = 0; i < 100000; i++) {
++		if (((xc5ts_rd(xc5ts_spi, 0x14) >> 6) & 0x1ffu) < 64) {
++			xc5ts_wr(xc5ts_spi, 0x18, tx);
++			for (int j = 0; j < 100000; j++) {
++				if ((xc5ts_rd(xc5ts_spi, 0x14) >> 15) & 0x1ffu) {
++					return (int)(xc5ts_rd(xc5ts_spi, 0x1c) & 0xffu);
++				}
++			}
++			return -1;
++		}
++	}
++	return -1;
++}
++
++/* Page select FF a[23:15] a[14:7], then a[6:0], one dummy byte, data. */
++static bool
++xc5ts_read(uint32_t addr, uint8_t *buf, int n)
++{
++	bool ok = true;
++	xc5ts_cs(0);
++	ok &= xc5ts_xfer(0xff) >= 0;
++	ok &= xc5ts_xfer((uint8_t)(addr >> 15)) >= 0;
++	ok &= xc5ts_xfer((uint8_t)(addr >> 7)) >= 0;
++	xc5ts_cs(1);
++	xc5ts_cs(0);
++	ok &= xc5ts_xfer((uint8_t)(addr & 0x7fu)) >= 0;
++	ok &= xc5ts_xfer(0) >= 0;
++	for (int i = 0; i < n; i++) {
++		int v = xc5ts_xfer(0);
++		ok &= v >= 0;
++		buf[i] = (uint8_t)v;
++	}
++	xc5ts_cs(1);
++	return ok;
++}
++
++/* Panel pixel -> HID digitizer 1080x1920 of the presented display. */
++static void
++xc5ts_map(unsigned px, unsigned py, int *x, int *y)
++{
++	if (xc5ts_native) {
++		*x = (int)(px * 1080u / 720u);
++	} else {
++		int lx = (int)px - 18;               /* 683 px wide, centered */
++		lx = lx < 0 ? 0 : (lx > 682 ? 682 : lx);
++		*x = lx * 1080 / 683;
++	}
++	*y = (int)(py * 1920u / 1480u);
++}
++
++static void
++xc5ts_thread(__unused void *arg, __unused wait_result_t wr)
++{
++	uint8_t pt[66];
++	unsigned errors = 0;
++	for (;;) {
++		uint64_t deadline;
++		bool now[XC5_FINGERS] = { false };
++		clock_interval_to_deadline(10, NSEC_PER_MSEC, &deadline);
++		(void)assert_wait_deadline(&xc5ts_sleep, THREAD_UNINT, deadline);
++		thread_block(THREAD_CONTINUE_NULL);
++		if (!xc5ts_read(XC5_EVENT_BUF, pt, 65)) {
++			if (errors++ < 5) {
++				printf("XC5 TOUCH: SPI timeout\n");
++			}
++			continue;
++		}
++		if (pt[1] == 0xfd || pt[1] == 0xfe || pt[1] == 0x77) {
++			continue;       /* watchdog / ESD marker: no data */
++		}
++		for (int i = 0; i < XC5_FINGERS; i++) {
++			const uint8_t *q = &pt[1 + 6 * i];
++			unsigned id = q[0] >> 3, st = q[0] & 7u;
++			if (id == 0 || id > XC5_FINGERS || (st != 1 && st != 2)) {
++				continue;
++			}
++			unsigned px = ((unsigned)q[1] << 4) | (q[3] >> 4);
++			unsigned py = ((unsigned)q[2] << 4) | (q[3] & 0xfu);
++			if (px >= 720 || py >= 1480) {
++				continue;
++			}
++			int x, y, t = (int)id - 1;
++			xc5ts_map(px, py, &x, &y);
++			now[t] = true;
++			if (!xc5ts_down[t]) {
++				printf("XC5 TOUCH: down id=%d panel %u,%u\n", t, px, py);
++			}
++			xc5ts_down[t] = true;
++			xc5ts_x[t] = (uint16_t)x;
++			xc5ts_y[t] = (uint16_t)y;
++			if (t < 5) {
++				sweet_hid_touch(t, 1, x, y);
++			}
++		}
++		for (int t = 0; t < XC5_FINGERS; t++) {
++			if (xc5ts_down[t] && !now[t]) {
++				xc5ts_down[t] = false;
++				if (t < 5) {
++					sweet_hid_touch(t, 0, xc5ts_x[t], xc5ts_y[t]);
++				}
++			}
++		}
++	}
++}
++
++static void
++xcover5_touch_start(void)
++{
++	int ready = 0;
++	thread_t thread;
++	(void)PE_parse_boot_argn("xc5touch", &ready, sizeof(ready));
++	(void)PE_parse_boot_argn("sweetfb_native", &xc5ts_native, sizeof(xc5ts_native));
++	if (!ready) {
++		printf("XC5 TOUCH: off (loader did not start the firmware)\n");
++		return;
++	}
++	xc5ts_spi = ml_io_map(XC5_SPI, 0x1000);
++	xc5ts_pin = ml_io_map(XC5_CMGP_PIN, 0x1000);
++	if (!xc5ts_spi || !xc5ts_pin) {
++		printf("XC5 TOUCH: MMIO mapping failed\n");
++		return;
++	}
++	uint8_t id[8];
++	bool ok = xc5ts_read(0x1f64e, id, 6);
++	printf("XC5 TOUCH: spi_st=%#x id %02x %02x %02x %02x %02x %02x%s\n",
++	    xc5ts_rd(xc5ts_spi, 0x14), id[0], id[1], id[2], id[3], id[4], id[5],
++	    ok ? "" : " (timeout)");
++	if (kernel_thread_start(xc5ts_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	}
++}
++
 +/* No XCover5 fuel-gauge driver yet: SweetBattery publishes a static 100 %. */
 +int dreamlte_battery_read(unsigned *percent, unsigned *mv, int *ma,
 +    int *external, int *charging, int *full);
@@ -454,6 +630,14 @@ index ba647a8..a9ca3a0 100644
  void
  a5xelte_touch_probe(void)
  {
+ #if defined(DREAMLTE)
+ 	dreamlte_touch_start();   /* the A5 path below stays off */
++#endif
++#if defined(XCOVER5)
++	xcover5_touch_start();    /* the A5 path below stays off */
+ #endif
+ 	int enabled = A5_TOUCH_DEFAULT; /* A5 touch: off on the S8 */
+ 	int log_contacts = 0;
 diff --git a/iokit/Kernel/arm/SweetCPU.cpp b/iokit/Kernel/arm/SweetCPU.cpp
 index 5bd24a7..84f5069 100644
 --- a/iokit/Kernel/arm/SweetCPU.cpp

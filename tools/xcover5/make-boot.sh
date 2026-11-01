@@ -28,4 +28,9 @@ canvas=1125x2436
 python3 "$repo/tools/mkadt_xcover5.py" "$work/xcover5.adt" --canvas "$canvas" ${XC5_DRAM:+--dram "$XC5_DRAM"}
 python3 "$repo/tools/mkpayload.py" "$kernel" "$work/xcover5.adt" "$work/payload.bin" --cmdline "$args"
 bash "$repo/shim/xcover5/build.sh"
-python3 "$repo/tools/xcover5/mkboot.py" "$stock" "$work/Image" "$work/payload.bin" "$out" --tar "${out%.img}.tar"
+# Touch: the loader downloads the Novatek firmware when it is appended.
+# Default: research/fw/nt36525_xcover5.bin (from vendor/firmware, not in git);
+# XC5_TOUCH_FW=none leaves it out.
+fw=${XC5_TOUCH_FW:-$repo/research/fw/nt36525_xcover5.bin}
+[[ $fw != none && -f $fw ]] || fw=
+python3 "$repo/tools/xcover5/mkboot.py" "$stock" "$work/Image" "$work/payload.bin" "$out" --tar "${out%.img}.tar" ${fw:+--touch-fw "$fw"}

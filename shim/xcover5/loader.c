@@ -812,6 +812,22 @@ static void touch_test(void)
 	}
 }
 
+static void append_bootarg(volatile struct boot_args *ba, const char *arg)
+{
+	int at = 0, n = 0;
+	while (at < BOOT_LINE_LENGTH && ba->CommandLine[at])
+		at++;
+	while (arg[n])
+		n++;
+	if (at + n >= BOOT_LINE_LENGTH)
+		return;
+	for (int i = 0; i <= n; i++)
+		ba->CommandLine[at + i] = arg[i];
+	out("boot-arg:");
+	out(arg);
+	out("\n");
+}
+
 uint64_t dl_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 {
 	/* Before the log zones are reset: show the previous boot's log? */
@@ -947,6 +963,22 @@ uint64_t dl_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 		out(c);
 	}
 	out("\n");
+	/* Touch firmware appended after the payload by tools/xcover5/mkboot.py
+	 * (--touch-fw): FW bytes, then "NVTFWXC5", u32 size, u32 0. On success
+	 * the kernel gets xc5touch=1 and only polls the event buffer. */
+	{
+		const volatile uint8_t *tr = (const volatile uint8_t *)(rd_start + length - 16);
+		uint32_t fwsz = le32(tr + 8);
+		if (length > 16 && tr[0] == 'N' && tr[1] == 'V' && tr[2] == 'T' && tr[3] == 'F' &&
+		    tr[4] == 'W' && tr[5] == 'X' && tr[6] == 'C' && tr[7] == '5' &&
+		    fwsz && fwsz < length - 16) {
+			const volatile uint8_t *fw = tr - fwsz;
+			touch_probe();
+			if (is_nvt_fw(fw, fwsz) && touch_download(fw, fwsz) == 0)
+				append_bootarg(ba, " xc5touch=1");
+			clean(ba_pa, ba_pa + PAGE_SIZE);
+		}
+	}
 	fg = 0xff40ff40U;
 	out("\nJUMP TO XNU\n");
 	reserve_marker();

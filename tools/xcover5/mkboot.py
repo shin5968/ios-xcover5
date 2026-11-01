@@ -36,6 +36,9 @@ def main():
     ap.add_argument('ramdisk', type=Path)
     ap.add_argument('out', type=Path)
     ap.add_argument('--tar', type=Path)
+    ap.add_argument('--touch-fw', type=Path,
+                    help='Novatek firmware (vendor/firmware/nt36525_xcover5.bin) for the '
+                         'loader to download at boot; appended after the ramdisk')
     a = ap.parse_args()
 
     stock = a.stock.read_bytes()
@@ -65,6 +68,10 @@ def main():
         raise SystemExit(f'{a.image}: no arm64 Image header')
     kernel = gzip.compress(image, mtime=0)
     ramdisk = a.ramdisk.read_bytes()
+    if a.touch_fw:
+        # shim/xcover5/loader.c: FW bytes, "NVTFWXC5", u32 size, u32 0 at the end.
+        fw = a.touch_fw.read_bytes()
+        ramdisk += fw + b'NVTFWXC5' + struct.pack('<II', len(fw), 0)
 
     sha = hashlib.sha1()
     for blob in (kernel, ramdisk, b'', b'', dtb):	# kernel ramdisk second recovery_dtbo dtb
