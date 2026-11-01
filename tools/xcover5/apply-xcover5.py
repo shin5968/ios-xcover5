@@ -204,6 +204,90 @@ edit('iokit/Kernel/arm/SweetPlatformExpert.cpp', [
      '#endif\n', 1),
 ])
 
+# Boot 8 reached the lock screen, tinted red with UIKit's "rdar:45025538"
+# bar: no status bar visual provider for a 240x493 pt screen (the donor saw
+# the same at 360x800 pt, NOTES 0061). Present the iPhone X size and scale
+# every frame down to the 720x1480 panel (fit height, centered, nearest).
+# sweetfb_native=1 keeps the old 1:1 path.
+edit('iokit/Kernel/arm/SweetFramebuffer.cpp', [
+    ('#if defined(DREAMLTE)\n\tif (!native) {\n\t\tfLogicalW = SWEET_FB_LOGICAL_W;',
+     '#if defined(DREAMLTE) || defined(XCOVER5)\n\tif (!native) {\n\t\tfLogicalW = SWEET_FB_LOGICAL_W;', 1),
+    ('void\nAppleCLCD::present(const uint8_t *rec)\n',
+     '#if defined(XCOVER5)\n'
+     '/* Draw layer (dx,dy,w,h) of the logical (iPhone X) display, source (sx,sy),\n'
+     ' * onto the panel scaled to fit its height; nearest neighbour. */\n'
+     'static void\n'
+     'xcover5_scaled_blit(uintptr_t pixels, uint32_t rowBytes, uint32_t pw, uint32_t ph,\n'
+     '    uint32_t lw, uint32_t lh, SweetSurface *s, int32_t sx, int32_t sy,\n'
+     '    int32_t dx, int32_t dy, int32_t w, int32_t h)\n'
+     '{\n'
+     '\tstatic int32_t col_lx[2048];\n'
+     '\tuint32_t sw = (uint32_t)((uint64_t)lw * ph / lh);\n'
+     '\tif (sw > pw) {\n'
+     '\t\tsw = pw;\n'
+     '\t}\n'
+     '\tuint32_t ox = (pw - sw) / 2;\n'
+     '\tuintptr_t src = s->kernelAddress();\n'
+     '\tif (src == 0 || s->memory == NULL || s->elementWidth != 1 || s->elementHeight != 1 ||\n'
+     '\t    (s->bytesPerElement != 0 && s->bytesPerElement != 4) || pw > 2048) {\n'
+     '\t\treturn;\n'
+     '\t}\n'
+     '\tif (w <= 0 || h <= 0) {\n'
+     '\t\tw = (int32_t)s->width;\n'
+     '\t\th = (int32_t)s->height;\n'
+     '\t}\n'
+     '\tif (sx < 0 || sy < 0) {\n'
+     '\t\tsx = sy = 0;\n'
+     '\t}\n'
+     '\tif (dx < 0 || dy < 0) {\n'
+     '\t\tdx = dy = 0;\n'
+     '\t}\n'
+     '\tfor (uint32_t px = 0; px < sw; px++) {\n'
+     '\t\tcol_lx[px] = (int32_t)((uint64_t)px * lw / sw);\n'
+     '\t}\n'
+     '\tuint64_t len = s->memory->getLength();\n'
+     '\tfor (uint32_t py = 0; py < ph; py++) {\n'
+     '\t\tvolatile uint32_t *out = (volatile uint32_t *)(pixels + (uint64_t)py * rowBytes);\n'
+     '\t\tfor (uint32_t px = 0; px < ox; px++) {\n'
+     '\t\t\tout[px] = 0;\n'
+     '\t\t\tout[pw - 1 - px] = 0;\n'
+     '\t\t}\n'
+     '\t\tint32_t ly = (int32_t)((uint64_t)py * lh / ph);\n'
+     '\t\tint32_t ry = sy + ly - dy;\n'
+     '\t\tif (ly < dy || ly >= dy + h || ry >= (int32_t)s->height) {\n'
+     '\t\t\tcontinue;\n'
+     '\t\t}\n'
+     '\t\tuint64_t rowoff = s->offset + (uint64_t)ry * s->bytesPerRow;\n'
+     '\t\tfor (uint32_t px = 0; px < sw; px++) {\n'
+     '\t\t\tint32_t lx = col_lx[px];\n'
+     '\t\t\tint32_t rx = sx + lx - dx;\n'
+     '\t\t\tif (lx < dx || lx >= dx + w || rx >= (int32_t)s->width) {\n'
+     '\t\t\t\tcontinue;\n'
+     '\t\t\t}\n'
+     '\t\t\tuint64_t o = rowoff + (uint64_t)rx * 4;\n'
+     '\t\t\tif (o + 4 <= len) {\n'
+     '\t\t\t\tout[ox + px] = *(const uint32_t *)(src + o);\n'
+     '\t\t\t}\n'
+     '\t\t}\n'
+     '\t}\n'
+     '}\n'
+     '#endif\n'
+     '\n'
+     'void\nAppleCLCD::present(const uint8_t *rec)\n', 1),
+    ('\t\tuintptr_t src = s->kernelAddress();\n'
+     '\t\tuint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;\n',
+     '\t\tuintptr_t src = s->kernelAddress();\n'
+     '\t\tuint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;\n'
+     '#if defined(XCOVER5)\n'
+     '\t\tif (fLogicalW != fWidth || fLogicalH != fHeight) {\n'
+     '\t\t\txcover5_scaled_blit(fPixels, fRowBytes, fWidth, fHeight, fLogicalW, fLogicalH,\n'
+     '\t\t\t    s, sx, sy, dx, dy, w, h);\n'
+     '\t\t\ts->release();\n'
+     '\t\t\tcontinue;\n'
+     '\t\t}\n'
+     '#endif\n', 1),
+])
+
 # Keys: Linux gpio-keys of the XCover5 dtbo. Power is on the S2MPU12 PMIC
 # (not a GPIO): the XCover (push-to-talk) key acts as Power/lock instead.
 edit('bsd/dev/a5xelte_keys.c', [

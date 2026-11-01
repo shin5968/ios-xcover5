@@ -266,6 +266,101 @@ index 5bd24a7..84f5069 100644
  	{
  		/*
  		 * The entry is in the high RAM bank (0x88xxxxxxx); the loader probe
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index ec6b9da..3302891 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -188,7 +188,7 @@ AppleCLCD::start(IOService *provider)
+ 	PE_parse_boot_argn("sweetfb_native", &native, sizeof(native));
+ 	fLogicalW = fWidth;
+ 	fLogicalH = fHeight;
+-#if defined(DREAMLTE)
++#if defined(DREAMLTE) || defined(XCOVER5)
+ 	if (!native) {
+ 		fLogicalW = SWEET_FB_LOGICAL_W;
+ 		fLogicalH = SWEET_FB_LOGICAL_H;
+@@ -377,6 +377,66 @@ AppleCLCD::swap(const uint8_t *rec)
+ 	}
+ }
+ 
++#if defined(XCOVER5)
++/* Draw layer (dx,dy,w,h) of the logical (iPhone X) display, source (sx,sy),
++ * onto the panel scaled to fit its height; nearest neighbour. */
++static void
++xcover5_scaled_blit(uintptr_t pixels, uint32_t rowBytes, uint32_t pw, uint32_t ph,
++    uint32_t lw, uint32_t lh, SweetSurface *s, int32_t sx, int32_t sy,
++    int32_t dx, int32_t dy, int32_t w, int32_t h)
++{
++	static int32_t col_lx[2048];
++	uint32_t sw = (uint32_t)((uint64_t)lw * ph / lh);
++	if (sw > pw) {
++		sw = pw;
++	}
++	uint32_t ox = (pw - sw) / 2;
++	uintptr_t src = s->kernelAddress();
++	if (src == 0 || s->memory == NULL || s->elementWidth != 1 || s->elementHeight != 1 ||
++	    (s->bytesPerElement != 0 && s->bytesPerElement != 4) || pw > 2048) {
++		return;
++	}
++	if (w <= 0 || h <= 0) {
++		w = (int32_t)s->width;
++		h = (int32_t)s->height;
++	}
++	if (sx < 0 || sy < 0) {
++		sx = sy = 0;
++	}
++	if (dx < 0 || dy < 0) {
++		dx = dy = 0;
++	}
++	for (uint32_t px = 0; px < sw; px++) {
++		col_lx[px] = (int32_t)((uint64_t)px * lw / sw);
++	}
++	uint64_t len = s->memory->getLength();
++	for (uint32_t py = 0; py < ph; py++) {
++		volatile uint32_t *out = (volatile uint32_t *)(pixels + (uint64_t)py * rowBytes);
++		for (uint32_t px = 0; px < ox; px++) {
++			out[px] = 0;
++			out[pw - 1 - px] = 0;
++		}
++		int32_t ly = (int32_t)((uint64_t)py * lh / ph);
++		int32_t ry = sy + ly - dy;
++		if (ly < dy || ly >= dy + h || ry >= (int32_t)s->height) {
++			continue;
++		}
++		uint64_t rowoff = s->offset + (uint64_t)ry * s->bytesPerRow;
++		for (uint32_t px = 0; px < sw; px++) {
++			int32_t lx = col_lx[px];
++			int32_t rx = sx + lx - dx;
++			if (lx < dx || lx >= dx + w || rx >= (int32_t)s->width) {
++				continue;
++			}
++			uint64_t o = rowoff + (uint64_t)rx * 4;
++			if (o + 4 <= len) {
++				out[ox + px] = *(const uint32_t *)(src + o);
++			}
++		}
++	}
++}
++#endif
++
+ void
+ AppleCLCD::present(const uint8_t *rec)
+ {
+@@ -426,6 +486,14 @@ AppleCLCD::present(const uint8_t *rec)
+ 		}
+ 		uintptr_t src = s->kernelAddress();
+ 		uint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;
++#if defined(XCOVER5)
++		if (fLogicalW != fWidth || fLogicalH != fHeight) {
++			xcover5_scaled_blit(fPixels, fRowBytes, fWidth, fHeight, fLogicalW, fLogicalH,
++			    s, sx, sy, dx, dy, w, h);
++			s->release();
++			continue;
++		}
++#endif
+ 		if (w <= 0 || h <= 0) {
+ 			w = (int32_t)s->width;
+ 			h = (int32_t)s->height;
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
 index 193845f..f3505f6 100644
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp

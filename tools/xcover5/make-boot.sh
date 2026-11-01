@@ -20,7 +20,11 @@ kernel=$(realpath "$1"); stock=$(realpath "$2"); out=$(realpath -m "$3")
 shift 3
 # Default: one CPU, root on USERDATA (eMMC), verbose console, no watchdog.
 args=${*:-debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress rd=emmcroot0 emmcroot=USERDATA emmcwrite=1 rootrw=1 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin launchd_unsecure_cache=1 wdt=-1 a5touchprobe=0}
-python3 "$repo/tools/mkadt_xcover5.py" "$work/xcover5.adt"
+# The ADT canvas must match the size AppleCLCD reports: the iPhone X size it
+# scales to the panel (0125), or the panel itself with sweetfb_native=1.
+canvas=1125x2436
+[[ " $args " == *" sweetfb_native=1 "* ]] && canvas=720x1480
+python3 "$repo/tools/mkadt_xcover5.py" "$work/xcover5.adt" --canvas "$canvas"
 python3 "$repo/tools/mkpayload.py" "$kernel" "$work/xcover5.adt" "$work/payload.bin" --cmdline "$args"
 bash "$repo/shim/xcover5/build.sh"
 python3 "$repo/tools/xcover5/mkboot.py" "$stock" "$work/Image" "$work/payload.bin" "$out" --tar "${out%.img}.tar"
