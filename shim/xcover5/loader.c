@@ -547,12 +547,13 @@ static void touch_probe(void)
 	kv("usi0_div", rd32(CMU_CMGP + 0x1804));
 	kv("ipclk", rd32(CMU_CMGP + 0x2044));
 	out("\n");
-	/* Clocks on: CMGP bus, GPIO, sysreg, USI0 ipclk/pclk; USI0 from the
-	 * RCO, divided by 32 (slowest; the SPI block divides by 4 more). */
+	/* Clocks on: CMGP bus, GPIO, sysreg, USI0 ipclk/pclk. USI0 stays on the
+	 * CMGP bus as S-Boot left it (mux 1): probe 1 switched it to the RCO and
+	 * the FIFO never moved. Divide by 32 (the SPI block divides by 4 more). */
 	wr32(CMU_TOP + 0x2000, rd32(CMU_TOP + 0x2000) | GATE_ON);
 	wr32(CMU_CMGP + 0x2018, rd32(CMU_CMGP + 0x2018) | GATE_ON);
 	wr32(CMU_CMGP + 0x2040, rd32(CMU_CMGP + 0x2040) | GATE_ON);
-	wr32(CMU_CMGP + 0x1004, rd32(CMU_CMGP + 0x1004) & ~1u);
+	wr32(CMU_CMGP + 0x1004, rd32(CMU_CMGP + 0x1004) | 1u);
 	wr32(CMU_CMGP + 0x1804, (rd32(CMU_CMGP + 0x1804) & ~0x1fu) | 0x1f);
 	wr32(CMU_CMGP + 0x2044, rd32(CMU_CMGP + 0x2044) | GATE_ON);
 	wr32(CMU_CMGP + 0x2048, rd32(CMU_CMGP + 0x2048) | GATE_ON);
@@ -581,6 +582,23 @@ static void touch_probe(void)
 	kv("spi_st", rd32(SPI1 + 0x14));
 	kv("irq gpa0-0", rd32(ALIVE_PINCTRL + 0x004) & 1);
 	out("\n");
+	/* Controller alone first: self loopback must echo what it sends. Try
+	 * with the controller's nCS inactive, then active (unmuxed pin). */
+	for (int cs = 1; cs >= 0; cs--) {
+		wr32(SPI1 + 0x0c, (uint32_t)cs);
+		wr32(SPI1 + 0x08, 1u << 3);
+		int a = spi_xfer(0xa5), b = spi_xfer(0x5a);
+		wr32(SPI1 + 0x08, 0);
+		kv(cs ? "loop nCS1 a5" : "loop nCS0 a5", (uint64_t)(int64_t)a);
+		kv("5a", (uint64_t)(int64_t)b);
+		kv("st", rd32(SPI1 + 0x14));
+		out("\n");
+		wr32(SPI1 + 0x00, 1u << 5);	/* flush FIFOs */
+		delay_ms(1);
+		wr32(SPI1 + 0x00, 3);
+	}
+	/* Real transfers run with the controller's nCS active as well. */
+	wr32(SPI1 + 0x0c, 0);
 	touch_read("trim 1f64e", 0x1f64e, 7);	/* chip ID: .. 25 65 03 = NT36525 */
 	touch_read("boot 1f141", 0x1f141, 2);	/* BOOT_RDY */
 	touch_read("evt 11a00", 0x11a00, 16);	/* event buffer */
