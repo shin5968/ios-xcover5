@@ -607,6 +607,189 @@ static void touch_probe(void)
 	out("\n");
 }
 
+/* ---- touch firmware download + touch test (ramdisk = nt36525_xcover5.bin) ----
+ * Novatek's Phase 2 host download for a chip without hardware CRC (vendor
+ * nt36xxx_fw_update.c, NT36525_memory_map / hw_info hw_crc 0): eng reset,
+ * bootloader reset, write every partition to SRAM, boot ready, wait for
+ * reset state >= 0xa0, compare the MCU's checksums with the file's. The
+ * firmware is Samsung's (vendor/firmware): it is never committed. */
+#define NVT_EVENT_BUF		0x11a00
+#define NVT_BOOT_RDY		0x1f141
+#define NVT_POR_CD		0x1f61c
+#define NVT_R_ILM_CHECKSUM	0x1bf00
+#define NVT_ENG_RST		0x7fff80
+#define NVT_SWRST_N8		0x3f0fe	/* dtbo novatek,swrst-n8-addr */
+#define NVT_SPI_RD_FAST		0x3f310	/* dtbo novatek,spi-rd-fast-addr */
+#define NVT_MAX_PART		24
+
+static void touch_readbuf(uint32_t addr, uint8_t *buf, int n)
+{
+	touch_page(addr);
+	touch_cs(0);
+	spi_xfer((uint8_t)(addr & 0x7f));
+	spi_xfer(0);				/* dummy byte (probe 2) */
+	for (int i = 0; i < n; i++)
+		buf[i] = (uint8_t)spi_xfer(0);
+	touch_cs(1);
+}
+
+static void touch_writebuf(uint32_t addr, const volatile uint8_t *data, uint32_t n)
+{
+	touch_page(addr);
+	touch_cs(0);
+	spi_xfer((uint8_t)((addr & 0x7f) | 0x80));
+	for (uint32_t i = 0; i < n; i++)
+		spi_xfer(data[i]);
+	touch_cs(1);
+}
+
+static void touch_write1(uint32_t addr, uint8_t v)
+{
+	touch_writebuf(addr, &v, 1);
+}
+
+static uint32_t le32(const volatile uint8_t *p)
+{
+	return p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+/* Vendor CheckSum(): sums len + 1 bytes, adds len, two's complement. */
+static uint32_t nvt_checksum(const volatile uint8_t *d, uint32_t len)
+{
+	uint32_t s = 0;
+	for (uint32_t i = 0; i < len + 1; i++)
+		s += d[i];
+	return ~(s + len) + 1;
+}
+
+static int is_nvt_fw(const volatile uint8_t *fw, uint64_t len)
+{
+	for (uint64_t i = len / 4096; i > 0; i--) {
+		const volatile uint8_t *t = fw + i * 4096 - 3;
+		if ((t[0] == 'N' && t[1] == 'V' && t[2] == 'T') ||
+		    (t[0] == 'M' && t[1] == 'O' && t[2] == 'D'))
+			return 1;
+	}
+	return 0;
+}
+
+static int touch_download(const volatile uint8_t *fw, uint64_t len)
+{
+	struct { uint32_t bin, sram, size, crc; } p[NVT_MAX_PART];
+	uint32_t end = le32(fw), info = 0, n;
+	for (uint32_t pos = 0x30; pos < end; pos += 0x10)
+		info++;
+	uint32_t ovly = (fw[0x28] & 0x10) ? (fw[0x28] & 0x0f) : 0;
+	n = 2 + ovly + info;
+	if (n > NVT_MAX_PART)
+		return -1;
+	for (uint32_t i = 0; i < n; i++) {
+		uint32_t o;
+		if (i < 2) {
+			p[i].bin = le32(fw + i * 12);
+			p[i].sram = le32(fw + 4 + i * 12);
+			p[i].size = le32(fw + 8 + i * 12);
+		} else {
+			o = i < 2 + info ? 0x30 + 0x10 * (i - 2) : p[1].bin + 0x10 * (i - 2 - info);
+			p[i].sram = le32(fw + o);
+			p[i].size = le32(fw + o + 4);
+			p[i].bin = le32(fw + o + 8);
+		}
+		if (p[i].bin + p[i].size + 1 > len)
+			return -2;
+		p[i].crc = p[i].size ? nvt_checksum(fw + p[i].bin, p[i].size) : 0;
+	}
+	kv("partitions", n);
+	out("\n");
+	touch_write1(NVT_ENG_RST, 0x5a);
+	delay_ms(1);
+	touch_write1(NVT_SWRST_N8, 0x69);
+	delay_ms(5);
+	touch_write1(NVT_SPI_RD_FAST, 0x00);
+	touch_write1(NVT_EVENT_BUF | 0x60, 0x00);	/* clear reset state */
+	uint64_t t0, t1;
+	__asm__ volatile("isb; mrs %0, cntpct_el0" : "=r"(t0));
+	for (uint32_t i = 0; i < n; i++)
+		if (p[i].size)
+			touch_writebuf(p[i].sram, fw + p[i].bin, p[i].size + 1);
+	__asm__ volatile("isb; mrs %0, cntpct_el0" : "=r"(t1));
+	kv("write ms", (t1 - t0) / (TIMER_HZ / 1000));
+	out("\n");
+	touch_write1(NVT_BOOT_RDY, 1);			/* nvt_boot_ready(), hw_crc 0 */
+	delay_ms(5);
+	touch_write1(NVT_BOOT_RDY, 0);
+	touch_write1(NVT_POR_CD, 0xa0);
+	uint8_t st[6];
+	int ok = 0;
+	for (int r = 0; r < 50 && !ok; r++) {
+		delay_ms(10);
+		touch_readbuf(NVT_EVENT_BUF | 0x60, st, 6);
+		ok = st[0] >= 0xa0 && st[0] <= 0xaf;
+	}
+	kv("reset state", st[0]);
+	out(ok ? "ok\n" : "TIMEOUT\n");
+	uint8_t c[NVT_MAX_PART * 4];
+	touch_readbuf(NVT_R_ILM_CHECKSUM, c, (int)(n * 4));
+	int bad = 0;
+	for (uint32_t i = 0; i < n; i++)
+		if (p[i].size && le32(c + i * 4) != p[i].crc) {
+			bad++;
+			kv("crc bad part", i);
+			kv("want", p[i].crc);
+			kv("got", le32(c + i * 4));
+			out("\n");
+		}
+	kv("checksum errors", (uint64_t)bad);
+	out("\n");
+	uint8_t info16[16];
+	touch_readbuf(NVT_EVENT_BUF | 0x78, info16, 16);
+	kv("fw_ver", info16[0]);
+	kv("~ver", info16[1]);
+	kv("x_max", (uint32_t)info16[2] << 8 | info16[3]);
+	kv("y_max", (uint32_t)info16[4] << 8 | info16[5]);
+	out("\n");
+	return ok && !bad ? 0 : -3;
+}
+
+/* Poll the event buffer and draw where fingers are (panel 720x1480, the
+ * stock dtbo's novatek,resolution). Never returns. */
+static void touch_test(void)
+{
+	fg = 0xffffff00U;
+	out("TOUCH TEST: draw on the screen\n");
+	uint32_t colors[4] = { 0xff40ff40U, 0xffff4040U, 0xff4080ffU, 0xffffff40U };
+	for (uint32_t frame = 0;; frame++) {
+		uint8_t pt[66];
+		touch_readbuf(NVT_EVENT_BUF, pt, 65);
+		for (int i = 0; i < 10; i++) {
+			uint8_t *q = &pt[1 + 6 * i];
+			int id = q[0] >> 3, s = q[0] & 7;
+			if (!id || id > 10 || (s != 1 && s != 2))
+				continue;
+			int x = (q[1] << 4) | (q[3] >> 4);
+			int y = (q[2] << 4) | (q[3] & 0xf);
+			if (x >= FB_W || y >= FB_H)
+				continue;
+			fill(x - 4, y - 4, 9, 9, colors[(id - 1) & 3]);
+		}
+		if (frame % 100 == 0) {
+			/* raw first bytes on the top line, to see the buffer move */
+			char b[40];
+			static const char d[] = "0123456789abcdef";
+			int k = 0;
+			for (int i = 0; i < 12; i++) {
+				b[k++] = d[pt[i] >> 4];
+				b[k++] = d[pt[i] & 0xf];
+				b[k++] = ' ';
+			}
+			b[k] = 0;
+			fg = 0xff808080U;
+			glyphs(0, -2, b);
+		}
+		delay_ms(8);
+	}
+}
+
 uint64_t dl_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 {
 	/* Before the log zones are reset: show the previous boot's log? */
@@ -641,6 +824,17 @@ uint64_t dl_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 	uint64_t length = rd_end - rd_start;
 	if (length < sizeof(struct payload) || !magic_ok(p->magic) || p->version != 1) {
 		touch_probe();
+		if (is_nvt_fw((const volatile uint8_t *)rd_start, length)) {
+			fg = 0xff40ffffU;
+			out("ramdisk: Novatek touch firmware, downloading\n");
+			fg = 0xffffffffU;
+			int r = touch_download((const volatile uint8_t *)rd_start, length);
+			kv("download", (uint64_t)(int64_t)r);
+			out("\n");
+			clean(LOG_A, LOG_A + LOG_SIZE);
+			clean(LOG_B, LOG_B + LOG_SIZE);
+			touch_test();
+		}
 		fg = 0xff40ff40U;
 		out("\nPROBE OK: no SWEETXNU payload in the ramdisk.\n"
 		    "Send a photo of this screen.\n"
