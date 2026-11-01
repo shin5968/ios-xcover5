@@ -58,6 +58,11 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   **iOS 잠금화면**(`4:29`, `Wednesday, December 31`, 홈 인디케이터, 알림 배너). 화면이 붉고
   `rdar:45025538` 막대: UIKit "no status bar visual provider"(240x493 pt는 실제 아이폰 크기가 아님,
   sweet NOTES 0061과 동일). 날짜는 RTC 없음. → AppleCLCD가 1125x2436을 보고하고 패널에 축소 출력.
+- 부팅 9–12 (2026-11-01): 고속 eMMC(multi-block)로 사과 로고까지 약 1분 40초. iPhone X 크기(gui)는 로고/스피너에서 멈춤
+  (S8 README의 "1125x2436 hangs"와 같은 증상). 첫 multi-block 코드가 HTO(0x400)를 오류로 보고 CMD12 없이 끊어
+  HFS 손상 → HTO 무시 + CMD12 복구로 수정(run 41309423474). userdata 재플래시 후 native 첫 부팅: 잠금화면 `4:25`
+  (첫 부팅은 약 25분, 이미 부팅한 루트는 약 2분). 반복 크래시: locationd(sig 5, GPS 없음), mediaremoted/contextstored
+  (sig 11, 공유 캐시 0x20da18040 쓰기) — 깨끗한 루트에서도 동일, 잠금화면을 막지는 않음.
 
 ## S8 포트와 다른 점
 
