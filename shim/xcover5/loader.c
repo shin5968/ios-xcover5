@@ -701,11 +701,17 @@ static int touch_download(const volatile uint8_t *fw, uint64_t len)
 	}
 	kv("partitions", n);
 	out("\n");
+	/* Download 1: every read after the resets returned 0xff. Re-read the
+	 * trim ID after each step to see where the chip stops answering. */
+	touch_read("t0 start", 0x1f64e, 6);
 	touch_write1(NVT_ENG_RST, 0x5a);
 	delay_ms(1);
+	touch_read("t1 eng rst", 0x1f64e, 6);
 	touch_write1(NVT_SWRST_N8, 0x69);
 	delay_ms(5);
+	touch_read("t2 bld rst", 0x1f64e, 6);
 	touch_write1(NVT_SPI_RD_FAST, 0x00);
+	touch_read("t3 rd_fast0", 0x1f64e, 6);
 	touch_write1(NVT_EVENT_BUF | 0x60, 0x00);	/* clear reset state */
 	uint64_t t0, t1;
 	__asm__ volatile("isb; mrs %0, cntpct_el0" : "=r"(t0));
@@ -715,6 +721,16 @@ static int touch_download(const volatile uint8_t *fw, uint64_t len)
 	__asm__ volatile("isb; mrs %0, cntpct_el0" : "=r"(t1));
 	kv("write ms", (t1 - t0) / (TIMER_HZ / 1000));
 	out("\n");
+	/* SRAM readback: ILM start must equal the file at its BIN offset. */
+	touch_read("ilm sram", p[0].sram, 6);
+	out("ilm file  :");
+	for (int i = 0; i < 6; i++) {
+		static const char d[] = "0123456789abcdef";
+		char b[4] = { ' ', d[fw[p[0].bin + i] >> 4], d[fw[p[0].bin + i] & 0xf], 0 };
+		out(b);
+	}
+	out("\n");
+	touch_read("t4 written", 0x1f64e, 6);
 	touch_write1(NVT_BOOT_RDY, 1);			/* nvt_boot_ready(), hw_crc 0 */
 	delay_ms(5);
 	touch_write1(NVT_BOOT_RDY, 0);
