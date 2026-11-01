@@ -133,6 +133,28 @@ edit('bsd/dev/a5xelte_keys.c', [
      '\t\t\t\tkeys_t bit = (keys_t)((keys_t)1 << pins[key]);\n', 1),
 ])
 
+# SweetBattery (A5XELTE config) calls the S8 MAX77865 reader, which lives in
+# the DREAMLTE part of this file (CI run 41285784017: undefined symbol).
+edit('bsd/dev/a5xelte_touch.c', [
+    ('#endif /* DREAMLTE */\n\nvoid\na5xelte_touch_probe(void)\n',
+     '#endif /* DREAMLTE */\n'
+     '\n'
+     '#if defined(XCOVER5)\n'
+     '/* No XCover5 fuel-gauge driver yet: SweetBattery publishes a static 100 %. */\n'
+     'int dreamlte_battery_read(unsigned *percent, unsigned *mv, int *ma,\n'
+     '    int *external, int *charging, int *full);\n'
+     'int\n'
+     'dreamlte_battery_read(__unused unsigned *percent, __unused unsigned *mv,\n'
+     '    __unused int *ma, __unused int *external, __unused int *charging,\n'
+     '    __unused int *full)\n'
+     '{\n'
+     '\treturn -1;\n'
+     '}\n'
+     '#endif\n'
+     '\n'
+     'void\na5xelte_touch_probe(void)\n', 1),
+])
+
 edit('bsd/dev/a5xelte_emmc.c', [
     ('#include <pexpert/device_tree.h>\n',
      '#include <pexpert/device_tree.h>\n#include <pexpert/arm64/board_config.h>\n', 1),

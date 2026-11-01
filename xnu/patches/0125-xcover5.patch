@@ -102,6 +102,30 @@ index dcbd143..61de944 100644
  				if ((stable ^ sample) & bit) {
  					int down = !(sample & bit);
  					printf("A5XELTE KEYS: key=%u down=%d gpio=%#x\n",
+diff --git a/bsd/dev/a5xelte_touch.c b/bsd/dev/a5xelte_touch.c
+index ba647a8..a9ca3a0 100644
+--- a/bsd/dev/a5xelte_touch.c
++++ b/bsd/dev/a5xelte_touch.c
+@@ -920,6 +920,19 @@ dreamlte_touch_start(void)
+ }
+ #endif /* DREAMLTE */
+ 
++#if defined(XCOVER5)
++/* No XCover5 fuel-gauge driver yet: SweetBattery publishes a static 100 %. */
++int dreamlte_battery_read(unsigned *percent, unsigned *mv, int *ma,
++    int *external, int *charging, int *full);
++int
++dreamlte_battery_read(__unused unsigned *percent, __unused unsigned *mv,
++    __unused int *ma, __unused int *external, __unused int *charging,
++    __unused int *full)
++{
++	return -1;
++}
++#endif
++
+ void
+ a5xelte_touch_probe(void)
+ {
 diff --git a/iokit/Kernel/arm/SweetCPU.cpp b/iokit/Kernel/arm/SweetCPU.cpp
 index 5bd24a7..84f5069 100644
 --- a/iokit/Kernel/arm/SweetCPU.cpp
