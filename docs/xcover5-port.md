@@ -39,16 +39,14 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
 
 ### 부팅 2–5 (2026-11-01)
 
-- 부팅 2: RAM 로그 뷰어 동작, 강제 재시작 뒤에도 로그 유지(마지막 몇 줄은 빠짐).
-- 부팅 3 (heartbeat 커널, CI 41292039523): 타이머 IRQ 정상(5 s = 130.03M tick, 26 MHz).
-  AppleCLCD 뒤에서 멈춘 원인은 SweetCPU가 `arm,cortex-a53`만 매칭 → ADT에 추가.
-- 부팅 4: `A5XELTE CPU: 1/1 CPUs initialized, SGI1 verified`, BSD/Skywalk, 키 드라이버,
-  eMMC 호스트(`ctrl=10 status=8906 clk=1 hcon=8e42541`)와 GPT 읽기 성공.
-  `USERDATA partition not found` 패닉 → GPT 이름 대소문자 무시(CI 41294736935).
-- 부팅 5: `GPT USERDATA first=14321664 sectors=107806720 writable`(PIT와 일치),
-  `BSD root: emmcroot0`, HFS 저널 초기화, `hfs: mounted iOSRoot`, `exec launchd`,
-  `shared_region ... check_np ... vm_shared_region_start_address() failed`(첫 프로세스에서
-  나오는 메시지). 그 뒤 1분 동안은 heartbeat만 출력 — eMMC PIO가 느려 진행 중인지 확인 필요.
+- 부팅 2: AppleCLCD 뒤 무출력. RAM 로그 뷰어는 동작(강제 재시작 후 RAM 유지).
+- 부팅 3 (heartbeat 커널, run 41292039523): 5초 간격 = 130.03M 틱 → 26 MHz 물리 타이머
+  인터럽트 정상. CPU 드라이버 줄 없음 → SweetCPU가 `arm,cortex-a53`만 매칭, ADT 수정.
+- 부팅 4: CPU0 `1/1 CPUs initialized, SGI1 verified`, BSD/Skywalk/ifnet, 키, eMMC 호스트
+  (`ctrl=10 status=8906 clk=1 hcon=8e42541`), GPT CRC 통과, 그러나 `USERDATA partition not found`.
+- 부팅 5 (run 41294736935, 대소문자 무시): `GPT USERDATA first=14321664 sectors=107806720
+  writable`, `BSD root: emmcroot0`, `hfs: mounted iOSRoot`, `exec launchd`,
+  `shared_region ... vm_shared_region_start_address() failed`, 이후 1분간 heartbeat만.
 
 ## S8 포트와 다른 점
 

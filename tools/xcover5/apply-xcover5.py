@@ -61,6 +61,25 @@ edit('pexpert/pexpert/arm64/A5XELTE.h', [(
     '#define A5XELTE_VTIMER_INTID         30\n'
     '#elif defined(DREAMLTE)\n', 1)])
 
+# Boot 6: launchd stalled right after its first syscall, disk idle. The A55
+# (ARMv8.2) implements PAN; with SCTLR_EL1.SPAN = 0 every exception to EL1
+# sets PSTATE.PAN, and this kernel (__ARM_PAN_AVAILABLE__ 0, patch 0095)
+# never clears it, so syscall copyin/copyout fault and retry forever. On the
+# A53 (ARMv8.0) the bit is RES1 and nothing changes.
+edit('osfmk/arm64/proc_reg.h', [
+    ('#define SCTLR_EL1_DEFAULT \\\n',
+     '#if defined(XCOVER5) && !__ARM_PAN_AVAILABLE__\n'
+     '/* Cortex-A55 has PAN: keep PSTATE.PAN unchanged on exception entry. */\n'
+     '#define SCTLR_SPAN_DEFAULT      SCTLR_PAN_UNCHANGED\n'
+     '#else\n'
+     '#define SCTLR_SPAN_DEFAULT      0\n'
+     '#endif\n'
+     '\n'
+     '#define SCTLR_EL1_DEFAULT \\\n', 1),
+    ('\t SCTLR_ROP_KEYS_DEFAULT | SCTLR_JOP_KEYS_DEFAULT)\n',
+     '\t SCTLR_ROP_KEYS_DEFAULT | SCTLR_JOP_KEYS_DEFAULT | SCTLR_SPAN_DEFAULT)\n', 1),
+])
+
 edit('osfmk/arm64/arm_vm_init.c', [
     ('#if defined(DREAMLTE)\n', f'#if {S8_OR_XC5}\n', 2),
     ('#if defined(DREAMLTE) && !XNU_MONITOR\n', f'#if {S8_OR_XC5} && !XNU_MONITOR\n', 1),
