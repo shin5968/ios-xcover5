@@ -1,5 +1,5 @@
 diff --git a/bsd/dev/a5xelte_emmc.c b/bsd/dev/a5xelte_emmc.c
-index ffd011a..e8db5b9 100644
+index ffd011a..4415f5b 100644
 --- a/bsd/dev/a5xelte_emmc.c
 +++ b/bsd/dev/a5xelte_emmc.c
 @@ -22,6 +22,7 @@
@@ -23,16 +23,48 @@ index ffd011a..e8db5b9 100644
  #define A5_LOG_SIZE   (4u << 20)
  #define A5_LOG_SECTORS (1u + A5_LOG_SIZE / 512u)
  
-@@ -381,7 +388,7 @@ emmc_find_root_partition(void)
+@@ -326,6 +333,20 @@ emmc_crc32(uint32_t crc, const uint8_t *data, size_t len)
+ 	return crc;
+ }
+ 
++/* GPT names on the XCover5 need not be the PIT's upper case. */
++static bool
++emmc_name_char_eq(uint8_t got, char want)
++{
++	uint8_t w = (uint8_t)want;
++	if (got >= 'a' && got <= 'z') {
++		got -= 32;
++	}
++	if (w >= 'a' && w <= 'z') {
++		w -= 32;
++	}
++	return got == w;
++}
++
+ static int
+ emmc_find_root_partition(void)
+ {
+@@ -381,16 +402,16 @@ emmc_find_root_partition(void)
  			const uint8_t *p = entry + j * 128;
  			bool match = true;
  			bool system_match = true;
 -			static const char system_name[] = "SYSTEM";
 +			static const char system_name[] = A5_LOG_PARTITION;
  			for (unsigned k = 0; k <= strlen(emmc_partition_name); k++) {
- 				if (p[56 + k * 2] != (uint8_t)emmc_partition_name[k] ||
+-				if (p[56 + k * 2] != (uint8_t)emmc_partition_name[k] ||
++				if (!emmc_name_char_eq(p[56 + k * 2], emmc_partition_name[k]) ||
  				    p[57 + k * 2] != 0) {
-@@ -418,7 +425,7 @@ emmc_find_root_partition(void)
+ 					match = false;
+ 					break;
+ 				}
+ 			}
+ 			for (unsigned k = 0; k < sizeof(system_name); k++) {
+-				if (p[56 + k * 2] != (uint8_t)system_name[k] ||
++				if (!emmc_name_char_eq(p[56 + k * 2], system_name[k]) ||
+ 				    p[57 + k * 2] != 0) {
+ 					system_match = false;
+ 					break;
+@@ -418,12 +439,29 @@ emmc_find_root_partition(void)
  		return EIO;
  	}
  	if (emmc_log_first_lba == emmc_first_lba && emmc_log_nsectors &&
@@ -41,7 +73,30 @@ index ffd011a..e8db5b9 100644
  		/* A log writer must never overlap the selected root. */
  		emmc_log_nsectors = 0;
  	}
-@@ -446,7 +453,7 @@ emmc_map_host(void)
+ 	if (!emmc_nsectors) {
+-		printf("A5XELTE eMMC: %s partition not found\n", emmc_partition_name);
++		printf("A5XELTE eMMC: %s partition not found; GPT names:", emmc_partition_name);
++		for (uint32_t s = 0; s < nentries / 4; s++) {
++			if (emmc_read_sector((uint32_t)entry_lba + s, entry)) {
++				break;
++			}
++			for (uint32_t j = 0; j < 4; j++) {
++				char name[19];
++				unsigned n = 0;
++				for (; n < 18 && entry[j * 128 + 56 + n * 2]; n++) {
++					name[n] = (char)entry[j * 128 + 56 + n * 2];
++				}
++				name[n] = 0;
++				if (n) {
++					printf(" %s", name);
++				}
++			}
++		}
++		printf("\n");
+ 		return ENXIO;
+ 	}
+ 	int enable_write = 0;
+@@ -446,7 +484,7 @@ emmc_map_host(void)
  	}
  	if (SecureDTLookupEntry(NULL, "/a5xelte-emmc", &node) != kSuccess ||
  	    SecureDTGetProperty(node, "reg", (void const **)&reg, &size) != kSuccess ||
@@ -50,7 +105,7 @@ index ffd011a..e8db5b9 100644
  		printf("A5XELTE eMMC: missing or unexpected ADT register window\n");
  		return ENXIO;
  	}
-@@ -702,7 +709,7 @@ emmc_log_start(void)
+@@ -702,7 +740,7 @@ emmc_log_start(void)
  		return;
  	}
  	emmc_log_enabled = true;

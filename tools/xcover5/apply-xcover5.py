@@ -241,6 +241,48 @@ edit('bsd/dev/a5xelte_emmc.c', [
      '\t    strcmp(emmc_partition_name, "SYSTEM") == 0) {',
      '\tif (emmc_log_first_lba == emmc_first_lba && emmc_log_nsectors &&\n'
      '\t    strcmp(emmc_partition_name, A5_LOG_PARTITION) == 0) {', 1),
+    # Boot 4: GPT read fine, but "USERDATA partition not found": the PIT says
+    # USERDATA, the GPT names need not be upper case. Compare without case
+    # and, if still missing, list the names that were there.
+    ('static int\nemmc_find_root_partition(void)\n',
+     '/* GPT names on the XCover5 need not be the PIT\'s upper case. */\n'
+     'static bool\n'
+     'emmc_name_char_eq(uint8_t got, char want)\n'
+     '{\n'
+     '\tuint8_t w = (uint8_t)want;\n'
+     '\tif (got >= \'a\' && got <= \'z\') {\n'
+     '\t\tgot -= 32;\n'
+     '\t}\n'
+     '\tif (w >= \'a\' && w <= \'z\') {\n'
+     '\t\tw -= 32;\n'
+     '\t}\n'
+     '\treturn got == w;\n'
+     '}\n'
+     '\n'
+     'static int\nemmc_find_root_partition(void)\n', 1),
+    ('if (p[56 + k * 2] != (uint8_t)emmc_partition_name[k] ||',
+     'if (!emmc_name_char_eq(p[56 + k * 2], emmc_partition_name[k]) ||', 1),
+    ('if (p[56 + k * 2] != (uint8_t)system_name[k] ||',
+     'if (!emmc_name_char_eq(p[56 + k * 2], system_name[k]) ||', 1),
+    ('\t\tprintf("A5XELTE eMMC: %s partition not found\\n", emmc_partition_name);\n',
+     '\t\tprintf("A5XELTE eMMC: %s partition not found; GPT names:", emmc_partition_name);\n'
+     '\t\tfor (uint32_t s = 0; s < nentries / 4; s++) {\n'
+     '\t\t\tif (emmc_read_sector((uint32_t)entry_lba + s, entry)) {\n'
+     '\t\t\t\tbreak;\n'
+     '\t\t\t}\n'
+     '\t\t\tfor (uint32_t j = 0; j < 4; j++) {\n'
+     '\t\t\t\tchar name[19];\n'
+     '\t\t\t\tunsigned n = 0;\n'
+     '\t\t\t\tfor (; n < 18 && entry[j * 128 + 56 + n * 2]; n++) {\n'
+     '\t\t\t\t\tname[n] = (char)entry[j * 128 + 56 + n * 2];\n'
+     '\t\t\t\t}\n'
+     '\t\t\t\tname[n] = 0;\n'
+     '\t\t\t\tif (n) {\n'
+     '\t\t\t\t\tprintf(" %s", name);\n'
+     '\t\t\t\t}\n'
+     '\t\t\t}\n'
+     '\t\t}\n'
+     '\t\tprintf("\\n");\n', 1),
     ('\tprintf("A5XELTE LOG: SYSTEM GPT first=%llu, %u sectors reserved\\n",\n',
      '\tprintf("A5XELTE LOG: " A5_LOG_PARTITION " GPT first=%llu, %u sectors reserved\\n",\n', 1),
 ])
