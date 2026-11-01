@@ -1,5 +1,5 @@
 diff --git a/bsd/dev/a5xelte_emmc.c b/bsd/dev/a5xelte_emmc.c
-index ffd011a..761b92d 100644
+index ffd011a..904bfe7 100644
 --- a/bsd/dev/a5xelte_emmc.c
 +++ b/bsd/dev/a5xelte_emmc.c
 @@ -22,6 +22,7 @@
@@ -41,7 +41,7 @@ index ffd011a..761b92d 100644
  	if ((emmc_rd(EMMC_CLKSEL) >> 16) & 7u) {
  		command |= CMD_HOLD;
  	}
-@@ -301,6 +312,162 @@ out:
+@@ -301,6 +312,200 @@ out:
  	return error;
  }
  
@@ -49,8 +49,40 @@ index ffd011a..761b92d 100644
 +#define EMMC_MULTI_MAX  128u            /* sectors per command: 64 KiB */
 +#define CMD_SEND_STOP   (1u << 12)
 +#define INT_ACD         (1u << 14)
++/* Boot 11: rint 0x424 = HTO, the FIFO was full and the controller paused
++ * the card clock until the CPU drained it. Not an error for PIO. */
++#define INT_HTO         (1u << 10)
++#define CMD_STOP_ABORT  (1u << 14)
 +static uint64_t emmc_multi_buf[EMMC_MULTI_MAX * 512u / 8u];
 +static int emmc_multi = -1;
++
++/* After a failed CMD18/CMD25 the card is still in its data state: without
++ * CMD12 the next read returns the old transfer's sectors (boot 11: HFS
++ * B-tree corruption). Stop it and empty the FIFO. */
++static void
++emmc_stop_transmission(void)
++{
++	uint32_t cmd = CMD_START | CMD_RESP_CRC | CMD_RESP | CMD_STOP_ABORT | 12u;
++	if ((emmc_rd(EMMC_CLKSEL) >> 16) & 7u) {
++		cmd |= CMD_HOLD;
++	}
++	for (unsigned i = 0; i < 1000000 && (emmc_rd(EMMC_CMD) & CMD_START); i++) {
++	}
++	emmc_wr(EMMC_RINTSTS, 0xffffffffu);
++	emmc_wr(EMMC_CMDARG, 0);
++	emmc_wr(EMMC_CMD, cmd);
++	for (unsigned i = 0; i < 1000000; i++) {
++		if (emmc_rd(EMMC_RINTSTS) & INT_CMD_DONE) {
++			break;
++		}
++	}
++	for (unsigned i = 0; i < 4000000 && (emmc_rd(EMMC_STATUS) & (1u << 9)); i++) {
++	}
++	emmc_wr(EMMC_CTRL, emmc_rd(EMMC_CTRL) | CTRL_FIFO_RESET);
++	for (unsigned i = 0; i < 1000000 && (emmc_rd(EMMC_CTRL) & CTRL_FIFO_RESET); i++) {
++	}
++	emmc_wr(EMMC_RINTSTS, 0xffffffffu);
++}
 +
 +static int
 +emmc_wait_idle(void)
@@ -130,7 +162,10 @@ index ffd011a..761b92d 100644
 +	uint64_t limit = 4000000ull + 400000ull * nblk;
 +	for (uint64_t i = 0;; i++) {
 +		uint32_t pending = emmc_rd(EMMC_RINTSTS);
-+		if (pending & INT_ERRORS) {
++		if (pending & INT_HTO) {
++			emmc_wr(EMMC_RINTSTS, INT_HTO);
++		}
++		if (pending & INT_ERRORS & ~INT_HTO) {
 +			printf("XC5 eMMC: CMD%u error lba=%u n=%u rint=%x status=%x words=%u/%u\n",
 +			    command & 0x3fu, lba, nblk, pending, emmc_rd(EMMC_STATUS), done, words);
 +			error = EIO;
@@ -195,6 +230,9 @@ index ffd011a..761b92d 100644
 +		error = emmc_wait_idle();
 +	}
 +out:
++	if (error) {
++		emmc_stop_transmission();
++	}
 +	emmc_wr(EMMC_RINTSTS, 0xffffffffu);
 +	emmc_wr(EMMC_INTMASK, ints);
 +	return error;
@@ -204,7 +242,7 @@ index ffd011a..761b92d 100644
  static uint32_t
  emmc_le32(const uint8_t *p)
  {
-@@ -326,6 +493,20 @@ emmc_crc32(uint32_t crc, const uint8_t *data, size_t len)
+@@ -326,6 +531,20 @@ emmc_crc32(uint32_t crc, const uint8_t *data, size_t len)
  	return crc;
  }
  
@@ -225,7 +263,7 @@ index ffd011a..761b92d 100644
  static int
  emmc_find_root_partition(void)
  {
-@@ -381,16 +562,16 @@ emmc_find_root_partition(void)
+@@ -381,16 +600,16 @@ emmc_find_root_partition(void)
  			const uint8_t *p = entry + j * 128;
  			bool match = true;
  			bool system_match = true;
@@ -245,7 +283,7 @@ index ffd011a..761b92d 100644
  				    p[57 + k * 2] != 0) {
  					system_match = false;
  					break;
-@@ -418,12 +599,29 @@ emmc_find_root_partition(void)
+@@ -418,12 +637,29 @@ emmc_find_root_partition(void)
  		return EIO;
  	}
  	if (emmc_log_first_lba == emmc_first_lba && emmc_log_nsectors &&
@@ -277,7 +315,7 @@ index ffd011a..761b92d 100644
  		return ENXIO;
  	}
  	int enable_write = 0;
-@@ -446,7 +644,7 @@ emmc_map_host(void)
+@@ -446,7 +682,7 @@ emmc_map_host(void)
  	}
  	if (SecureDTLookupEntry(NULL, "/a5xelte-emmc", &node) != kSuccess ||
  	    SecureDTGetProperty(node, "reg", (void const **)&reg, &size) != kSuccess ||
@@ -286,7 +324,7 @@ index ffd011a..761b92d 100644
  		printf("A5XELTE eMMC: missing or unexpected ADT register window\n");
  		return ENXIO;
  	}
-@@ -518,6 +716,30 @@ emmc_strategy(buf_t bp)
+@@ -518,6 +754,33 @@ emmc_strategy(buf_t bp)
  		uint32_t skip = pos & 511u;
  		uint32_t take = MIN(count - n, 512u - skip);
  		uint32_t lba = (uint32_t)(emmc_first_lba + pos / 512u);
@@ -306,18 +344,21 @@ index ffd011a..761b92d 100644
 +				memcpy(emmc_multi_buf, vaddr + n, nb * 512u);
 +				error = emmc_xfer_blocks(lba, nb, true);
 +			}
-+			if (error) {
-+				break;
++			if (!error) {
++				n += nb * 512u;
++				buf_setresid(bp, count - n);
++				continue;
 +			}
-+			n += nb * 512u;
-+			buf_setresid(bp, count - n);
-+			continue;
++			/* Retry this sector on the single-sector path below. */
++			printf("XC5 eMMC: multi-block %s failed (%d), sector path for lba=%u\n",
++			    (buf_flags(bp) & B_READ) ? "read" : "write", error, lba);
++			error = 0;
 +		}
 +#endif
  		if (buf_flags(bp) & B_READ) {
  			error = emmc_read_sector(lba, emmc_bounce);
  			if (!error) {
-@@ -573,10 +795,19 @@ emmc_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
+@@ -573,10 +836,19 @@ emmc_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
  		*(uint32_t *)data = emmc_writable ? 1 : 0;
  		return 0;
  	case DKIOCGETMAXBLOCKCOUNTREAD:
@@ -337,7 +378,7 @@ index ffd011a..761b92d 100644
  		return 0;
  	case DKIOCGETMAXSEGMENTCOUNTREAD:
  	case DKIOCGETMAXSEGMENTCOUNTWRITE:
-@@ -702,7 +933,7 @@ emmc_log_start(void)
+@@ -702,7 +974,7 @@ emmc_log_start(void)
  		return;
  	}
  	emmc_log_enabled = true;
