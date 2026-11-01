@@ -733,8 +733,33 @@ static int touch_download(const volatile uint8_t *fw, uint64_t len)
 	touch_read("t4 written", 0x1f64e, 6);
 	touch_write1(NVT_BOOT_RDY, 1);			/* nvt_boot_ready(), hw_crc 0 */
 	delay_ms(5);
+	touch_read("t5 bootrdy1", 0x1f64e, 6);
 	touch_write1(NVT_BOOT_RDY, 0);
 	touch_write1(NVT_POR_CD, 0xa0);
+	/* Download 2: chip ID and SRAM were fine up to here, everything after
+	 * boot ready read 0xff. Watch the ID and the IRQ line as the firmware
+	 * starts, and try the framing without / with two dummy bytes. */
+	for (int r = 0; r < 6; r++) {
+		delay_ms(r ? 50 : 1);
+		kv("irq", rd32(ALIVE_PINCTRL + 0x004) & 1);
+		touch_read("id", 0x1f64e, 6);
+	}
+	{
+		uint8_t raw[8];
+		touch_page(0x1f64e);
+		touch_cs(0);
+		spi_xfer(0x4e);
+		for (int i = 0; i < 8; i++)
+			raw[i] = (uint8_t)spi_xfer(0);
+		touch_cs(1);
+		out("raw id    :");
+		for (int i = 0; i < 8; i++) {
+			static const char d[] = "0123456789abcdef";
+			char b[4] = { ' ', d[raw[i] >> 4], d[raw[i] & 0xf], 0 };
+			out(b);
+		}
+		out("\n");
+	}
 	uint8_t st[6];
 	int ok = 0;
 	for (int r = 0; r < 50 && !ok; r++) {
