@@ -257,8 +257,27 @@ static void view_page(volatile struct prz *z, uint32_t back, uint32_t lines)
 		glyph(c++, r, ch);
 	}
 	fg = 0xffffff00U;
-	glyphs(0, ROWS - 1, back ? "VOL+ older  VOL- newer  XCOVER: boot"
-				  : "NEWEST  VOL+ older  XCOVER: boot");
+	glyphs(0, ROWS - 1, back ? "VOL- older  VOL+ newer  XCOVER: boot"
+				  : "NEWEST  VOL- older  XCOVER: boot");
+}
+
+/* Raw ALIVE data (active low) above the page: VOL+ was not seen on GPA0-7
+ * (boot 10), this shows which bit a key really moves. */
+static void draw_keys(void)
+{
+	char pos[32], *p = pos;
+	const char *k = "GPA0=";
+	while (*k)
+		*p++ = *k++;
+	p = udec(p, *(volatile uint32_t *)(ALIVE_PINCTRL + GPA0_DAT) & 0xff);
+	k = " GPA1=";
+	while (*k)
+		*p++ = *k++;
+	p = udec(p, *(volatile uint32_t *)(ALIVE_PINCTRL + GPA1_DAT) & 0xff);
+	*p++ = ' ';
+	*p = 0;
+	fg = 0xff808080U;
+	glyphs(0, -1, pos);
 }
 
 static void log_viewer(void)
@@ -278,21 +297,27 @@ static void log_viewer(void)
 	for (uint32_t i = 0; i < z->size; i++)
 		lines += prz_at(z, i) == '\n';
 	view_page(z, back, lines);
+	draw_keys();
 	while (keys_down())	/* wait for the restart combination to be released */
 		delay_ms(20);
-	for (;;) {
+	/* VOL- pages back (it is the key that works: it opened the viewer) and
+	 * wraps to the newest page after the oldest; VOL+ pages forward. */
+	for (uint32_t idle = 0;; idle++) {
 		unsigned k = keys_down();
 		if (k & KEY_XCOVER)
 			break;
-		if ((k & KEY_VOLUP) && back + ROWS < lines + 1)
-			back += ROWS / 2;
-		else if ((k & KEY_VOLDOWN) && back)
+		if (k & KEY_VOLDOWN)
+			back = back + ROWS < lines + 1 ? back + ROWS / 2 : 0;
+		else if ((k & KEY_VOLUP) && back)
 			back = back > ROWS / 2 ? back - ROWS / 2 : 0;
 		else {
 			delay_ms(20);
+			if (idle % 10 == 0)
+				draw_keys();
 			continue;
 		}
 		view_page(z, back, lines);
+		draw_keys();
 		delay_ms(150);
 	}
 	while (keys_down())
