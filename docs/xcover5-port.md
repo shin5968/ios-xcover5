@@ -54,6 +54,10 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   `emmc rd=2711512 wr=591381`. 두 번째 영상(20261101_200425)에서 **iOS 사과 로고가 화면에
   여러 번 그려짐**(heartbeat 81 부근 등): backboardd → AppleCLCD → 0xfa000000 경로로 iOS
   그래픽 출력 확인. 콘솔 글자가 그 위를 다시 덮음 → 다음은 `a5fb_noconsole=1`.
+- 부팅 8 (`a5fb_noconsole=1 a5fb_keep_on=1`, 영상 20261101_204853): 콘솔이 멈추고 사과 로고 유지 →
+  **iOS 잠금화면**(`4:29`, `Wednesday, December 31`, 홈 인디케이터, 알림 배너). 화면이 붉고
+  `rdar:45025538` 막대: UIKit "no status bar visual provider"(240x493 pt는 실제 아이폰 크기가 아님,
+  sweet NOTES 0061과 동일). 날짜는 RTC 없음. → AppleCLCD가 1125x2436을 보고하고 패널에 축소 출력.
 
 ## S8 포트와 다른 점
 
