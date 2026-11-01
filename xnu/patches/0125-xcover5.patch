@@ -431,10 +431,10 @@ index dcbd143..61de944 100644
  					int down = !(sample & bit);
  					printf("A5XELTE KEYS: key=%u down=%d gpio=%#x\n",
 diff --git a/bsd/dev/a5xelte_touch.c b/bsd/dev/a5xelte_touch.c
-index ba647a8..e54b05f 100644
+index ba647a8..c93a56c 100644
 --- a/bsd/dev/a5xelte_touch.c
 +++ b/bsd/dev/a5xelte_touch.c
-@@ -920,11 +920,203 @@ dreamlte_touch_start(void)
+@@ -920,11 +920,213 @@ dreamlte_touch_start(void)
  }
  #endif /* DREAMLTE */
  
@@ -458,6 +458,11 @@ index ba647a8..e54b05f 100644
 +static int xc5ts_sleep, xc5ts_native;
 +static bool xc5ts_down[XC5_FINGERS];
 +static uint16_t xc5ts_x[XC5_FINGERS], xc5ts_y[XC5_FINGERS];
++/* Polls a finger has been missing; boot 15: releasing on the first miss
++ * turned every swipe into a tap (down, then up 10 ms later). */
++static uint8_t xc5ts_miss[XC5_FINGERS];
++static unsigned xc5ts_seen[XC5_FINGERS];
++#define XC5_RELEASE_MISSES 5
 +
 +static inline uint32_t
 +xc5ts_rd(vm_offset_t base, uint32_t off)
@@ -568,9 +573,13 @@ index ba647a8..e54b05f 100644
 +			xc5ts_map(px, py, &x, &y);
 +			now[t] = true;
 +			if (!xc5ts_down[t]) {
-+				printf("XC5 TOUCH: down id=%d panel %u,%u\n", t, px, py);
++				printf("XC5 TOUCH: down id=%d st=%u hdr=%02x panel %u,%u\n",
++				    t, st, pt[0], px, py);
++				xc5ts_seen[t] = 0;
 +			}
 +			xc5ts_down[t] = true;
++			xc5ts_miss[t] = 0;
++			xc5ts_seen[t]++;
 +			xc5ts_x[t] = (uint16_t)x;
 +			xc5ts_y[t] = (uint16_t)y;
 +			if (t < 5) {
@@ -578,7 +587,8 @@ index ba647a8..e54b05f 100644
 +			}
 +		}
 +		for (int t = 0; t < XC5_FINGERS; t++) {
-+			if (xc5ts_down[t] && !now[t]) {
++			if (xc5ts_down[t] && !now[t] && ++xc5ts_miss[t] >= XC5_RELEASE_MISSES) {
++				printf("XC5 TOUCH: up id=%d after %u polls\n", t, xc5ts_seen[t]);
 +				xc5ts_down[t] = false;
 +				if (t < 5) {
 +					sweet_hid_touch(t, 0, xc5ts_x[t], xc5ts_y[t]);
