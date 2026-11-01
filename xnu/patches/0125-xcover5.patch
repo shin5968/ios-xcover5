@@ -1,5 +1,5 @@
 diff --git a/bsd/dev/a5xelte_emmc.c b/bsd/dev/a5xelte_emmc.c
-index ffd011a..4415f5b 100644
+index ffd011a..5a98189 100644
 --- a/bsd/dev/a5xelte_emmc.c
 +++ b/bsd/dev/a5xelte_emmc.c
 @@ -22,6 +22,7 @@
@@ -10,7 +10,7 @@ index ffd011a..4415f5b 100644
  #include <libkern/libkern.h>
  #include <machine/atomic.h>
  
-@@ -30,6 +31,12 @@ extern kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
+@@ -30,6 +31,14 @@ extern kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
  extern void thread_deallocate(thread_t);
  extern int hz;
  
@@ -20,10 +20,28 @@ index ffd011a..4415f5b 100644
 +#ifndef A5_LOG_PARTITION
 +#define A5_LOG_PARTITION "SYSTEM"
 +#endif
++/* Sectors moved, for the XC5 heartbeat (busy disk or hang). */
++uint64_t xcover5_emmc_reads, xcover5_emmc_writes;
  #define A5_LOG_SIZE   (4u << 20)
  #define A5_LOG_SECTORS (1u + A5_LOG_SIZE / 512u)
  
-@@ -326,6 +333,20 @@ emmc_crc32(uint32_t crc, const uint8_t *data, size_t len)
+@@ -142,6 +151,7 @@ emmc_read_sector(uint32_t lba, uint8_t *sector)
+ 	emmc_wr(EMMC_CMDARG, lba); /* high-capacity eMMC sector address */
+ 	uint32_t command = CMD_START | CMD_WAIT_DATA | CMD_DATA |
+ 	    CMD_RESP_CRC | CMD_RESP | 17u;
++	xcover5_emmc_reads++;
+ 	if ((emmc_rd(EMMC_CLKSEL) >> 16) & 7u) {
+ 		command |= CMD_HOLD;
+ 	}
+@@ -245,6 +255,7 @@ emmc_write_sector(uint32_t lba, const uint8_t *sector)
+ 	emmc_wr(EMMC_CMDARG, lba);
+ 	uint32_t command = CMD_START | CMD_WAIT_DATA | CMD_DATA | CMD_WRITE |
+ 	    CMD_RESP_CRC | CMD_RESP | 24u;
++	xcover5_emmc_writes++;
+ 	if ((emmc_rd(EMMC_CLKSEL) >> 16) & 7u) {
+ 		command |= CMD_HOLD;
+ 	}
+@@ -326,6 +337,20 @@ emmc_crc32(uint32_t crc, const uint8_t *data, size_t len)
  	return crc;
  }
  
@@ -44,7 +62,7 @@ index ffd011a..4415f5b 100644
  static int
  emmc_find_root_partition(void)
  {
-@@ -381,16 +402,16 @@ emmc_find_root_partition(void)
+@@ -381,16 +406,16 @@ emmc_find_root_partition(void)
  			const uint8_t *p = entry + j * 128;
  			bool match = true;
  			bool system_match = true;
@@ -64,7 +82,7 @@ index ffd011a..4415f5b 100644
  				    p[57 + k * 2] != 0) {
  					system_match = false;
  					break;
-@@ -418,12 +439,29 @@ emmc_find_root_partition(void)
+@@ -418,12 +443,29 @@ emmc_find_root_partition(void)
  		return EIO;
  	}
  	if (emmc_log_first_lba == emmc_first_lba && emmc_log_nsectors &&
@@ -96,7 +114,7 @@ index ffd011a..4415f5b 100644
  		return ENXIO;
  	}
  	int enable_write = 0;
-@@ -446,7 +484,7 @@ emmc_map_host(void)
+@@ -446,7 +488,7 @@ emmc_map_host(void)
  	}
  	if (SecureDTLookupEntry(NULL, "/a5xelte-emmc", &node) != kSuccess ||
  	    SecureDTGetProperty(node, "reg", (void const **)&reg, &size) != kSuccess ||
@@ -105,7 +123,7 @@ index ffd011a..4415f5b 100644
  		printf("A5XELTE eMMC: missing or unexpected ADT register window\n");
  		return ENXIO;
  	}
-@@ -702,7 +740,7 @@ emmc_log_start(void)
+@@ -702,7 +744,7 @@ emmc_log_start(void)
  		return;
  	}
  	emmc_log_enabled = true;
@@ -249,10 +267,10 @@ index 5bd24a7..84f5069 100644
  		/*
  		 * The entry is in the high RAM bank (0x88xxxxxxx); the loader probe
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-index 193845f..368ab8a 100644
+index 193845f..f3505f6 100644
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -22,6 +22,43 @@ public:
+@@ -22,6 +22,45 @@ public:
  
  OSDefineMetaClassAndStructors(SweetPlatformExpert, IODTPlatformExpert);
  
@@ -262,6 +280,7 @@ index 193845f..368ab8a 100644
 +#include <kern/clock.h>
 +extern "C" {
 +uint32_t xcover5_klog_size(void);
++extern uint64_t xcover5_emmc_reads, xcover5_emmc_writes;
 +void a5xelte_gic_diagnostics(unsigned int logical, const char *stage);
 +kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
 +void thread_deallocate(thread_t);
@@ -287,8 +306,9 @@ index 193845f..368ab8a 100644
 +	xcover5_timer_state("after 200ms busy");
 +	for (unsigned n = 1;; n++) {
 +		IOSleep(5000);
-+		IOLog("XC5 heartbeat %u t=%llu klog=%u\n", n, mach_absolute_time(),
-+		    xcover5_klog_size());
++		IOLog("XC5 heartbeat %u t=%llu klog=%u emmc rd=%llu wr=%llu\n", n,
++		    mach_absolute_time(), xcover5_klog_size(), xcover5_emmc_reads,
++		    xcover5_emmc_writes);
 +	}
 +}
 +#endif
@@ -296,7 +316,7 @@ index 193845f..368ab8a 100644
  bool
  SweetPlatformExpert::start(IOService *provider)
  {
-@@ -36,6 +73,16 @@ SweetPlatformExpert::start(IOService *provider)
+@@ -36,6 +75,16 @@ SweetPlatformExpert::start(IOService *provider)
  	registerService();
  #if defined(A5XELTE)
  	IOLog("A5XELTE: platform expert registered\n");

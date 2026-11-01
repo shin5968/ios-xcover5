@@ -139,6 +139,7 @@ edit('iokit/Kernel/arm/SweetPlatformExpert.cpp', [
      '#include <kern/clock.h>\n'
      'extern "C" {\n'
      'uint32_t xcover5_klog_size(void);\n'
+     'extern uint64_t xcover5_emmc_reads, xcover5_emmc_writes;\n'
      'void a5xelte_gic_diagnostics(unsigned int logical, const char *stage);\n'
      'kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);\n'
      'void thread_deallocate(thread_t);\n'
@@ -164,8 +165,9 @@ edit('iokit/Kernel/arm/SweetPlatformExpert.cpp', [
      '\txcover5_timer_state("after 200ms busy");\n'
      '\tfor (unsigned n = 1;; n++) {\n'
      '\t\tIOSleep(5000);\n'
-     '\t\tIOLog("XC5 heartbeat %u t=%llu klog=%u\\n", n, mach_absolute_time(),\n'
-     '\t\t    xcover5_klog_size());\n'
+     '\t\tIOLog("XC5 heartbeat %u t=%llu klog=%u emmc rd=%llu wr=%llu\\n", n,\n'
+     '\t\t    mach_absolute_time(), xcover5_klog_size(), xcover5_emmc_reads,\n'
+     '\t\t    xcover5_emmc_writes);\n'
      '\t}\n'
      '}\n'
      '#endif\n', 1),
@@ -234,7 +236,13 @@ edit('bsd/dev/a5xelte_emmc.c', [
     ('#define A5_LOG_SIZE   (4u << 20)\n',
      '#ifndef A5_EMMC_PHYS\n#define A5_EMMC_PHYS 0x13540000u\n#endif\n'
      '#ifndef A5_LOG_PARTITION\n#define A5_LOG_PARTITION "SYSTEM"\n#endif\n'
+     '/* Sectors moved, for the XC5 heartbeat (busy disk or hang). */\n'
+     'uint64_t xcover5_emmc_reads, xcover5_emmc_writes;\n'
      '#define A5_LOG_SIZE   (4u << 20)\n', 1),
+    ('CMD_RESP_CRC | CMD_RESP | 17u;\n',
+     'CMD_RESP_CRC | CMD_RESP | 17u;\n\txcover5_emmc_reads++;\n', 1),
+    ('CMD_RESP_CRC | CMD_RESP | 24u;\n',
+     'CMD_RESP_CRC | CMD_RESP | 24u;\n\txcover5_emmc_writes++;\n', 1),
     ('reg[0] != 0x13540000u', 'reg[0] != A5_EMMC_PHYS', 1),
     ('static const char system_name[] = "SYSTEM";', 'static const char system_name[] = A5_LOG_PARTITION;', 1),
     ('\tif (emmc_log_first_lba == emmc_first_lba && emmc_log_nsectors &&\n'
