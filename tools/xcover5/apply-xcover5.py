@@ -144,8 +144,35 @@ edit('pexpert/arm/pe_serial.c', [
      '{\n'
      '\treturn klog_hdr ? klog_hdr[2] : 0xffffffffu;\n'
      '}\n'
+     '\n'
+     '/* _cnputs while the screen console is muted (a5fb_noconsole). */\n'
+     'void xcover5_klog_write(const char *c, int size);\n'
+     'void\n'
+     'xcover5_klog_write(const char *c, int size)\n'
+     '{\n'
+     '\tfor (int i = 0; i < size; i++) {\n'
+     '\t\tif (c[i] == \'\\n\') {\n'
+     '\t\t\tklog_putc(\'\\r\');\n'
+     '\t\t}\n'
+     '\t\tklog_putc((uint8_t)c[i]);\n'
+     '\t}\n'
+     '}\n'
      '#endif\n'
      '#endif\n', 1),
+])
+
+# Boot 9: with a5fb_noconsole=1 the RAM log ended at the first GUI frame,
+# because klog_putc sits in the screen console that _cnputs then skips.
+edit('osfmk/console/serial_console.c', [
+    ('#include <arm/cpu_data_internal.h>\n',
+     '#include <arm/cpu_data_internal.h>\n#include <pexpert/arm64/board_config.h>\n', 1),
+    ('\tif (sweet_console_muted && !panic_active()) {\n\t\treturn;\n\t}\n',
+     '\tif (sweet_console_muted && !panic_active()) {\n'
+     '#if defined(XCOVER5)\n'
+     '\t\textern void xcover5_klog_write(const char *c, int size);\n'
+     '\t\txcover5_klog_write(c, size);\n'
+     '#endif\n'
+     '\t\treturn;\n\t}\n', 1),
 ])
 
 edit('iokit/Kernel/arm/SweetPlatformExpert.cpp', [
@@ -274,6 +301,14 @@ edit('iokit/Kernel/arm/SweetFramebuffer.cpp', [
      '#endif\n'
      '\n'
      'void\nAppleCLCD::present(const uint8_t *rec)\n', 1),
+    # Boot 9: black after the logo; the RAM log had stopped at the first
+    # present. Keep logging a swap every 100 to see what is drawn later.
+    ('\t\tif (sweet_fb_swaps_logged < 16) {\n',
+     '#if defined(XCOVER5)\n'
+     '\t\tif (sweet_fb_swaps_logged < 16 || get32(rec, 0x50) % 100 == 0) {\n'
+     '#else\n'
+     '\t\tif (sweet_fb_swaps_logged < 16) {\n'
+     '#endif\n', 1),
     ('\t\tuintptr_t src = s->kernelAddress();\n'
      '\t\tuint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;\n',
      '\t\tuintptr_t src = s->kernelAddress();\n'

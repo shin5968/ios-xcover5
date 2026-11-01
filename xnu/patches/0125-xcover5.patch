@@ -481,7 +481,7 @@ index 5bd24a7..84f5069 100644
  		/*
  		 * The entry is in the high RAM bank (0x88xxxxxxx); the loader probe
 diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
-index ec6b9da..3302891 100644
+index ec6b9da..adc7ee8 100644
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
 @@ -188,7 +188,7 @@ AppleCLCD::start(IOService *provider)
@@ -560,7 +560,19 @@ index ec6b9da..3302891 100644
  void
  AppleCLCD::present(const uint8_t *rec)
  {
-@@ -426,6 +486,14 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -413,7 +473,11 @@ AppleCLCD::present(const uint8_t *rec)
+ 			continue;
+ 		}
+ 		SweetSurface *s = sweet_surface_copy(id);
++#if defined(XCOVER5)
++		if (sweet_fb_swaps_logged < 16 || get32(rec, 0x50) % 100 == 0) {
++#else
+ 		if (sweet_fb_swaps_logged < 16) {
++#endif
+ 			sweet_fb_swaps_logged++;
+ 			IOLog("SWEET FB: swap %u layer %u surface %u %ux%u fmt 0x%x bpr %u a %d,%d %ux%u b %d,%d %dx%d\n",
+ 			    get32(rec, 0x50), layer, id, s ? s->width : 0, s ? s->height : 0,
+@@ -426,6 +490,14 @@ AppleCLCD::present(const uint8_t *rec)
  		}
  		uintptr_t src = s->kernelAddress();
  		uint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;
@@ -698,8 +710,31 @@ index e01c124..6896d02 100644
  
  /*
   * Coprocessor Access Control Register (CPACR)
+diff --git a/osfmk/console/serial_console.c b/osfmk/console/serial_console.c
+index f2489bd..7d90710 100644
+--- a/osfmk/console/serial_console.c
++++ b/osfmk/console/serial_console.c
+@@ -50,6 +50,7 @@
+ #if __arm64__
+ #include <machine/machine_routines.h>
+ #include <arm/cpu_data_internal.h>
++#include <pexpert/arm64/board_config.h>
+ #endif
+ 
+ #ifdef CONFIG_XNUPOST
+@@ -294,6 +295,10 @@ _cnputs(char *c, int size, bool poll)
+ #endif
+ #if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_A5XELTE)
+ 	if (sweet_console_muted && !panic_active()) {
++#if defined(XCOVER5)
++		extern void xcover5_klog_write(const char *c, int size);
++		xcover5_klog_write(c, size);
++#endif
+ 		return;
+ 	}
+ #endif
 diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
-index 1966bdd..f6d8ab7 100644
+index 1966bdd..2101f01 100644
 --- a/pexpert/arm/pe_serial.c
 +++ b/pexpert/arm/pe_serial.c
 @@ -721,7 +721,7 @@ static volatile uint32_t *fbcon_base;
@@ -711,7 +746,7 @@ index 1966bdd..f6d8ab7 100644
  /*
   * Copy of the console in TWRP's ramoops pmsg zone, in persistent_ram
   * format (sig "DBGC", start, size, ring data), appended to the loader's
-@@ -772,6 +772,14 @@ klog_putc(uint8_t c)
+@@ -772,6 +772,27 @@ klog_putc(uint8_t c)
  	klog_hdr[1] = klog_start;
  	klog_hdr[2] = klog_size;
  }
@@ -722,11 +757,24 @@ index 1966bdd..f6d8ab7 100644
 +{
 +	return klog_hdr ? klog_hdr[2] : 0xffffffffu;
 +}
++
++/* _cnputs while the screen console is muted (a5fb_noconsole). */
++void xcover5_klog_write(const char *c, int size);
++void
++xcover5_klog_write(const char *c, int size)
++{
++	for (int i = 0; i < size; i++) {
++		if (c[i] == '\n') {
++			klog_putc('\r');
++		}
++		klog_putc((uint8_t)c[i]);
++	}
++}
 +#endif
  #endif
  
  static void
-@@ -814,7 +822,7 @@ fbcon_transmit_ready(void)
+@@ -814,7 +835,7 @@ fbcon_transmit_ready(void)
  static void
  fbcon_transmit_data(uint8_t c)
  {
@@ -735,7 +783,7 @@ index 1966bdd..f6d8ab7 100644
  	klog_putc(c);
  #endif
  	if (c == '\r') {
-@@ -896,7 +904,7 @@ fbcon_probe(void)
+@@ -896,7 +917,7 @@ fbcon_probe(void)
  	}
  	sweet_early_mark(17, "fbcon config read; mapping");
  	fbcon_base = (volatile uint32_t *)ml_io_map_wcomb(reg[0], reg[1]);
