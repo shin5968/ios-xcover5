@@ -462,6 +462,133 @@ static void probe_cpu(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 	out("\n");
 }
 
+/* ---- touch: Novatek NT36525 on SPI1 (USI_CMGP0), probe only ----
+ * Stock dtbo: novatek,NVT-ts-spi on spi_1 = spi@11d00000, CS gpm3-0 (GPIO),
+ * bus gpm0/1/2-0 function 2, IRQ gpa0-0. Clocks, USI mode and pins follow
+ * mainline exynos850 (clk-exynos850.c CMU_CMGP, exynos-usi.c, pinctrl
+ * banks, spi-s3c64xx.c with clk_div 4). NT36xxx SPI framing (Linux RFC
+ * nt36xxx_spi.c): page select FF a[23:15] a[14:7], then a[6:0] (read) or
+ * a[6:0]|0x80 (write) followed by data. Reads only: no reset, no download. */
+#define CMU_TOP			0x120e0000UL
+#define CMU_CMGP		0x11c00000UL
+#define SYSREG_CMGP_USI0	0x11c22000UL	/* SW_CONF of USI_CMGP0 */
+#define USI_CMGP0		0x11d000c0UL	/* USI_CON +4, USI_OPTION +8 */
+#define PINCTRL_CMGP		0x11c30000UL	/* gpm0..gpm7 at 0x20 steps */
+#define SPI1			0x11d00000UL
+#define GATE_ON			(1u << 21)
+
+static inline uint32_t rd32(uintptr_t a) { return *(volatile uint32_t *)a; }
+static inline void wr32(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
+
+static void touch_cs(int level)
+{
+	uint32_t dat = rd32(PINCTRL_CMGP + 0x64);
+	wr32(PINCTRL_CMGP + 0x64, level ? (dat | 1) : (dat & ~1u));
+	delay_ms(1);
+}
+
+/* One byte full duplex; returns the received byte or -1 on timeout. */
+static int spi_xfer(uint8_t tx)
+{
+	for (int i = 0; i < 100000; i++) {
+		if (((rd32(SPI1 + 0x14) >> 6) & 0x1ff) < 64) {
+			wr32(SPI1 + 0x18, tx);
+			for (int j = 0; j < 100000; j++)
+				if ((rd32(SPI1 + 0x14) >> 15) & 0x1ff)
+					return (int)(rd32(SPI1 + 0x1c) & 0xff);
+			return -1;
+		}
+	}
+	return -1;
+}
+
+static void touch_page(uint32_t addr)
+{
+	touch_cs(0);
+	spi_xfer(0xff);
+	spi_xfer((uint8_t)(addr >> 15));
+	spi_xfer((uint8_t)(addr >> 7));
+	touch_cs(1);
+}
+
+/* Read n bytes at addr; prints the address byte's echo plus n+1 bytes so
+ * a dummy byte, if the chip sends one, is visible. */
+static void touch_read(const char *what, uint32_t addr, int n)
+{
+	int v[20];
+	touch_page(addr);
+	touch_cs(0);
+	v[0] = spi_xfer((uint8_t)(addr & 0x7f));
+	for (int i = 1; i <= n + 1 && i < 20; i++)
+		v[i] = spi_xfer(0);
+	touch_cs(1);
+	out(what);
+	out(":");
+	for (int i = 0; i <= n + 1 && i < 20; i++) {
+		static const char d[] = "0123456789abcdef";
+		char b[4] = { ' ', '-', '-', 0 };
+		if (v[i] >= 0) {
+			b[1] = d[(v[i] >> 4) & 0xf];
+			b[2] = d[v[i] & 0xf];
+		}
+		out(b);
+	}
+	out("\n");
+}
+
+static void touch_probe(void)
+{
+	fg = 0xff40ffffU;
+	out("\nTOUCH SPI PROBE (NT36525)\n");
+	fg = 0xffffffffU;
+	kv("cmgp_bus", rd32(CMU_TOP + 0x2000));
+	kv("usi0_mux", rd32(CMU_CMGP + 0x1004));
+	out("\n");
+	kv("usi0_div", rd32(CMU_CMGP + 0x1804));
+	kv("ipclk", rd32(CMU_CMGP + 0x2044));
+	out("\n");
+	/* Clocks on: CMGP bus, GPIO, sysreg, USI0 ipclk/pclk; USI0 from the
+	 * RCO, divided by 32 (slowest; the SPI block divides by 4 more). */
+	wr32(CMU_TOP + 0x2000, rd32(CMU_TOP + 0x2000) | GATE_ON);
+	wr32(CMU_CMGP + 0x2018, rd32(CMU_CMGP + 0x2018) | GATE_ON);
+	wr32(CMU_CMGP + 0x2040, rd32(CMU_CMGP + 0x2040) | GATE_ON);
+	wr32(CMU_CMGP + 0x1004, rd32(CMU_CMGP + 0x1004) & ~1u);
+	wr32(CMU_CMGP + 0x1804, (rd32(CMU_CMGP + 0x1804) & ~0x1fu) | 0x1f);
+	wr32(CMU_CMGP + 0x2044, rd32(CMU_CMGP + 0x2044) | GATE_ON);
+	wr32(CMU_CMGP + 0x2048, rd32(CMU_CMGP + 0x2048) | GATE_ON);
+	delay_ms(1);
+	kv("sw_conf", rd32(SYSREG_CMGP_USI0));
+	kv("usi_con", rd32(USI_CMGP0 + 4));
+	out("\n");
+	wr32(SYSREG_CMGP_USI0, (rd32(SYSREG_CMGP_USI0) & ~7u) | 2);	/* SPI */
+	wr32(USI_CMGP0 + 4, rd32(USI_CMGP0 + 4) & ~1u);		/* out of reset */
+	wr32(USI_CMGP0 + 8, (rd32(USI_CMGP0 + 8) & ~4u) | 2);	/* CLKREQ_ON */
+	/* Pins: gpm0/1/2-0 function 2 (SPI), gpm3-0 output high (CS). */
+	for (uintptr_t b = 0; b < 0x60; b += 0x20)
+		wr32(PINCTRL_CMGP + b, (rd32(PINCTRL_CMGP + b) & ~0xfu) | 2);
+	wr32(PINCTRL_CMGP + 0x64, rd32(PINCTRL_CMGP + 0x64) | 1);
+	wr32(PINCTRL_CMGP + 0x60, (rd32(PINCTRL_CMGP + 0x60) & ~0xfu) | 1);
+	/* SPI: reset, master, mode 0, 8-bit, PIO, controller CS inactive. */
+	wr32(SPI1 + 0x00, 1u << 5);
+	delay_ms(1);
+	wr32(SPI1 + 0x00, 0);
+	wr32(SPI1 + 0x08, 0);
+	wr32(SPI1 + 0x0c, 1);
+	wr32(SPI1 + 0x10, 0);
+	wr32(SPI1 + 0x24, 0x1f);
+	wr32(SPI1 + 0x24, 0);
+	wr32(SPI1 + 0x00, 3);					/* TX + RX on */
+	kv("spi_st", rd32(SPI1 + 0x14));
+	kv("irq gpa0-0", rd32(ALIVE_PINCTRL + 0x004) & 1);
+	out("\n");
+	touch_read("trim 1f64e", 0x1f64e, 7);	/* chip ID: .. 25 65 03 = NT36525 */
+	touch_read("boot 1f141", 0x1f141, 2);	/* BOOT_RDY */
+	touch_read("evt 11a00", 0x11a00, 16);	/* event buffer */
+	touch_read("evt 11a78", 0x11a78, 4);	/* fw version/state area */
+	kv("spi_st", rd32(SPI1 + 0x14));
+	out("\n");
+}
+
 uint64_t dl_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 {
 	/* Before the log zones are reset: show the previous boot's log? */
@@ -495,6 +622,7 @@ uint64_t dl_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 	 * end 0x84081000); the stock DT's 0x847fffff is only a placeholder. */
 	uint64_t length = rd_end - rd_start;
 	if (length < sizeof(struct payload) || !magic_ok(p->magic) || p->version != 1) {
+		touch_probe();
 		fg = 0xff40ff40U;
 		out("\nPROBE OK: no SWEETXNU payload in the ramdisk.\n"
 		    "Send a photo of this screen.\n"
