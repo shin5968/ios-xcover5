@@ -71,15 +71,15 @@ def cpu_node(logical):
     ]
 
 
-def build(canvas=(FB_W, FB_H)):
+def build(canvas=(FB_W, FB_H), dram=(DRAM_BASE, DRAM_SIZE)):
     root = mkadt.build(seed=os.urandom(64), qemu=True)
     # SweetPlatformExpert matches 'samsung,a5xelte' (KernelConfigTables.cpp).
     set_prop(root, 'compatible', mkadt.cstr('samsung,xcover5') +
              mkadt.cstr('samsung,a5xelte') + mkadt.cstr('samsung,exynos850') +
              mkadt.cstr('AppleARM'))
     chosen = child(root, 'chosen')
-    set_prop(chosen, 'dram-base', mkadt.u64(DRAM_BASE))
-    set_prop(chosen, 'dram-size', mkadt.u64(DRAM_SIZE))
+    set_prop(chosen, 'dram-base', mkadt.u64(dram[0]))
+    set_prop(chosen, 'dram-size', mkadt.u64(dram[1]))
     set_prop(chosen, 'firmware-version', mkadt.cstr('xcover5-entry'))
     set_prop(chosen, 'system-firmware-version', mkadt.cstr('xcover5-entry'))
     cpus = child(root, 'cpus')
@@ -129,7 +129,12 @@ if __name__ == '__main__':
     parser.add_argument('output', type=Path)
     parser.add_argument('--canvas', default=f'{FB_W}x{FB_H}',
                         help='display size presented to iOS, WxH')
+    # Boot 10: with the iPhone X size, 512 MiB ended in xpcproxy crash loops
+    # ("Too many corpses"). 0x8a2800000:0x40000000 = 1 GiB above mfc_fw_rmem.
+    parser.add_argument('--dram', default=f'{DRAM_BASE:#x}:{DRAM_SIZE:#x}',
+                        help='XNU RAM window BASE:SIZE (high bank, not over 0x8a2400000-0x8a2800000)')
     args = parser.parse_args()
-    blob = adt.serialize(build(tuple(int(v) for v in args.canvas.split('x'))))
+    dram = tuple(int(v, 0) for v in args.dram.split(':'))
+    blob = adt.serialize(build(tuple(int(v) for v in args.canvas.split('x')), dram))
     args.output.write_bytes(blob)
     print(f'{args.output}: {len(blob)} bytes')

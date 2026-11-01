@@ -4,8 +4,8 @@
  * Derived from shim/dreamlte/loader.c (Galaxy S8). S-Boot hands us the BOOT
  * ramdisk as /chosen/linux,initrd-{start,end}; it holds a tools/mkpayload.py
  * "SWEETXNU" v1 container (Mach-O segments, ADT, boot-args). We copy it into
- * the kernel-managed RAM window the ADT names (512 MiB at 0x880000000, below
- * the MFC firmware carve-out at 0x8a2400000), build boot_args and jump to
+ * the kernel-managed RAM window the ADT names (in the high bank, not over the
+ * MFC firmware carve-out at 0x8a2400000), build boot_args and jump to
  * XNU's physical entry with the MMU off.
  *
  * Without a payload (any other ramdisk) the loader only prints what it
@@ -38,7 +38,9 @@
 #define LOW_RAM_BASE		0x80000000UL	/* initrd must be in the low bank */
 #define LOW_RAM_END		0xbff80000UL	/* el3mon_reserve */
 #define XNU_RAM_BASE		0x880000000UL	/* high bank */
-#define XNU_RAM_END		0x8a2400000UL	/* mfc_fw_rmem */
+#define XNU_RAM_END		0x900000000UL
+#define MFC_RMEM		0x8a2400000UL	/* mfc_fw_rmem, 4 MiB: XNU RAM goes below or above */
+#define MFC_RMEM_END		0x8a2800000UL
 #define TIMER_HZ		26000000UL	/* DT arch timer clock-frequency */
 #define PAGE_SIZE		4096UL
 #define BOOT_LINE_LENGTH	608
@@ -298,17 +300,22 @@ static void log_viewer(void)
 		lines += prz_at(z, i) == '\n';
 	view_page(z, back, lines);
 	draw_keys();
-	while (keys_down())	/* wait for the restart combination to be released */
-		delay_ms(20);
-	/* VOL- pages back (it is the key that works: it opened the viewer) and
-	 * wraps to the newest page after the oldest; VOL+ pages forward. */
+	/* Boot 10: the XCover key's GPA0-5 reads 0 when released, so waiting for
+	 * "no key down" never ended. Work on changes instead: a key acts when its
+	 * pin leaves the level it had at rest (1.5 s after the viewer opened, so
+	 * the restart combination is let go), whichever polarity that is.
+	 * VOL- pages back and wraps to the newest page; VOL+ pages forward. */
+	delay_ms(1500);
+	unsigned rest = keys_down(), prev = rest;
 	for (uint32_t idle = 0;; idle++) {
-		unsigned k = keys_down();
-		if (k & KEY_XCOVER)
+		unsigned now = keys_down();
+		unsigned hit = (now ^ rest) & ~(prev ^ rest);	/* just left rest */
+		prev = now;
+		if (hit & KEY_XCOVER)
 			break;
-		if (k & KEY_VOLDOWN)
+		if (hit & KEY_VOLDOWN)
 			back = back + ROWS < lines + 1 ? back + ROWS / 2 : 0;
-		else if ((k & KEY_VOLUP) && back)
+		else if ((hit & KEY_VOLUP) && back)
 			back = back > ROWS / 2 ? back - ROWS / 2 : 0;
 		else {
 			delay_ms(20);
@@ -320,8 +327,7 @@ static void log_viewer(void)
 		draw_keys();
 		delay_ms(150);
 	}
-	while (keys_down())
-		delay_ms(20);
+	delay_ms(500);
 }
 
 /* ---- payload (tools/mkpayload.py v1) ---- */
@@ -512,8 +518,9 @@ uint64_t dl_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 		return fail("bad payload header");
 	if (p->phys_base < XNU_RAM_BASE || p->phys_base >= XNU_RAM_END || !p->mem_size ||
 	    p->mem_size > XNU_RAM_END - p->phys_base ||
+	    (p->phys_base < MFC_RMEM_END && p->phys_base + p->mem_size > MFC_RMEM) ||
 	    p->entry_va < p->virt_base || p->kernel_end < p->virt_base)
-		return fail("payload RAM outside 0x880000000-0x8a2400000");
+		return fail("payload RAM outside the high bank or over mfc_fw_rmem");
 	uintptr_t mem_end = p->phys_base + p->mem_size;
 	uintptr_t kernel_end = p->phys_base + (p->kernel_end - p->virt_base);
 	if (kernel_end >= mem_end)
