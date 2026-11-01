@@ -1,5 +1,7 @@
 # iOS on the Samsung Galaxy S8
 
+> **Galaxy XCover5 (SM-G525F/N, Exynos 850) branch `xcover5`:** loader `shim/xcover5/`, patch `xnu/patches/0125-xcover5.patch` (the kernel of this branch is XCover5-only), tools in `tools/xcover5/`. Not tested on the phone yet. Guide (Korean): **[docs/xcover5-port.md](docs/xcover5-port.md)**.
+
 **iOS 16.7 on the Samsung Galaxy S8 (SM-G950F, Exynos 8895, `dreamlte`).**
 
 This project ports Apple's open-source XNU kernel (xnu-8796, the iOS 16 generation) to the Galaxy S8. On top of it runs the **unmodified iOS 16.7.16 (20H392) userland of the iPhone X**: launchd, the system daemons, backboardd and SpringBoard. The phone reaches the **iOS lock screen**.

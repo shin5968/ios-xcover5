@@ -1,0 +1,273 @@
+diff --git a/bsd/dev/a5xelte_emmc.c b/bsd/dev/a5xelte_emmc.c
+index ffd011a..e8db5b9 100644
+--- a/bsd/dev/a5xelte_emmc.c
++++ b/bsd/dev/a5xelte_emmc.c
+@@ -22,6 +22,7 @@
+ #include <kern/sched_prim.h>
+ #include <pexpert/pexpert.h>
+ #include <pexpert/device_tree.h>
++#include <pexpert/arm64/board_config.h>
+ #include <libkern/libkern.h>
+ #include <machine/atomic.h>
+ 
+@@ -30,6 +31,12 @@ extern kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
+ extern void thread_deallocate(thread_t);
+ extern int hz;
+ 
++#ifndef A5_EMMC_PHYS
++#define A5_EMMC_PHYS 0x13540000u
++#endif
++#ifndef A5_LOG_PARTITION
++#define A5_LOG_PARTITION "SYSTEM"
++#endif
+ #define A5_LOG_SIZE   (4u << 20)
+ #define A5_LOG_SECTORS (1u + A5_LOG_SIZE / 512u)
+ 
+@@ -381,7 +388,7 @@ emmc_find_root_partition(void)
+ 			const uint8_t *p = entry + j * 128;
+ 			bool match = true;
+ 			bool system_match = true;
+-			static const char system_name[] = "SYSTEM";
++			static const char system_name[] = A5_LOG_PARTITION;
+ 			for (unsigned k = 0; k <= strlen(emmc_partition_name); k++) {
+ 				if (p[56 + k * 2] != (uint8_t)emmc_partition_name[k] ||
+ 				    p[57 + k * 2] != 0) {
+@@ -418,7 +425,7 @@ emmc_find_root_partition(void)
+ 		return EIO;
+ 	}
+ 	if (emmc_log_first_lba == emmc_first_lba && emmc_log_nsectors &&
+-	    strcmp(emmc_partition_name, "SYSTEM") == 0) {
++	    strcmp(emmc_partition_name, A5_LOG_PARTITION) == 0) {
+ 		/* A log writer must never overlap the selected root. */
+ 		emmc_log_nsectors = 0;
+ 	}
+@@ -446,7 +453,7 @@ emmc_map_host(void)
+ 	}
+ 	if (SecureDTLookupEntry(NULL, "/a5xelte-emmc", &node) != kSuccess ||
+ 	    SecureDTGetProperty(node, "reg", (void const **)&reg, &size) != kSuccess ||
+-	    size < 2 * sizeof(uintptr_t) || reg[0] != 0x13540000u || reg[1] < 0x2000u) {
++	    size < 2 * sizeof(uintptr_t) || reg[0] != A5_EMMC_PHYS || reg[1] < 0x2000u) {
+ 		printf("A5XELTE eMMC: missing or unexpected ADT register window\n");
+ 		return ENXIO;
+ 	}
+@@ -702,7 +709,7 @@ emmc_log_start(void)
+ 		return;
+ 	}
+ 	emmc_log_enabled = true;
+-	printf("A5XELTE LOG: SYSTEM GPT first=%llu, %u sectors reserved\n",
++	printf("A5XELTE LOG: " A5_LOG_PARTITION " GPT first=%llu, %u sectors reserved\n",
+ 	    emmc_log_first_lba, A5_LOG_SECTORS);
+ 	if (kernel_thread_start(emmc_log_thread, NULL, &thread) == KERN_SUCCESS) {
+ 		thread_deallocate(thread);
+diff --git a/bsd/dev/a5xelte_keys.c b/bsd/dev/a5xelte_keys.c
+index dcbd143..61de944 100644
+--- a/bsd/dev/a5xelte_keys.c
++++ b/bsd/dev/a5xelte_keys.c
+@@ -18,7 +18,9 @@
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ extern void sweet_hid_key(int key, int down);
+ 
+-#if defined(DREAMLTE)
++#if defined(XCOVER5)
++#define A5_ALIVE_PA 0x11850000u            /* Exynos 850 pinctrl ALIVE */
++#elif defined(DREAMLTE)
+ #define A5_ALIVE_PA 0x164b0000u            /* Exynos 8895 pinctrl ALIVE */
+ #else
+ #define A5_ALIVE_PA 0x139b0000u
+@@ -39,7 +41,17 @@ a5_keys_read(uint32_t offset)
+ 	return value;
+ }
+ 
+-#if defined(DREAMLTE)
++#if defined(XCOVER5)
++/*
++ * Galaxy XCover5 (stock dtbo gpio_keys, active low): Volume Down GPA1-0,
++ * Volume Up GPA0-7, XCover key GPA0-5 (used as Power). Exynos 850 ALIVE
++ * banks: GPA0 0x000, GPA1 0x020; DAT at +4. Sample = GPA0 | GPA1 << 8;
++ * bit 31 is a constant 1 (released) for the absent Home key.
++ */
++typedef uint32_t keys_t;
++#define KEYS_SAMPLE() ((keys_t)((a5_keys_read(0x04) & 0xff) | (a5_keys_read(0x24) & 0xff) << 8 | 0x80000000u))
++#define KEYS_PINS { 5, 7, 8, 31 }
++#elif defined(DREAMLTE)
+ /*
+  * Galaxy S8 (mainline exynos8895-dreamlte.dts gpio-keys, all active low):
+  * Power GPA2-4, Volume Up GPA0-3, Volume Down GPA0-4, Bixby GPA0-6 (used
+@@ -86,7 +98,7 @@ a5_keys_thread(void *arg, wait_result_t result)
+ 		}
+ 		if (repeated == 2 && stable != sample) {
+ 			for (unsigned key = 0; key < 4; key++) {
+-				keys_t bit = (keys_t)(1u << pins[key]);
++				keys_t bit = (keys_t)((keys_t)1 << pins[key]);
+ 				if ((stable ^ sample) & bit) {
+ 					int down = !(sample & bit);
+ 					printf("A5XELTE KEYS: key=%u down=%d gpio=%#x\n",
+diff --git a/iokit/Kernel/arm/SweetCPU.cpp b/iokit/Kernel/arm/SweetCPU.cpp
+index 5bd24a7..84f5069 100644
+--- a/iokit/Kernel/arm/SweetCPU.cpp
++++ b/iokit/Kernel/arm/SweetCPU.cpp
+@@ -17,7 +17,7 @@
+ #include <kern/thread.h>
+ #include <mach/mach_time.h>
+ #include <pexpert/pexpert.h>
+-#if defined(DREAMLTE)
++#if (defined(DREAMLTE) || defined(XCOVER5))
+ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+ #endif
+ 
+@@ -87,7 +87,12 @@ SweetCPU::start(IOService *provider)
+ #if defined(A5XELTE)
+ 	/* Linux's Exynos7580 DT: logical 0..3 = MPIDR 0..3;
+ 	 * logical 4..7 = MPIDR 0x100..0x103. */
+-#if defined(DREAMLTE)
++#if defined(XCOVER5)
++	/* Exynos 850: Cortex-A55 with MT, MPIDR Aff1 = core, Aff2 = cluster.
++	 * MPIDR[15:0] (the SWEET key) is unique only inside cluster 0, so the
++	 * ADT lists logical 0..3 = MPIDR 0x000..0x300. */
++	uint32_t expected_mpidr = cpu->cpu_id < 4 ? (uint32_t)cpu->cpu_id << 8 : ~0U;
++#elif defined(DREAMLTE)
+ 	/* Exynos 8895: logical 0..3 = A53 MPIDR 0x100..0x103 (boot cluster);
+ 	 * logical 4..7 = Mongoose M2 MPIDR 0..3. */
+ 	uint32_t expected_mpidr = cpu->cpu_id < 4 ? 0x100U + cpu->cpu_id :
+@@ -113,7 +118,11 @@ SweetCPU::start(IOService *provider)
+ 		return false;
+ 	}
+ #if defined(A5XELTE)
++#if defined(XCOVER5)
++	cpuName = OSSymbol::withCStringNoCopy("Cortex-A55");
++#else
+ 	cpuName = OSSymbol::withCStringNoCopy("Cortex-A53");
++#endif
+ #else
+ 	cpuName = OSSymbol::withCStringNoCopy("Kryo 470");
+ #endif
+@@ -296,7 +305,26 @@ SweetCPU::startCPU(vm_offset_t start_paddr, vm_offset_t arg_paddr)
+ 	vm_offset_t entry = ml_static_vtop((vm_offset_t)&sweet_secondary_entry);
+ 	IOLog(CPU_PORT_NAME " CPU: cpu=%u CPU_ON target=0x%x entry_pa=0x%llx context=%u\n",
+ 	    getCPUNumber(), cpu->phys_id, (uint64_t)entry, getCPUNumber());
+-#if defined(DREAMLTE)
++#if defined(XCOVER5)
++	{
++		/* Entry in the high bank (0x88xxxxxxx). Samsung EL3 firmware may
++		 * keep the CPU_ON entry in a 32-bit register (S8), so go through a
++		 * low-bank trampoline: ldr x1, 8; br x1; .quad entry. Untested. */
++		static vm_offset_t tramp;
++		if (tramp == 0) {
++			tramp = ml_io_map(A5_SMP_TRAMPOLINE_PHYS, 0x1000);
++		}
++		volatile uint32_t *t = (volatile uint32_t *)tramp;
++		t[0] = 0x58000041;              /* ldr x1, #8 */
++		t[1] = 0xd61f0020;              /* br x1 */
++		t[2] = (uint32_t)entry;
++		t[3] = (uint32_t)((uint64_t)entry >> 32);
++		__builtin_arm_dsb(DSB_SY);
++		IOLog(CPU_PORT_NAME " CPU: cpu=%u entry 0x%llx via low trampoline 0x%llx\n",
++		    getCPUNumber(), (uint64_t)entry, (uint64_t)A5_SMP_TRAMPOLINE_PHYS);
++		entry = (vm_offset_t)A5_SMP_TRAMPOLINE_PHYS;
++	}
++#elif defined(DREAMLTE)
+ 	{
+ 		/*
+ 		 * The entry is in the high RAM bank (0x88xxxxxxx); the loader probe
+diff --git a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
+index 57e6096..cc8fe3e 100644
+--- a/osfmk/arm64/arm_vm_init.c
++++ b/osfmk/arm64/arm_vm_init.c
+@@ -1905,7 +1905,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ #endif
+ 
+ 	// Slide the physical aperture to a random page-aligned location within the slide range
+-#if defined(DREAMLTE)
++#if (defined(DREAMLTE) || defined(XCOVER5))
+ 	uint64_t physmap_slide = 0;
+ #else
+ 	uint64_t physmap_slide = early_random() & ARM64_PHYSMAP_SLIDE_MASK & ~((uint64_t)PAGE_MASK);
+@@ -1913,7 +1913,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ 	assert(physmap_slide < ARM64_PHYSMAP_SLIDE_RANGE);
+ 
+ 	physmap_base += physmap_slide;
+-#if defined(DREAMLTE) && !XNU_MONITOR
++#if (defined(DREAMLTE) || defined(XCOVER5)) && !XNU_MONITOR
+ 	physmap_base = ROUND_TWIG(physmap_base);
+ #endif
+ 
+@@ -2317,7 +2317,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ 	va_l1 = dynamic_memory_begin;
+ 	va_l1_end = va_l1 + ((2 + (mem_segments * 10)) << 20);
+ 	va_l1_end += round_page(args->Video.v_height * args->Video.v_rowBytes);
+-#if defined(DREAMLTE)
++#if (defined(DREAMLTE) || defined(XCOVER5))
+ 	va_l1_end += round_page((vm_size_t)A5_FB_STRIDE * A5_FB_HEIGHT) + (64ULL << 20);
+ #endif
+ 	va_l1_end = (va_l1_end + 0x00000000007FFFFFULL) & 0xFFFFFFFFFF800000ULL;
+diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
+index 1966bdd..39d3998 100644
+--- a/pexpert/arm/pe_serial.c
++++ b/pexpert/arm/pe_serial.c
+@@ -721,7 +721,7 @@ static volatile uint32_t *fbcon_base;
+ static uint32_t fbcon_width, fbcon_height, fbcon_stride;
+ static uint32_t fbcon_cols, fbcon_rows, fbcon_col, fbcon_row;
+ 
+-#if defined(DREAMLTE)
++#if (defined(DREAMLTE) || defined(XCOVER5))
+ /*
+  * Copy of the console in TWRP's ramoops pmsg zone, in persistent_ram
+  * format (sig "DBGC", start, size, ring data), appended to the loader's
+@@ -814,7 +814,7 @@ fbcon_transmit_ready(void)
+ static void
+ fbcon_transmit_data(uint8_t c)
+ {
+-#if defined(DREAMLTE)
++#if (defined(DREAMLTE) || defined(XCOVER5))
+ 	klog_putc(c);
+ #endif
+ 	if (c == '\r') {
+@@ -896,7 +896,7 @@ fbcon_probe(void)
+ 	}
+ 	sweet_early_mark(17, "fbcon config read; mapping");
+ 	fbcon_base = (volatile uint32_t *)ml_io_map_wcomb(reg[0], reg[1]);
+-#if defined(DREAMLTE)
++#if (defined(DREAMLTE) || defined(XCOVER5))
+ 	klog_init();
+ #endif
+ 	sweet_early_mark(18, "fbcon mapping returned");
+diff --git a/pexpert/pexpert/arm64/A5XELTE.h b/pexpert/pexpert/arm64/A5XELTE.h
+index b6f812d..3551a7b 100644
+--- a/pexpert/pexpert/arm64/A5XELTE.h
++++ b/pexpert/pexpert/arm64/A5XELTE.h
+@@ -29,8 +29,33 @@
+  * Same Samsung S-Boot handoff, GIC-400, 26 MHz timer and Cortex-A53 boot
+  * cluster as the A5; the board facts that differ are below.
+  */
+-#define DREAMLTE                      1
+-#if defined(DREAMLTE)
++/*
++ * Samsung Galaxy XCover5 (SM-G525F/N, Exynos 850 "s5e3830") build. Same
++ * S-Boot handoff, GIC-400 and 26 MHz timer as the S8; Cortex-A55 cores
++ * (MT: MPIDR Aff1 = core), eMMC instead of UFS, video-mode panel.
++ * Values: stock DT of G525NKXSFEYL1 (boot.img dtb + dtbo).
++ */
++#define XCOVER5                       1
++#if defined(XCOVER5)
++#define A5_FB_PHYS                    0xfa000000  /* reserved-memory bootloader_fb */
++#define A5_FB_WIDTH                   720
++#define A5_FB_HEIGHT                  1480
++#define A5_FB_STRIDE                  2880        /* bytes per row */
++#define A5_FB_2M_BLOCKS               3           /* 720*1480*4 bytes */
++#define A5_ENTRY_MARKER_PHYS          0xb007f000  /* slot in the loader's RAM log A */
++#define A5_BOOT_MPIDR                 0x0         /* MPIDR[15:0] of the first A55 */
++#define A5_KEYS_DEFAULT               1           /* GPA0/GPA1 volume + XCover key */
++#define A5_TOUCH_DEFAULT              0           /* NT36525 is on SPI: no driver yet */
++#define A5_KLOG_PHYS                  0xb0080000  /* loader RAM log B (shim/xcover5) */
++#define A5_KLOG_SIZE                  0x80000
++#define A5_EMMC_PHYS                  0x12100000  /* dwmmc0 */
++#define A5_LOG_PARTITION              "CACHE"     /* eMMC log: first 4 MiB of CACHE */
++#define A5_SMP_TRAMPOLINE_PHYS        0xb0100000  /* low-bank page for PSCI CPU_ON */
++/* DT arch timer "use-physical-timer" (as on the S8): PPI 14 = INTID 30. */
++#define A5_USE_PHYS_TIMER             1
++#undef A5XELTE_VTIMER_INTID
++#define A5XELTE_VTIMER_INTID         30
++#elif defined(DREAMLTE)
+ #define A5_FB_PHYS                    0xcc000000  /* s3cfb.bootloaderfb */
+ #define A5_FB_WIDTH                   1440
+ #define A5_FB_HEIGHT                  2960
