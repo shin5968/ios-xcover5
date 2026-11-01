@@ -207,14 +207,45 @@ static uint32_t line_start(volatile struct prz *z, uint32_t back)
 	return 0;
 }
 
-static void view_page(volatile struct prz *z, uint32_t back)
+static void glyphs(int c0l, int r0w, const char *s)
 {
-	fill(0, TOP, FB_W, FB_H - TOP, 0xff000000U);
+	for (; *s && c0l < COLS; s++)
+		glyph(c0l++, r0w, *s);
+}
+
+static char *udec(char *p, uint32_t v)
+{
+	char t[10];
+	int n = 0;
+	do
+		t[n++] = (char)('0' + v % 10);
+	while ((v /= 10) && n < 10);
+	while (n)
+		*p++ = t[--n];
+	*p = 0;
+	return p;
+}
+
+static void view_page(volatile struct prz *z, uint32_t back, uint32_t lines)
+{
+	fill(0, 0, FB_W, FB_H, 0xff000000U);
+	/* Position: last line on screen / total lines (total = newest). */
+	char pos[48], *p = pos;
+	const char *k = "PREV BOOT LOG  line ";
+	while (*k)
+		*p++ = *k++;
+	p = udec(p, lines > back ? lines - back : 0);
+	*p++ = '/';
+	udec(p, lines);
+	fg = back ? 0xffff8040U : 0xff40ff40U;
+	glyphs(0, -2, pos);
 	uint32_t i = line_start(z, back + ROWS - 2);
 	int r = 0, c = 0;
 	fg = 0xffffffffU;
 	for (; i < z->size && r < ROWS - 1; i++) {
 		char ch = (char)prz_at(z, i);
+		if (ch == '\r')		/* XNU's console ends lines with \r\n */
+			continue;
 		if (ch == '\n' || c >= COLS) {
 			r++;
 			c = 0;
@@ -226,9 +257,8 @@ static void view_page(volatile struct prz *z, uint32_t back)
 		glyph(c++, r, ch);
 	}
 	fg = 0xffffff00U;
-	const char *help = "VOL+ older  VOL- newer  XCOVER: boot";
-	for (int j = 0; help[j] && j < COLS; j++)
-		glyph(j, ROWS - 1, help[j]);
+	glyphs(0, ROWS - 1, back ? "VOL+ older  VOL- newer  XCOVER: boot"
+				  : "NEWEST  VOL+ older  XCOVER: boot");
 }
 
 static void log_viewer(void)
@@ -247,7 +277,7 @@ static void log_viewer(void)
 	uint32_t back = 0, lines = 0;
 	for (uint32_t i = 0; i < z->size; i++)
 		lines += prz_at(z, i) == '\n';
-	view_page(z, back);
+	view_page(z, back, lines);
 	while (keys_down())	/* wait for the restart combination to be released */
 		delay_ms(20);
 	for (;;) {
@@ -262,7 +292,7 @@ static void log_viewer(void)
 			delay_ms(20);
 			continue;
 		}
-		view_page(z, back);
+		view_page(z, back, lines);
 		delay_ms(150);
 	}
 	while (keys_down())

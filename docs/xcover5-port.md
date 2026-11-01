@@ -29,6 +29,14 @@ Odin으로 BOOT에 플래시 → S-Boot가 gzip 로더를 실행, 화면 출력 
 
 결론: 로더 진입 조건과 화면 주소는 S8 경로와 호환. 다음은 커널(CI 빌드)과 RAM 로그 유지 확인.
 
+### iOS 부팅 1 (2026-11-01, CI run 41286409991 커널, `xc5-ios-boot.tar` + Odin으로 쓴 `xc5-ios-userdata.tar`)
+
+Odin이 HFS+ sparse userdata 이미지를 받아들임. XNU 진입, 화면 콘솔 동작(줄이 화면 끝에서
+위로 되감김). 사진에서 확인한 마지막 단계: `iBoot version: xcover5-entry`, ulock 초기화,
+SWEET PRNG, A5XELTE pthread/AMFI, vnguard, 플랫폼 익스퍼트, AppleKeyStore/IOWatchdog/
+IOCoreSurfaceRoot/HID(버튼·터치 서비스)/배터리(정적 100 %), `SWEET FB: AppleCLCD 720x1480
+stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 못함.
+
 ## S8 포트와 다른 점
 
 | 항목 | Galaxy S8 (dreamlte) | XCover5 (이 포트) |
