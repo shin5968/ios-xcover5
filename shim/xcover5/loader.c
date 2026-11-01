@@ -608,16 +608,26 @@ static void touch_probe(void)
 }
 
 /* ---- touch firmware download + touch test (ramdisk = nt36525_xcover5.bin) ----
- * Novatek's Phase 2 host download for a chip without hardware CRC (vendor
- * nt36xxx_fw_update.c, NT36525_memory_map / hw_info hw_crc 0): eng reset,
- * bootloader reset, write every partition to SRAM, boot ready, wait for
- * reset state >= 0xa0, compare the MCU's checksums with the file's. The
- * firmware is Samsung's (vendor/firmware): it is never committed. */
-#define NVT_EVENT_BUF		0x11a00
-#define NVT_BOOT_RDY		0x1f141
-#define NVT_POR_CD		0x1f61c
-#define NVT_R_ILM_CHECKSUM	0x1bf00
-#define NVT_ENG_RST		0x7fff80
+ * Novatek's Phase 2 host download with hardware CRC. The XCover5 chip's
+ * trim ID 1c ff ff 25 65 03 selects, in the stock Samsung kernel's trim
+ * table, NT36672A_memory_map (event buffer 0x21c00, BOOT_RDY 0x3f10d, BLD
+ * CRC bank at 0x3f1xx) with hw_crc 1 -- not the plain NT36525 map: downloads
+ * 1-3 used that one and the firmware never started. Sequence (vendor
+ * nt36xxx_fw_update.c nvt_download_firmware_hw_crc): bootloader reset,
+ * write every partition to SRAM, ILM/DLM address, length and golden CRC,
+ * BLD CRC enable, clear reset state + 0xae (fw CRC), BOOT_RDY, wait for
+ * reset state >= 0xa0. The firmware is Samsung's (vendor/firmware): it is
+ * never committed. */
+#define NVT_EVENT_BUF		0x21c00
+#define NVT_BOOT_RDY		0x3f10d
+#define NVT_ILM_LENGTH		0x3f118	/* 2 bytes with hw_crc 1 */
+#define NVT_DLM_LENGTH		0x3f130
+#define NVT_ILM_DES		0x3f128	/* 3 bytes */
+#define NVT_DLM_DES		0x3f12c
+#define NVT_G_ILM_CHECKSUM	0x3f100	/* 4 bytes */
+#define NVT_G_DLM_CHECKSUM	0x3f104
+#define NVT_R_ILM_CHECKSUM	0x3f120
+#define NVT_BLD_CRC_EN		0x3f30e
 #define NVT_SWRST_N8		0x3f0fe	/* dtbo novatek,swrst-n8-addr */
 #define NVT_SPI_RD_FAST		0x3f310	/* dtbo novatek,spi-rd-fast-addr */
 #define NVT_MAX_PART		24
@@ -653,15 +663,6 @@ static uint32_t le32(const volatile uint8_t *p)
 	return p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
-/* Vendor CheckSum(): sums len + 1 bytes, adds len, two's complement. */
-static uint32_t nvt_checksum(const volatile uint8_t *d, uint32_t len)
-{
-	uint32_t s = 0;
-	for (uint32_t i = 0; i < len + 1; i++)
-		s += d[i];
-	return ~(s + len) + 1;
-}
-
 static int is_nvt_fw(const volatile uint8_t *fw, uint64_t len)
 {
 	for (uint64_t i = len / 4096; i > 0; i--) {
@@ -671,6 +672,14 @@ static int is_nvt_fw(const volatile uint8_t *fw, uint64_t len)
 			return 1;
 	}
 	return 0;
+}
+
+static void put4(uint8_t *b, uint32_t v)
+{
+	b[0] = (uint8_t)v;
+	b[1] = (uint8_t)(v >> 8);
+	b[2] = (uint8_t)(v >> 16);
+	b[3] = (uint8_t)(v >> 24);
 }
 
 static int touch_download(const volatile uint8_t *fw, uint64_t len)
@@ -683,36 +692,32 @@ static int touch_download(const volatile uint8_t *fw, uint64_t len)
 	n = 2 + ovly + info;
 	if (n > NVT_MAX_PART)
 		return -1;
+	/* hw_crc: the CRCs come from the header (ILM/DLM at 0x18/0x1c). */
 	for (uint32_t i = 0; i < n; i++) {
 		uint32_t o;
 		if (i < 2) {
 			p[i].bin = le32(fw + i * 12);
 			p[i].sram = le32(fw + 4 + i * 12);
 			p[i].size = le32(fw + 8 + i * 12);
+			p[i].crc = le32(fw + 0x18 + i * 4);
 		} else {
 			o = i < 2 + info ? 0x30 + 0x10 * (i - 2) : p[1].bin + 0x10 * (i - 2 - info);
 			p[i].sram = le32(fw + o);
 			p[i].size = le32(fw + o + 4);
 			p[i].bin = le32(fw + o + 8);
+			p[i].crc = le32(fw + o + 12);
 		}
 		if (p[i].bin + p[i].size + 1 > len)
 			return -2;
-		p[i].crc = p[i].size ? nvt_checksum(fw + p[i].bin, p[i].size) : 0;
 	}
 	kv("partitions", n);
+	kv("ilm crc", p[0].crc);
+	kv("dlm crc", p[1].crc);
 	out("\n");
-	/* Download 1: every read after the resets returned 0xff. Re-read the
-	 * trim ID after each step to see where the chip stops answering. */
-	touch_read("t0 start", 0x1f64e, 6);
-	touch_write1(NVT_ENG_RST, 0x5a);
-	delay_ms(1);
-	touch_read("t1 eng rst", 0x1f64e, 6);
-	touch_write1(NVT_SWRST_N8, 0x69);
+	touch_write1(NVT_SWRST_N8, 0x69);		/* nvt_bootloader_reset() */
 	delay_ms(5);
-	touch_read("t2 bld rst", 0x1f64e, 6);
 	touch_write1(NVT_SPI_RD_FAST, 0x00);
-	touch_read("t3 rd_fast0", 0x1f64e, 6);
-	touch_write1(NVT_EVENT_BUF | 0x60, 0x00);	/* clear reset state */
+	touch_read("id after reset", 0x1f64e, 6);
 	uint64_t t0, t1;
 	__asm__ volatile("isb; mrs %0, cntpct_el0" : "=r"(t0));
 	for (uint32_t i = 0; i < n; i++)
@@ -721,45 +726,28 @@ static int touch_download(const volatile uint8_t *fw, uint64_t len)
 	__asm__ volatile("isb; mrs %0, cntpct_el0" : "=r"(t1));
 	kv("write ms", (t1 - t0) / (TIMER_HZ / 1000));
 	out("\n");
-	/* SRAM readback: ILM start must equal the file at its BIN offset. */
-	touch_read("ilm sram", p[0].sram, 6);
-	out("ilm file  :");
-	for (int i = 0; i < 6; i++) {
-		static const char d[] = "0123456789abcdef";
-		char b[4] = { ' ', d[fw[p[0].bin + i] >> 4], d[fw[p[0].bin + i] & 0xf], 0 };
-		out(b);
-	}
-	out("\n");
-	touch_read("t4 written", 0x1f64e, 6);
-	touch_write1(NVT_BOOT_RDY, 1);			/* nvt_boot_ready(), hw_crc 0 */
+	/* nvt_set_bld_hw_crc(): destination (3 bytes), length (2 bytes for
+	 * hw_crc 1), golden CRC (4 bytes), for ILM then DLM. */
+	uint8_t b[4];
+	put4(b, p[0].sram);
+	touch_writebuf(NVT_ILM_DES, b, 3);
+	put4(b, p[0].size);
+	touch_writebuf(NVT_ILM_LENGTH, b, 2);
+	put4(b, p[0].crc);
+	touch_writebuf(NVT_G_ILM_CHECKSUM, b, 4);
+	put4(b, p[1].sram);
+	touch_writebuf(NVT_DLM_DES, b, 3);
+	put4(b, p[1].size);
+	touch_writebuf(NVT_DLM_LENGTH, b, 2);
+	put4(b, p[1].crc);
+	touch_writebuf(NVT_G_DLM_CHECKSUM, b, 4);
+	uint8_t en;
+	touch_readbuf(NVT_BLD_CRC_EN, &en, 1);		/* nvt_bld_crc_enable() */
+	touch_write1(NVT_BLD_CRC_EN, en | 0x80);
+	touch_write1(NVT_EVENT_BUF | 0x60, 0x00);	/* nvt_fw_crc_enable() */
+	touch_write1(NVT_EVENT_BUF | 0x50, 0xae);
+	touch_write1(NVT_BOOT_RDY, 1);			/* nvt_boot_ready() */
 	delay_ms(5);
-	touch_read("t5 bootrdy1", 0x1f64e, 6);
-	touch_write1(NVT_BOOT_RDY, 0);
-	touch_write1(NVT_POR_CD, 0xa0);
-	/* Download 2: chip ID and SRAM were fine up to here, everything after
-	 * boot ready read 0xff. Watch the ID and the IRQ line as the firmware
-	 * starts, and try the framing without / with two dummy bytes. */
-	for (int r = 0; r < 6; r++) {
-		delay_ms(r ? 50 : 1);
-		kv("irq", rd32(ALIVE_PINCTRL + 0x004) & 1);
-		touch_read("id", 0x1f64e, 6);
-	}
-	{
-		uint8_t raw[8];
-		touch_page(0x1f64e);
-		touch_cs(0);
-		spi_xfer(0x4e);
-		for (int i = 0; i < 8; i++)
-			raw[i] = (uint8_t)spi_xfer(0);
-		touch_cs(1);
-		out("raw id    :");
-		for (int i = 0; i < 8; i++) {
-			static const char d[] = "0123456789abcdef";
-			char b[4] = { ' ', d[raw[i] >> 4], d[raw[i] & 0xf], 0 };
-			out(b);
-		}
-		out("\n");
-	}
 	uint8_t st[6];
 	int ok = 0;
 	for (int r = 0; r < 50 && !ok; r++) {
@@ -768,19 +756,12 @@ static int touch_download(const volatile uint8_t *fw, uint64_t len)
 		ok = st[0] >= 0xa0 && st[0] <= 0xaf;
 	}
 	kv("reset state", st[0]);
+	kv("irq", rd32(ALIVE_PINCTRL + 0x004) & 1);
 	out(ok ? "ok\n" : "TIMEOUT\n");
-	uint8_t c[NVT_MAX_PART * 4];
-	touch_readbuf(NVT_R_ILM_CHECKSUM, c, (int)(n * 4));
-	int bad = 0;
-	for (uint32_t i = 0; i < n; i++)
-		if (p[i].size && le32(c + i * 4) != p[i].crc) {
-			bad++;
-			kv("crc bad part", i);
-			kv("want", p[i].crc);
-			kv("got", le32(c + i * 4));
-			out("\n");
-		}
-	kv("checksum errors", (uint64_t)bad);
+	uint8_t c[8];
+	touch_readbuf(NVT_R_ILM_CHECKSUM, c, 8);
+	kv("ilm crc read", le32(c));
+	kv("dlm", le32(c + 4));
 	out("\n");
 	uint8_t info16[16];
 	touch_readbuf(NVT_EVENT_BUF | 0x78, info16, 16);
@@ -789,7 +770,7 @@ static int touch_download(const volatile uint8_t *fw, uint64_t len)
 	kv("x_max", (uint32_t)info16[2] << 8 | info16[3]);
 	kv("y_max", (uint32_t)info16[4] << 8 | info16[5]);
 	out("\n");
-	return ok && !bad ? 0 : -3;
+	return ok ? 0 : -3;
 }
 
 /* Poll the event buffer and draw where fingers are (panel 720x1480, the
