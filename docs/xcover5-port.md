@@ -51,7 +51,9 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   원인: A55는 PAN이 있는데 SCTLR_EL1.SPAN=0 → 예외 진입마다 PAN=1, 커널(0095)이 끄지 않음.
 - 부팅 7 (run 41299006129, SPAN=1): launchd 동작, 데몬 다수 exec(backboardd, notifyd,
   containermanagerd, bluetoothd, securityd, lockdownd, ...). heartbeat 126(약 10.5분)에
-  `emmc rd=2711512 wr=591381`. 콘솔 글자가 화면을 덮어 GUI 여부는 미확인.
+  `emmc rd=2711512 wr=591381`. 두 번째 영상(20261101_200425)에서 **iOS 사과 로고가 화면에
+  여러 번 그려짐**(heartbeat 81 부근 등): backboardd → AppleCLCD → 0xfa000000 경로로 iOS
+  그래픽 출력 확인. 콘솔 글자가 그 위를 다시 덮음 → 다음은 `a5fb_noconsole=1`.
 
 ## S8 포트와 다른 점
 
