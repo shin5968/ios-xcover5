@@ -49,7 +49,10 @@ def child(node, name):
 def cpu_node(logical):
     return [
         ('device_type', mkadt.cstr('cpu')),
-        ('compatible', mkadt.cstr('arm,cortex-a55') + mkadt.cstr('ARM,v8')),
+        # SweetCPU's personality IONameMatches 'arm,cortex-a53' only; without it
+        # no CPU registers and XNU waits forever after AppleCLCD (boot 2).
+        ('compatible', mkadt.cstr('arm,cortex-a55') + mkadt.cstr('arm,cortex-a53') +
+         mkadt.cstr('ARM,v8')),
         ('reg', mkadt.u32(logical << 8)),
         ('cpu-id', mkadt.u32(logical)),
         ('cluster-id', mkadt.u32(0)),
