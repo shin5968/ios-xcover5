@@ -110,6 +110,79 @@ edit('iokit/Kernel/arm/SweetCPU.cpp', [
      '#elif defined(DREAMLTE)\n\t{\n\t\t/*\n\t\t * The entry is in the high RAM bank', 1),
 ])
 
+# Boot 2 diagnostics: the screen stopped after AppleCLCD, before the keys
+# line IOFindBSDRoot prints after its 30 s IOBSD wait (timer suspect), and
+# the RAM log ended earlier than the screen. Heartbeat: CNTP state and the
+# GIC once (busy delay), then a line every 5 s through IOSleep (needs the
+# timer interrupt), with the kernel's own RAM-log byte count.
+edit('pexpert/arm/pe_serial.c', [
+    ('\tklog_hdr[1] = klog_start;\n\tklog_hdr[2] = klog_size;\n}\n#endif\n',
+     '\tklog_hdr[1] = klog_start;\n\tklog_hdr[2] = klog_size;\n}\n'
+     '#if defined(XCOVER5)\n'
+     'uint32_t xcover5_klog_size(void);\n'
+     'uint32_t\n'
+     'xcover5_klog_size(void)\n'
+     '{\n'
+     '\treturn klog_hdr ? klog_hdr[2] : 0xffffffffu;\n'
+     '}\n'
+     '#endif\n'
+     '#endif\n', 1),
+])
+
+edit('iokit/Kernel/arm/SweetPlatformExpert.cpp', [
+    ('OSDefineMetaClassAndStructors(SweetPlatformExpert, IODTPlatformExpert);\n',
+     'OSDefineMetaClassAndStructors(SweetPlatformExpert, IODTPlatformExpert);\n'
+     '\n'
+     '#if defined(XCOVER5)\n'
+     '#include <mach/mach_types.h>\n'
+     '#include <kern/kern_types.h>\n'
+     '#include <kern/clock.h>\n'
+     'extern "C" {\n'
+     'uint32_t xcover5_klog_size(void);\n'
+     'void a5xelte_gic_diagnostics(unsigned int logical, const char *stage);\n'
+     'kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);\n'
+     'void thread_deallocate(thread_t);\n'
+     '}\n'
+     '\n'
+     'static void\n'
+     'xcover5_timer_state(const char *when)\n'
+     '{\n'
+     '\tuint64_t ctl = __builtin_arm_rsr64("CNTP_CTL_EL0");\n'
+     '\tuint64_t cval = __builtin_arm_rsr64("CNTP_CVAL_EL0");\n'
+     '\tuint64_t now = __builtin_arm_rsr64("CNTPCT_EL0");\n'
+     '\tIOLog("XC5 TIMER %s: cntp_ctl=%llx cval=%llx now=%llx daif=%llx\\n", when,\n'
+     '\t    ctl, cval, now, (uint64_t)__builtin_arm_rsr64("DAIF"));\n'
+     '\ta5xelte_gic_diagnostics(0, when);\n'
+     '}\n'
+     '\n'
+     'static void\n'
+     'xcover5_heartbeat(__unused void *arg, __unused wait_result_t wr)\n'
+     '{\n'
+     '\tIOLog("XC5 heartbeat thread up, klog=%u\\n", xcover5_klog_size());\n'
+     '\txcover5_timer_state("before");\n'
+     '\tIODelay(200000);\n'
+     '\txcover5_timer_state("after 200ms busy");\n'
+     '\tfor (unsigned n = 1;; n++) {\n'
+     '\t\tIOSleep(5000);\n'
+     '\t\tIOLog("XC5 heartbeat %u t=%llu klog=%u\\n", n, mach_absolute_time(),\n'
+     '\t\t    xcover5_klog_size());\n'
+     '\t}\n'
+     '}\n'
+     '#endif\n', 1),
+    ('\tIOLog("A5XELTE: platform expert registered\\n");\n',
+     '\tIOLog("A5XELTE: platform expert registered\\n");\n'
+     '#if defined(XCOVER5)\n'
+     '\t{\n'
+     '\t\tint hb = 1;\n'
+     '\t\tthread_t t;\n'
+     '\t\t(void)PE_parse_boot_argn("xc5hb", &hb, sizeof(hb));\n'
+     '\t\tif (hb && kernel_thread_start(xcover5_heartbeat, NULL, &t) == KERN_SUCCESS) {\n'
+     '\t\t\tthread_deallocate(t);\n'
+     '\t\t}\n'
+     '\t}\n'
+     '#endif\n', 1),
+])
+
 # Keys: Linux gpio-keys of the XCover5 dtbo. Power is on the S2MPU12 PMIC
 # (not a GPIO): the XCover (push-to-talk) key acts as Power/lock instead.
 edit('bsd/dev/a5xelte_keys.c', [

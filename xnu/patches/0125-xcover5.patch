@@ -193,6 +193,71 @@ index 5bd24a7..84f5069 100644
  	{
  		/*
  		 * The entry is in the high RAM bank (0x88xxxxxxx); the loader probe
+diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+index 193845f..368ab8a 100644
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -22,6 +22,43 @@ public:
+ 
+ OSDefineMetaClassAndStructors(SweetPlatformExpert, IODTPlatformExpert);
+ 
++#if defined(XCOVER5)
++#include <mach/mach_types.h>
++#include <kern/kern_types.h>
++#include <kern/clock.h>
++extern "C" {
++uint32_t xcover5_klog_size(void);
++void a5xelte_gic_diagnostics(unsigned int logical, const char *stage);
++kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
++void thread_deallocate(thread_t);
++}
++
++static void
++xcover5_timer_state(const char *when)
++{
++	uint64_t ctl = __builtin_arm_rsr64("CNTP_CTL_EL0");
++	uint64_t cval = __builtin_arm_rsr64("CNTP_CVAL_EL0");
++	uint64_t now = __builtin_arm_rsr64("CNTPCT_EL0");
++	IOLog("XC5 TIMER %s: cntp_ctl=%llx cval=%llx now=%llx daif=%llx\n", when,
++	    ctl, cval, now, (uint64_t)__builtin_arm_rsr64("DAIF"));
++	a5xelte_gic_diagnostics(0, when);
++}
++
++static void
++xcover5_heartbeat(__unused void *arg, __unused wait_result_t wr)
++{
++	IOLog("XC5 heartbeat thread up, klog=%u\n", xcover5_klog_size());
++	xcover5_timer_state("before");
++	IODelay(200000);
++	xcover5_timer_state("after 200ms busy");
++	for (unsigned n = 1;; n++) {
++		IOSleep(5000);
++		IOLog("XC5 heartbeat %u t=%llu klog=%u\n", n, mach_absolute_time(),
++		    xcover5_klog_size());
++	}
++}
++#endif
++
+ bool
+ SweetPlatformExpert::start(IOService *provider)
+ {
+@@ -36,6 +73,16 @@ SweetPlatformExpert::start(IOService *provider)
+ 	registerService();
+ #if defined(A5XELTE)
+ 	IOLog("A5XELTE: platform expert registered\n");
++#if defined(XCOVER5)
++	{
++		int hb = 1;
++		thread_t t;
++		(void)PE_parse_boot_argn("xc5hb", &hb, sizeof(hb));
++		if (hb && kernel_thread_start(xcover5_heartbeat, NULL, &t) == KERN_SUCCESS) {
++			thread_deallocate(t);
++		}
++	}
++#endif
+ #else
+ 	IOLog("SWEET: platform expert registered\n");
+ #endif
 diff --git a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
 index 57e6096..cc8fe3e 100644
 --- a/osfmk/arm64/arm_vm_init.c
@@ -225,7 +290,7 @@ index 57e6096..cc8fe3e 100644
  #endif
  	va_l1_end = (va_l1_end + 0x00000000007FFFFFULL) & 0xFFFFFFFFFF800000ULL;
 diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
-index 1966bdd..39d3998 100644
+index 1966bdd..f6d8ab7 100644
 --- a/pexpert/arm/pe_serial.c
 +++ b/pexpert/arm/pe_serial.c
 @@ -721,7 +721,7 @@ static volatile uint32_t *fbcon_base;
@@ -237,7 +302,22 @@ index 1966bdd..39d3998 100644
  /*
   * Copy of the console in TWRP's ramoops pmsg zone, in persistent_ram
   * format (sig "DBGC", start, size, ring data), appended to the loader's
-@@ -814,7 +814,7 @@ fbcon_transmit_ready(void)
+@@ -772,6 +772,14 @@ klog_putc(uint8_t c)
+ 	klog_hdr[1] = klog_start;
+ 	klog_hdr[2] = klog_size;
+ }
++#if defined(XCOVER5)
++uint32_t xcover5_klog_size(void);
++uint32_t
++xcover5_klog_size(void)
++{
++	return klog_hdr ? klog_hdr[2] : 0xffffffffu;
++}
++#endif
+ #endif
+ 
+ static void
+@@ -814,7 +822,7 @@ fbcon_transmit_ready(void)
  static void
  fbcon_transmit_data(uint8_t c)
  {
@@ -246,7 +326,7 @@ index 1966bdd..39d3998 100644
  	klog_putc(c);
  #endif
  	if (c == '\r') {
-@@ -896,7 +896,7 @@ fbcon_probe(void)
+@@ -896,7 +904,7 @@ fbcon_probe(void)
  	}
  	sweet_early_mark(17, "fbcon config read; mapping");
  	fbcon_base = (volatile uint32_t *)ml_io_map_wcomb(reg[0], reg[1]);
