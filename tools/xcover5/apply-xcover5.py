@@ -85,6 +85,30 @@ edit('osfmk/arm64/arm_vm_init.c', [
     ('#if defined(DREAMLTE) && !XNU_MONITOR\n', f'#if {S8_OR_XC5} && !XNU_MONITOR\n', 1),
 ])
 
+# cpus=4 boot: "machine_routines.c:1058 Assertion failed: phys_cluster_id <=
+# MAX_CPU_CLUSTER_PHY_ID". The A55's MPIDR has the core in Aff1 (MT bit), so
+# the A5 rule "cluster = Aff1" made cores 1-3 clusters 1-3. On XCOVER5 the
+# four listed cores are one cluster, indexed by Aff1.
+edit('osfmk/arm64/machine_routines.c', [
+    ('#if HAS_CLUSTER || defined(A5XELTE)\n\t\tuint32_t phys_cluster_id = MPIDR_CLUSTER_ID(cpu->phys_id);\n',
+     '#if defined(XCOVER5)\n'
+     '\t\tuint32_t phys_cluster_id = 0;     /* Aff1 is the core on the A55 */\n'
+     '#elif HAS_CLUSTER || defined(A5XELTE)\n'
+     '\t\tuint32_t phys_cluster_id = MPIDR_CLUSTER_ID(cpu->phys_id);\n', 1),
+    ('\t\tif (MPIDR_CPU_ID(cpu->phys_id) > cluster_max_cpu_phys_id[phys_cluster_id]) {\n'
+     '\t\t\tcluster_max_cpu_phys_id[phys_cluster_id] = MPIDR_CPU_ID(cpu->phys_id);\n'
+     '\t\t}\n',
+     '#if defined(XCOVER5)\n'
+     '\t\tif ((int64_t)MPIDR_CLUSTER_ID(cpu->phys_id) > cluster_max_cpu_phys_id[0]) {\n'
+     '\t\t\tcluster_max_cpu_phys_id[0] = MPIDR_CLUSTER_ID(cpu->phys_id);\n'
+     '\t\t}\n'
+     '#else\n'
+     '\t\tif (MPIDR_CPU_ID(cpu->phys_id) > cluster_max_cpu_phys_id[phys_cluster_id]) {\n'
+     '\t\t\tcluster_max_cpu_phys_id[phys_cluster_id] = MPIDR_CPU_ID(cpu->phys_id);\n'
+     '\t\t}\n'
+     '#endif\n', 1),
+])
+
 # Kernel console copy in the loader's RAM log zone (S8: TWRP's pmsg zone).
 edit('pexpert/arm/pe_serial.c', [
     ('#if defined(DREAMLTE)\n', f'#if {S8_OR_XC5}\n', 3),

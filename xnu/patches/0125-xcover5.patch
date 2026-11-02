@@ -920,6 +920,38 @@ index 57e6096..cc8fe3e 100644
  	va_l1_end += round_page((vm_size_t)A5_FB_STRIDE * A5_FB_HEIGHT) + (64ULL << 20);
  #endif
  	va_l1_end = (va_l1_end + 0x00000000007FFFFFULL) & 0xFFFFFFFFFF800000ULL;
+diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
+index 6d56a33..84b7c93 100644
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -1050,7 +1050,9 @@ ml_parse_cpu_topology(void)
+ 		 * on the value provided by EDT. Instead, use the MPIDR value to see if we have
+ 		 * seen this exact cluster before. If so, then reuse that cluster ID for this CPU.
+ 		 */
+-#if HAS_CLUSTER || defined(A5XELTE)
++#if defined(XCOVER5)
++		uint32_t phys_cluster_id = 0;     /* Aff1 is the core on the A55 */
++#elif HAS_CLUSTER || defined(A5XELTE)
+ 		uint32_t phys_cluster_id = MPIDR_CLUSTER_ID(cpu->phys_id);
+ #else
+ 		uint32_t phys_cluster_id = (cpu->cluster_type == CLUSTER_TYPE_P);
+@@ -1085,10 +1087,16 @@ ml_parse_cpu_topology(void)
+ 		}
+ 
+ #if HAS_CLUSTER || defined(A5XELTE)
++#if defined(XCOVER5)
++		if ((int64_t)MPIDR_CLUSTER_ID(cpu->phys_id) > cluster_max_cpu_phys_id[0]) {
++			cluster_max_cpu_phys_id[0] = MPIDR_CLUSTER_ID(cpu->phys_id);
++		}
++#else
+ 		if (MPIDR_CPU_ID(cpu->phys_id) > cluster_max_cpu_phys_id[phys_cluster_id]) {
+ 			cluster_max_cpu_phys_id[phys_cluster_id] = MPIDR_CPU_ID(cpu->phys_id);
+ 		}
+ #endif
++#endif
+ 
+ #if defined(SWEET)
+ 		/* Use the ADT values for both donor and A5XELTE cluster metadata. */
 diff --git a/osfmk/arm64/proc_reg.h b/osfmk/arm64/proc_reg.h
 index e01c124..6896d02 100644
 --- a/osfmk/arm64/proc_reg.h
