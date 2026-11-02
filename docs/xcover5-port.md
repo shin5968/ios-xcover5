@@ -76,6 +76,9 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   (`reset state=0xa1`, ILM CRC 일치, fw_ver 0x0e) → `xc5touch=1` → 커널이 10 ms 폴링, 5회 연속 미검출 시 뗌.
 - 부팅 16 (CI run 41356829634): **잠금화면을 밀어 iOS 홈 화면 진입**(Photos, App Store, Settings, 독). 약 2분 부팅.
 - CI: macos-14 러너 폐기(2026-11-02) → macos-15(Xcode 16, 패치 0083의 IORPC.kernelContent).
+- 부팅 17–21 (2026-11-02): cpus=4 토폴로지 패닉(A55 MPIDR Aff1=코어) → 클러스터 0 하나로 수정, 4/4 CPU 기동 확인.
+  잠금화면이 안 열린 원인 두 가지: SpringBoard가 AKS 8번을 무한 반복(미지원 → 성공으로 응답), 터치 이벤트 버퍼를
+  1바이트 밀려 파싱(벤더 point[1+6i] = 우리 pt[6i]). 수정 커널(CI run 41433557070)로 **밀어서 잠금 해제 성공**.
 
 ## S8 포트와 다른 점
 
