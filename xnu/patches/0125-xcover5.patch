@@ -903,10 +903,10 @@ index d11fe26..02f3e35 100644
  	    arg0, in_scalars, in_struct, out_scalars, out_struct, ret);
  	return ret;
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-index 193845f..f3505f6 100644
+index 193845f..e7b3ff6 100644
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -22,6 +22,45 @@ public:
+@@ -22,6 +22,49 @@ public:
  
  OSDefineMetaClassAndStructors(SweetPlatformExpert, IODTPlatformExpert);
  
@@ -917,6 +917,8 @@ index 193845f..f3505f6 100644
 +extern "C" {
 +uint32_t xcover5_klog_size(void);
 +extern uint64_t xcover5_emmc_reads, xcover5_emmc_writes;
++extern uint64_t xcover5_fb_swaps, xcover5_fb_presents, xcover5_fb_vsyncs;
++extern int xcover5_fb_off;
 +void a5xelte_gic_diagnostics(unsigned int logical, const char *stage);
 +kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
 +void thread_deallocate(thread_t);
@@ -942,9 +944,11 @@ index 193845f..f3505f6 100644
 +	xcover5_timer_state("after 200ms busy");
 +	for (unsigned n = 1;; n++) {
 +		IOSleep(5000);
-+		IOLog("XC5 heartbeat %u t=%llu klog=%u emmc rd=%llu wr=%llu\n", n,
++		IOLog("XC5 heartbeat %u t=%llu klog=%u emmc rd=%llu wr=%llu "
++		    "fb swap=%llu present=%llu vsync=%llu off=%d\n", n,
 +		    mach_absolute_time(), xcover5_klog_size(), xcover5_emmc_reads,
-+		    xcover5_emmc_writes);
++		    xcover5_emmc_writes, xcover5_fb_swaps, xcover5_fb_presents,
++		    xcover5_fb_vsyncs, xcover5_fb_off);
 +	}
 +}
 +#endif
@@ -952,7 +956,7 @@ index 193845f..f3505f6 100644
  bool
  SweetPlatformExpert::start(IOService *provider)
  {
-@@ -36,6 +75,16 @@ SweetPlatformExpert::start(IOService *provider)
+@@ -36,6 +79,16 @@ SweetPlatformExpert::start(IOService *provider)
  	registerService();
  #if defined(A5XELTE)
  	IOLog("A5XELTE: platform expert registered\n");
