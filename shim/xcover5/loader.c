@@ -784,7 +784,7 @@ static void touch_test(void)
 		uint8_t pt[66];
 		touch_readbuf(NVT_EVENT_BUF, pt, 65);
 		for (int i = 0; i < 10; i++) {
-			uint8_t *q = &pt[1 + 6 * i];
+			uint8_t *q = &pt[6 * i];	/* vendor point[1 + 6i] */
 			int id = q[0] >> 3, s = q[0] & 7;
 			if (!id || id > 10 || (s != 1 && s != 2))
 				continue;

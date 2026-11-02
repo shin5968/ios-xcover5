@@ -431,10 +431,10 @@ index dcbd143..61de944 100644
  					int down = !(sample & bit);
  					printf("A5XELTE KEYS: key=%u down=%d gpio=%#x\n",
 diff --git a/bsd/dev/a5xelte_touch.c b/bsd/dev/a5xelte_touch.c
-index ba647a8..c93a56c 100644
+index ba647a8..0a64d35 100644
 --- a/bsd/dev/a5xelte_touch.c
 +++ b/bsd/dev/a5xelte_touch.c
-@@ -920,11 +920,213 @@ dreamlte_touch_start(void)
+@@ -920,11 +920,215 @@ dreamlte_touch_start(void)
  }
  #endif /* DREAMLTE */
  
@@ -555,11 +555,13 @@ index ba647a8..c93a56c 100644
 +			}
 +			continue;
 +		}
-+		if (pt[1] == 0xfd || pt[1] == 0xfe || pt[1] == 0x77) {
++		/* Vendor buffers keep the address byte at [0]: their point[1 + 6i]
++		 * is our pt[6i] (boot 20: one byte off, every contact 1 poll). */
++		if (pt[0] == 0xfd || pt[0] == 0xfe || pt[0] == 0x77) {
 +			continue;       /* watchdog / ESD marker: no data */
 +		}
 +		for (int i = 0; i < XC5_FINGERS; i++) {
-+			const uint8_t *q = &pt[1 + 6 * i];
++			const uint8_t *q = &pt[6 * i];
 +			unsigned id = q[0] >> 3, st = q[0] & 7u;
 +			if (id == 0 || id > XC5_FINGERS || (st != 1 && st != 2)) {
 +				continue;
