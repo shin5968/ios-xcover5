@@ -347,6 +347,36 @@ edit('iokit/Kernel/arm/SweetFramebuffer.cpp', [
      '#endif\n', 1),
 ])
 
+# Boot 18/19: the lock screen stays up; SpringBoard loops forever on AKS
+# 26 (assert hold) -> 27 (assert drop) -> 8 -> kIOReturnUnsupported, and the
+# loop floods the console (thousands of lines, hiding everything else).
+# Selector 8 (between get_lock_state 7 and unlock_device 9; 1 scalar in,
+# nothing out) is answered like the other lock/unlock calls: success. Each
+# selector is logged 20 times per process name, then only every 1000th call.
+edit('iokit/Kernel/arm/SweetKeyStore.cpp', [
+    ('\tkAKSGetLockState     = 7,\n',
+     '\tkAKSGetLockState     = 7,\n'
+     '\tkAKSSel8             = 8,       /* SpringBoard, 1 in, 0 out (XCover5 boot 18) */\n', 1),
+    ('\tcase kAKSUnlockDevice:\n',
+     '\tcase kAKSUnlockDevice:\n'
+     '#if defined(XCOVER5)\n'
+     '\tcase kAKSSel8:\n'
+     '#endif\n', 1),
+    ('\tchar name[32];\n\tproc_selfname(name, sizeof(name));\n'
+     '\tIOLog("SWEET AKS: %s sel %u arg0 %llu in %u/%u out %u/%u -> 0x%x\\n", name, selector,\n',
+     '\tchar name[32];\n\tproc_selfname(name, sizeof(name));\n'
+     '#if defined(XCOVER5)\n'
+     '\t{\n'
+     '\t\tstatic uint32_t calls[128];\n'
+     '\t\tuint32_t n = selector < 128 ? ++calls[selector] : 0;\n'
+     '\t\tif (n > 20 && n % 1000 != 0) {\n'
+     '\t\t\treturn ret;\n'
+     '\t\t}\n'
+     '\t}\n'
+     '#endif\n'
+     '\tIOLog("SWEET AKS: %s sel %u arg0 %llu in %u/%u out %u/%u -> 0x%x\\n", name, selector,\n', 1),
+])
+
 # Keys: Linux gpio-keys of the XCover5 dtbo. Power is on the S2MPU12 PMIC
 # (not a GPIO): the XCover (push-to-talk) key acts as Power/lock instead.
 edit('bsd/dev/a5xelte_keys.c', [

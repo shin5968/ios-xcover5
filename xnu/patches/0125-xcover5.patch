@@ -822,6 +822,44 @@ index ec6b9da..adc7ee8 100644
  		if (w <= 0 || h <= 0) {
  			w = (int32_t)s->width;
  			h = (int32_t)s->height;
+diff --git a/iokit/Kernel/arm/SweetKeyStore.cpp b/iokit/Kernel/arm/SweetKeyStore.cpp
+index d11fe26..02f3e35 100644
+--- a/iokit/Kernel/arm/SweetKeyStore.cpp
++++ b/iokit/Kernel/arm/SweetKeyStore.cpp
+@@ -34,6 +34,7 @@ enum {
+ 	kAKSSetSystem        = 5,
+ 	kAKSLoadBag          = 6,
+ 	kAKSGetLockState     = 7,
++	kAKSSel8             = 8,       /* SpringBoard, 1 in, 0 out (XCover5 boot 18) */
+ 	kAKSUnlockDevice     = 9,
+ 	kAKSWrapKey          = 10,
+ 	kAKSUnwrapKey        = 11,
+@@ -188,6 +189,9 @@ AppleKeyStoreUserClient::externalMethod(uint32_t selector, IOExternalMethodArgum
+ 	case kAKSUnloadBag:
+ 	case kAKSSetSystem:
+ 	case kAKSUnlockDevice:
++#if defined(XCOVER5)
++	case kAKSSel8:
++#endif
+ 	case kAKSUnlockBag:
+ 	case kAKSLockBag:
+ 	case kAKSAssertHold:
+@@ -234,6 +238,15 @@ AppleKeyStoreUserClient::externalMethod(uint32_t selector, IOExternalMethodArgum
+ 
+ 	char name[32];
+ 	proc_selfname(name, sizeof(name));
++#if defined(XCOVER5)
++	{
++		static uint32_t calls[128];
++		uint32_t n = selector < 128 ? ++calls[selector] : 0;
++		if (n > 20 && n % 1000 != 0) {
++			return ret;
++		}
++	}
++#endif
+ 	IOLog("SWEET AKS: %s sel %u arg0 %llu in %u/%u out %u/%u -> 0x%x\n", name, selector,
+ 	    arg0, in_scalars, in_struct, out_scalars, out_struct, ret);
+ 	return ret;
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
 index 193845f..f3505f6 100644
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
