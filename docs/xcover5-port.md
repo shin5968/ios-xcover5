@@ -68,6 +68,15 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   붉은 `rdar:45025538` 배너 사라지고 상태 막대(충전 중 배터리 아이콘) 표시. 앞서 gui가 "멈춘" 것은 새 루트의 첫 부팅
   (약 25분)이었음. 남은 것: 화면 위쪽/오른쪽에 콘솔 글자 잔상, 시계 글자 색이 붉게 보임(확인 필요).
 
+### 터치와 홈 화면 (2026-11-02)
+
+- 터치: Novatek NT36525(TDDI), SPI1 = USI_CMGP0 `0x11d00000`, CS gpm3-0, IRQ gpa0-0. 컨트롤러 nCS를 켜야 전송됨.
+  칩 ID `1c ff ff 25 65 03` → 삼성 커널 트림 표에서 **NT36672A 메모리 맵 + hw CRC**(이벤트 버퍼 `0x21c00`,
+  BOOT_RDY `0x3f10d`). 펌웨어 `vendor/firmware/nt36525_xcover5.bin`(git에 넣지 않음)을 로더가 매 부팅 다운로드
+  (`reset state=0xa1`, ILM CRC 일치, fw_ver 0x0e) → `xc5touch=1` → 커널이 10 ms 폴링, 5회 연속 미검출 시 뗌.
+- 부팅 16 (CI run 41356829634): **잠금화면을 밀어 iOS 홈 화면 진입**(Photos, App Store, Settings, 독). 약 2분 부팅.
+- CI: macos-14 러너 폐기(2026-11-02) → macos-15(Xcode 16, 패치 0083의 IORPC.kernelContent).
+
 ## S8 포트와 다른 점
 
 | 항목 | Galaxy S8 (dreamlte) | XCover5 (이 포트) |
