@@ -1099,7 +1099,7 @@ index f2489bd..7d90710 100644
  	}
  #endif
 diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
-index 1966bdd..2101f01 100644
+index 1966bdd..d55120d 100644
 --- a/pexpert/arm/pe_serial.c
 +++ b/pexpert/arm/pe_serial.c
 @@ -721,7 +721,7 @@ static volatile uint32_t *fbcon_base;
@@ -1111,7 +1111,7 @@ index 1966bdd..2101f01 100644
  /*
   * Copy of the console in TWRP's ramoops pmsg zone, in persistent_ram
   * format (sig "DBGC", start, size, ring data), appended to the loader's
-@@ -772,6 +772,27 @@ klog_putc(uint8_t c)
+@@ -772,12 +772,40 @@ klog_putc(uint8_t c)
  	klog_hdr[1] = klog_start;
  	klog_hdr[2] = klog_size;
  }
@@ -1136,10 +1136,41 @@ index 1966bdd..2101f01 100644
 +	}
 +}
 +#endif
++#endif
++
++#if defined(XCOVER5)
++static uint32_t fbcon_y0;      /* first pixel row of the console area */
++#else
++#define fbcon_y0 0u
  #endif
  
  static void
-@@ -814,7 +835,7 @@ fbcon_transmit_ready(void)
+ fbcon_clear_row(uint32_t row)
+ {
+-	for (uint32_t y = row * 16 * FBCON_SCALE; y < (row + 1) * 16 * FBCON_SCALE; y++) {
++	for (uint32_t y = fbcon_y0 + row * 16 * FBCON_SCALE;
++	    y < fbcon_y0 + (row + 1) * 16 * FBCON_SCALE; y++) {
+ 		volatile uint32_t *line = fbcon_base + y * (fbcon_stride / 4);
+ 		for (uint32_t x = 0; x < fbcon_width; x++) {
+ 			line[x] = FBCON_BG;
+@@ -799,6 +827,16 @@ fbcon_init(void)
+ {
+ 	fbcon_cols = fbcon_width / (8 * FBCON_SCALE);
+ 	fbcon_rows = fbcon_height / (16 * FBCON_SCALE);
++#if defined(XCOVER5)
++	{
++		uint32_t rows = 0;
++		if (PE_parse_boot_argn("xc5conrows", &rows, sizeof(rows)) &&
++		    rows > 2 && rows < fbcon_rows) {
++			fbcon_y0 = (fbcon_rows - rows) * 16 * FBCON_SCALE;
++			fbcon_rows = rows;
++		}
++	}
++#endif
+ 	fbcon_col = fbcon_row = 0;
+ 	for (uint32_t r = 0; r < fbcon_rows; r++) {
+ 		fbcon_clear_row(r);
+@@ -814,7 +852,7 @@ fbcon_transmit_ready(void)
  static void
  fbcon_transmit_data(uint8_t c)
  {
@@ -1148,7 +1179,16 @@ index 1966bdd..2101f01 100644
  	klog_putc(c);
  #endif
  	if (c == '\r') {
-@@ -896,7 +917,7 @@ fbcon_probe(void)
+@@ -829,7 +867,7 @@ fbcon_transmit_data(uint8_t c)
+ 		fbcon_newline();
+ 	}
+ 	const unsigned char *glyph = iso_font + c * 16;
+-	uint32_t x0 = fbcon_col * 8 * FBCON_SCALE, y0 = fbcon_row * 16 * FBCON_SCALE;
++	uint32_t x0 = fbcon_col * 8 * FBCON_SCALE, y0 = fbcon_y0 + fbcon_row * 16 * FBCON_SCALE;
+ 	for (uint32_t gy = 0; gy < 16; gy++) {
+ 		for (uint32_t sy = 0; sy < FBCON_SCALE; sy++) {
+ 			volatile uint32_t *line = fbcon_base + (y0 + gy * FBCON_SCALE + sy) * (fbcon_stride / 4) + x0;
+@@ -896,7 +934,7 @@ fbcon_probe(void)
  	}
  	sweet_early_mark(17, "fbcon config read; mapping");
  	fbcon_base = (volatile uint32_t *)ml_io_map_wcomb(reg[0], reg[1]);

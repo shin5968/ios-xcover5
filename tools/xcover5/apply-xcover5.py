@@ -109,6 +109,38 @@ edit('osfmk/arm64/machine_routines.c', [
      '#endif\n', 1),
 ])
 
+# cpus=4 diagnostics need the console on screen (the RAM log does not
+# survive the restart there), but it covered the lock screen. Boot-arg
+# xc5conrows=N keeps the console in the bottom N text rows only.
+edit('pexpert/arm/pe_serial.c', [
+    ('static void\nfbcon_clear_row(uint32_t row)\n{\n'
+     '\tfor (uint32_t y = row * 16 * FBCON_SCALE; y < (row + 1) * 16 * FBCON_SCALE; y++) {\n',
+     '#if defined(XCOVER5)\n'
+     'static uint32_t fbcon_y0;      /* first pixel row of the console area */\n'
+     '#else\n'
+     '#define fbcon_y0 0u\n'
+     '#endif\n'
+     '\n'
+     'static void\nfbcon_clear_row(uint32_t row)\n{\n'
+     '\tfor (uint32_t y = fbcon_y0 + row * 16 * FBCON_SCALE;\n'
+     '\t    y < fbcon_y0 + (row + 1) * 16 * FBCON_SCALE; y++) {\n', 1),
+    ('\tfbcon_rows = fbcon_height / (16 * FBCON_SCALE);\n\tfbcon_col = fbcon_row = 0;\n',
+     '\tfbcon_rows = fbcon_height / (16 * FBCON_SCALE);\n'
+     '#if defined(XCOVER5)\n'
+     '\t{\n'
+     '\t\tuint32_t rows = 0;\n'
+     '\t\tif (PE_parse_boot_argn("xc5conrows", &rows, sizeof(rows)) &&\n'
+     '\t\t    rows > 2 && rows < fbcon_rows) {\n'
+     '\t\t\tfbcon_y0 = (fbcon_rows - rows) * 16 * FBCON_SCALE;\n'
+     '\t\t\tfbcon_rows = rows;\n'
+     '\t\t}\n'
+     '\t}\n'
+     '#endif\n'
+     '\tfbcon_col = fbcon_row = 0;\n', 1),
+    ('\tuint32_t x0 = fbcon_col * 8 * FBCON_SCALE, y0 = fbcon_row * 16 * FBCON_SCALE;\n',
+     '\tuint32_t x0 = fbcon_col * 8 * FBCON_SCALE, y0 = fbcon_y0 + fbcon_row * 16 * FBCON_SCALE;\n', 1),
+])
+
 # Kernel console copy in the loader's RAM log zone (S8: TWRP's pmsg zone).
 edit('pexpert/arm/pe_serial.c', [
     ('#if defined(DREAMLTE)\n', f'#if {S8_OR_XC5}\n', 3),
