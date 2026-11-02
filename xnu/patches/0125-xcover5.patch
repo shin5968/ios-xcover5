@@ -718,7 +718,7 @@ index 5bd24a7..84f5069 100644
  		/*
  		 * The entry is in the high RAM bank (0x88xxxxxxx); the loader probe
 diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
-index ec6b9da..adc7ee8 100644
+index ec6b9da..a6f4936 100644
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
 @@ -188,7 +188,7 @@ AppleCLCD::start(IOService *provider)
@@ -730,7 +730,39 @@ index ec6b9da..adc7ee8 100644
  	if (!native) {
  		fLogicalW = SWEET_FB_LOGICAL_W;
  		fLogicalH = SWEET_FB_LOGICAL_H;
-@@ -377,6 +377,66 @@ AppleCLCD::swap(const uint8_t *rec)
+@@ -242,6 +242,10 @@ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
+ 	AppleCLCD *fb = (AppleCLCD *)owner;
+ 	uint64_t now = mach_absolute_time();
+ 	uint64_t count = ++fb->fVsyncCount;
++#if defined(XCOVER5)
++	xcover5_fb_vsyncs = count;
++	xcover5_fb_off = fb->fPowerOff ? 1 : 0;
++#endif
+ 	uint64_t values[6] = {
+ 		(uint32_t)count, (uint32_t)(count >> 32),
+ 		(uint32_t)now, (uint32_t)(now >> 32),
+@@ -348,6 +352,12 @@ sweet_fb_wait_frame_done(void)
+ 
+ static uint32_t sweet_fb_swaps_logged;
+ static uint64_t sweet_fb_swap_count;
++#if defined(XCOVER5)
++extern "C" {
++uint64_t xcover5_fb_swaps, xcover5_fb_presents, xcover5_fb_vsyncs;
++int xcover5_fb_off;
++}
++#endif
+ 
+ /* Copy each enabled layer's surface into the panel memory (no scaling). */
+ /*
+@@ -372,16 +382,82 @@ AppleCLCD::swap(const uint8_t *rec)
+ 	if (copyNow) {
+ 		present(rec);
+ 	}
++#if defined(XCOVER5)
++	xcover5_fb_swaps = sweet_fb_swap_count + 1;
++#endif
+ 	if ((++sweet_fb_swap_count % 1000) == 0) {
+ 		IOLog("SWEET FB: %llu swaps\n", sweet_fb_swap_count);
  	}
  }
  
@@ -797,7 +829,15 @@ index ec6b9da..adc7ee8 100644
  void
  AppleCLCD::present(const uint8_t *rec)
  {
-@@ -413,7 +473,11 @@ AppleCLCD::present(const uint8_t *rec)
+ 	uint32_t mask = get32(rec, 0x104);
+ 	IOLockLock(fPresentLock);
++#if defined(XCOVER5)
++	xcover5_fb_presents++;
++#endif
+ #if defined(DREAMLTE)
+ 	sweet_fb_wait_frame_done();
+ #endif
+@@ -413,7 +489,11 @@ AppleCLCD::present(const uint8_t *rec)
  			continue;
  		}
  		SweetSurface *s = sweet_surface_copy(id);
@@ -809,7 +849,7 @@ index ec6b9da..adc7ee8 100644
  			sweet_fb_swaps_logged++;
  			IOLog("SWEET FB: swap %u layer %u surface %u %ux%u fmt 0x%x bpr %u a %d,%d %ux%u b %d,%d %dx%d\n",
  			    get32(rec, 0x50), layer, id, s ? s->width : 0, s ? s->height : 0,
-@@ -426,6 +490,14 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -426,6 +506,14 @@ AppleCLCD::present(const uint8_t *rec)
  		}
  		uintptr_t src = s->kernelAddress();
  		uint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;

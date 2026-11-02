@@ -333,6 +333,33 @@ edit('iokit/Kernel/arm/SweetFramebuffer.cpp', [
      '#else\n'
      '\t\tif (sweet_fb_swaps_logged < 16) {\n'
      '#endif\n', 1),
+    # cpus=4: kernel and touch alive, lock screen clock frozen. Count swaps
+    # (backboardd SwapEnd), presents (copies to the panel), vsync ticks and
+    # power-off for the heartbeat line.
+    ('static uint64_t sweet_fb_swap_count;\n',
+     'static uint64_t sweet_fb_swap_count;\n'
+     '#if defined(XCOVER5)\n'
+     'extern "C" {\n'
+     'uint64_t xcover5_fb_swaps, xcover5_fb_presents, xcover5_fb_vsyncs;\n'
+     'int xcover5_fb_off;\n'
+     '}\n'
+     '#endif\n', 1),
+    ('\tif ((++sweet_fb_swap_count % 1000) == 0) {\n',
+     '#if defined(XCOVER5)\n'
+     '\txcover5_fb_swaps = sweet_fb_swap_count + 1;\n'
+     '#endif\n'
+     '\tif ((++sweet_fb_swap_count % 1000) == 0) {\n', 1),
+    ('\tIOLockLock(fPresentLock);\n',
+     '\tIOLockLock(fPresentLock);\n'
+     '#if defined(XCOVER5)\n'
+     '\txcover5_fb_presents++;\n'
+     '#endif\n', 1),
+    ('\tuint64_t count = ++fb->fVsyncCount;\n',
+     '\tuint64_t count = ++fb->fVsyncCount;\n'
+     '#if defined(XCOVER5)\n'
+     '\txcover5_fb_vsyncs = count;\n'
+     '\txcover5_fb_off = fb->fPowerOff ? 1 : 0;\n'
+     '#endif\n', 1),
     ('\t\tuintptr_t src = s->kernelAddress();\n'
      '\t\tuint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;\n',
      '\t\tuintptr_t src = s->kernelAddress();\n'
