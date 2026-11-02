@@ -431,10 +431,10 @@ index dcbd143..61de944 100644
  					int down = !(sample & bit);
  					printf("A5XELTE KEYS: key=%u down=%d gpio=%#x\n",
 diff --git a/bsd/dev/a5xelte_touch.c b/bsd/dev/a5xelte_touch.c
-index ba647a8..0a64d35 100644
+index ba647a8..eadf25e 100644
 --- a/bsd/dev/a5xelte_touch.c
 +++ b/bsd/dev/a5xelte_touch.c
-@@ -920,11 +920,215 @@ dreamlte_touch_start(void)
+@@ -920,11 +920,229 @@ dreamlte_touch_start(void)
  }
  #endif /* DREAMLTE */
  
@@ -538,11 +538,25 @@ index ba647a8..0a64d35 100644
 +	*y = (int)(py * 1920u / 1480u);
 +}
 +
++/* MACH_KERNEL_PRIVATE in kern/sched_prim.h and kern/processor.h. */
++extern processor_t thread_bind(processor_t processor);
++extern processor_t cpu_to_processor(int cpu);
++
 +static void
 +xc5ts_thread(__unused void *arg, __unused wait_result_t wr)
 +{
 +	uint8_t pt[66];
 +	unsigned errors = 0;
++	/* cpus=4: touches reach SweetHID but SpringBoard never redraws (no
++	 * swaps), unlike cpus=1. Experiment: deliver HID events from CPU 0
++	 * only. Boot-arg xc5tscpu=-1 leaves the thread unbound. */
++	int cpu = 0;
++	(void)PE_parse_boot_argn("xc5tscpu", &cpu, sizeof(cpu));
++	if (cpu >= 0) {
++		thread_bind(cpu_to_processor(cpu));
++		thread_block(THREAD_CONTINUE_NULL);
++	}
++	printf("XC5 TOUCH: poll thread on cpu %d (bound %d)\n", cpu_number(), cpu);
 +	for (;;) {
 +		uint64_t deadline;
 +		bool now[XC5_FINGERS] = { false };
