@@ -340,8 +340,8 @@ edit('iokit/Kernel/arm/SweetFramebuffer.cpp', [
     # cpus=4: kernel and touch alive, lock screen clock frozen. Count swaps
     # (backboardd SwapEnd), presents (copies to the panel), vsync ticks and
     # power-off for the heartbeat line.
-    ('static uint64_t sweet_fb_swap_count;\n',
-     'static uint64_t sweet_fb_swap_count;\n'
+    ('OSDefineMetaClassAndStructors(AppleCLCD, IOMobileFramebuffer);\n',
+     'OSDefineMetaClassAndStructors(AppleCLCD, IOMobileFramebuffer);\n'
      '#if defined(XCOVER5)\n'
      'extern "C" {\n'
      'uint64_t xcover5_fb_swaps, xcover5_fb_presents, xcover5_fb_vsyncs;\n'
