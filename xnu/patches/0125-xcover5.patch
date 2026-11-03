@@ -879,7 +879,7 @@ index ec6b9da..8ea5e8f 100644
  			w = (int32_t)s->width;
  			h = (int32_t)s->height;
 diff --git a/iokit/Kernel/arm/SweetKeyStore.cpp b/iokit/Kernel/arm/SweetKeyStore.cpp
-index d11fe26..02f3e35 100644
+index d11fe26..6f5de61 100644
 --- a/iokit/Kernel/arm/SweetKeyStore.cpp
 +++ b/iokit/Kernel/arm/SweetKeyStore.cpp
 @@ -34,6 +34,7 @@ enum {
@@ -890,7 +890,21 @@ index d11fe26..02f3e35 100644
  	kAKSUnlockDevice     = 9,
  	kAKSWrapKey          = 10,
  	kAKSUnwrapKey        = 11,
-@@ -188,6 +189,9 @@ AppleKeyStoreUserClient::externalMethod(uint32_t selector, IOExternalMethodArgum
+@@ -170,6 +171,13 @@ sweet_aks_struct_out_size(IOExternalMethodArguments *args)
+ 	       (uint32_t)args->structureOutputDescriptor->getLength() : args->structureOutputSize;
+ }
+ 
++#if defined(XCOVER5)
++/* Calls per selector, all processes (XC5 heartbeat). */
++extern "C" {
++uint32_t xcover5_aks_calls[128];
++}
++#endif
++
+ IOReturn
+ AppleKeyStoreUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *args,
+     __unused IOExternalMethodDispatch *dispatch, __unused OSObject *target,
+@@ -188,6 +196,9 @@ AppleKeyStoreUserClient::externalMethod(uint32_t selector, IOExternalMethodArgum
  	case kAKSUnloadBag:
  	case kAKSSetSystem:
  	case kAKSUnlockDevice:
@@ -900,14 +914,13 @@ index d11fe26..02f3e35 100644
  	case kAKSUnlockBag:
  	case kAKSLockBag:
  	case kAKSAssertHold:
-@@ -234,6 +238,15 @@ AppleKeyStoreUserClient::externalMethod(uint32_t selector, IOExternalMethodArgum
+@@ -234,6 +245,14 @@ AppleKeyStoreUserClient::externalMethod(uint32_t selector, IOExternalMethodArgum
  
  	char name[32];
  	proc_selfname(name, sizeof(name));
 +#if defined(XCOVER5)
 +	{
-+		static uint32_t calls[128];
-+		uint32_t n = selector < 128 ? ++calls[selector] : 0;
++		uint32_t n = selector < 128 ? ++xcover5_aks_calls[selector] : 0;
 +		if (n > 20 && n % 1000 != 0) {
 +			return ret;
 +		}
@@ -917,10 +930,10 @@ index d11fe26..02f3e35 100644
  	    arg0, in_scalars, in_struct, out_scalars, out_struct, ret);
  	return ret;
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-index 193845f..1ac5899 100644
+index 193845f..f655398 100644
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -22,6 +22,51 @@ public:
+@@ -22,6 +22,61 @@ public:
  
  OSDefineMetaClassAndStructors(SweetPlatformExpert, IODTPlatformExpert);
  
@@ -935,6 +948,8 @@ index 193845f..1ac5899 100644
 +extern int xcover5_fb_off;
 +void a5xelte_gic_diagnostics(unsigned int logical, const char *stage);
 +void xcover5_cpu_report(void);
++void xcover5_task_report(const char *want);
++extern uint32_t xcover5_aks_calls[128];
 +kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
 +void thread_deallocate(thread_t);
 +}
@@ -965,6 +980,14 @@ index 193845f..1ac5899 100644
 +		    xcover5_emmc_writes, xcover5_fb_swaps, xcover5_fb_presents,
 +		    xcover5_fb_vsyncs, xcover5_fb_off);
 +		xcover5_cpu_report();
++		IOLog("XC5 aks sel7=%u sel8=%u sel26=%u sel27=%u sel17=%u\n",
++		    xcover5_aks_calls[7], xcover5_aks_calls[8], xcover5_aks_calls[26],
++		    xcover5_aks_calls[27], xcover5_aks_calls[17]);
++		if (n % 2 == 0) {
++			xcover5_task_report("SpringBoard");
++		} else {
++			xcover5_task_report("backboardd");
++		}
 +	}
 +}
 +#endif
@@ -972,7 +995,7 @@ index 193845f..1ac5899 100644
  bool
  SweetPlatformExpert::start(IOService *provider)
  {
-@@ -36,6 +81,16 @@ SweetPlatformExpert::start(IOService *provider)
+@@ -36,6 +91,16 @@ SweetPlatformExpert::start(IOService *provider)
  	registerService();
  #if defined(A5XELTE)
  	IOLog("A5XELTE: platform expert registered\n");
@@ -1078,14 +1101,17 @@ index e01c124..6896d02 100644
  /*
   * Coprocessor Access Control Register (CPACR)
 diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
-index 87fb8a8..f74fb1d 100644
+index 87fb8a8..9d37c44 100644
 --- a/osfmk/arm64/sleh.c
 +++ b/osfmk/arm64/sleh.c
-@@ -1847,6 +1847,31 @@ handle_simd_trap(arm_saved_state_t *state, uint32_t esr)
+@@ -1847,6 +1847,65 @@ handle_simd_trap(arm_saved_state_t *state, uint32_t esr)
  	__builtin_unreachable();
  }
  
 +#if defined(XCOVER5)
++#include <string.h>
++#include <kern/processor.h>
++#include <kern/task.h>
 +/* Per CPU: timer, IPI and other IRQs (XC5 heartbeat). */
 +uint32_t xcover5_irqs[MAX_CPUS][3];
 +extern char *proc_name_address(void *p);
@@ -1108,12 +1134,43 @@ index 87fb8a8..f74fb1d 100644
 +		    th ? thread_tid(th) : 0ULL);
 +	}
 +}
++
++/* First threads of a named task: state, block hint (kern/block_hint.h),
++ * priority and user pc/lr. Shows where SpringBoard/backboardd wait. */
++void xcover5_task_report(const char *want);
++void
++xcover5_task_report(const char *want)
++{
++	task_t task;
++	lck_mtx_lock(&tasks_threads_lock);
++	queue_iterate(&tasks, task, task_t, tasks) {
++		void *p = get_bsdtask_info(task);
++		if (p == NULL || strcmp(proc_name_address(p), want) != 0) {
++			continue;
++		}
++		thread_t th;
++		int n = 0;
++		task_lock(task);
++		queue_iterate(&task->threads, th, thread_t, task_threads) {
++			if (n++ >= 6) {
++				break;
++			}
++			arm_saved_state_t *us = th->machine.upcb;
++			printf("XC5 %s tid=%llu st=%x hint=%d pri=%d pc=%llx lr=%llx\n",
++			    want, thread_tid(th), th->state, (int)th->block_hint, th->sched_pri,
++			    us ? (uint64_t)get_saved_state_pc(us) : 0ULL,
++			    us ? (uint64_t)get_saved_state_lr(us) : 0ULL);
++		}
++		task_unlock(task);
++	}
++	lck_mtx_unlock(&tasks_threads_lock);
++}
 +#endif
 +
  void
  sleh_irq(arm_saved_state_t *state)
  {
-@@ -1883,6 +1908,9 @@ sleh_irq(arm_saved_state_t *state)
+@@ -1883,6 +1942,9 @@ sleh_irq(arm_saved_state_t *state)
  	if (intid >= 1020 && intid <= 1023) {
  		return; /* spurious */
  	}
