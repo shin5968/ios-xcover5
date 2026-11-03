@@ -80,6 +80,26 @@ edit('osfmk/arm64/proc_reg.h', [
      '\t SCTLR_ROP_KEYS_DEFAULT | SCTLR_JOP_KEYS_DEFAULT | SCTLR_SPAN_DEFAULT)\n', 1),
 ])
 
+# cpus=4: the lock screen comes up different (battery state) and frozen
+# while cpus=1 works. SPAN=1 keeps exceptions from setting PSTATE.PAN, but
+# a secondary core enters with whatever PAN its firmware ERET left; with
+# PAN=1 every copyin/copyout on CPUs 1-3 faults and retries (boot 6
+# symptom, per core). Clear PAN on every CPU in common_start.
+edit('osfmk/arm64/start.s', [
+    ('\t// Enable caches, MMU, ROP and JOP\n'
+     '\tMOV64   x0, SCTLR_EL1_DEFAULT\n'
+     '\tMSR_SCTLR_EL1_X0\n'
+     '\tisb\t\tsy\n',
+     '\t// Enable caches, MMU, ROP and JOP\n'
+     '\tMOV64   x0, SCTLR_EL1_DEFAULT\n'
+     '\tMSR_SCTLR_EL1_X0\n'
+     '\tisb\t\tsy\n'
+     '#if defined(XCOVER5)\n'
+     '\t.long\t0xd500409f\t\t\t\t\t// msr PAN, #0 (A55; kernel has no PAN support)\n'
+     '\tisb\t\tsy\n'
+     '#endif\n', 1),
+])
+
 edit('osfmk/arm64/arm_vm_init.c', [
     ('#if defined(DREAMLTE)\n', f'#if {S8_OR_XC5}\n', 2),
     ('#if defined(DREAMLTE) && !XNU_MONITOR\n', f'#if {S8_OR_XC5} && !XNU_MONITOR\n', 1),

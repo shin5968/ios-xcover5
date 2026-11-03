@@ -1075,6 +1075,21 @@ index e01c124..6896d02 100644
  
  /*
   * Coprocessor Access Control Register (CPACR)
+diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
+index 1606c91..a7e19ed 100644
+--- a/osfmk/arm64/start.s
++++ b/osfmk/arm64/start.s
+@@ -889,6 +889,10 @@ common_start:
+ 	MOV64   x0, SCTLR_EL1_DEFAULT
+ 	MSR_SCTLR_EL1_X0
+ 	isb		sy
++#if defined(XCOVER5)
++	.long	0xd500409f					// msr PAN, #0 (A55; kernel has no PAN support)
++	isb		sy
++#endif
+ 
+ #if defined(A5XELTE)
+ 	/* Blue block: the 4 KiB MMU is active and the framebuffer alias works. */
 diff --git a/osfmk/console/serial_console.c b/osfmk/console/serial_console.c
 index f2489bd..7d90710 100644
 --- a/osfmk/console/serial_console.c
