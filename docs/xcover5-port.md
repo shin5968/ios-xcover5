@@ -94,6 +94,13 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   SpringBoard 스레드 3개(tid 1693/1821/1824)가 st=0x49(WAIT|UNINT|WAIT_REPORT), hint 0, 사용자 pc가 시스템콜
   스텁이 아닌 프레임워크 코드 → 페이지 폴트 등 커널 안에서 끊을 수 없는 대기로 추정(cpus=1에서는 없음).
   다음: 해당 스레드의 커널 반환 주소(unslid)와 wait event 기록(CI run 41633066179).
+- 부팅 26 (cpus=4, CI run 41634287581, 영상 20261103_213007): fb swap/present 13에서 정지. SpringBoard 2개와
+  backboardd 1개 스레드(pri 4, st=0x49)의 커널 역추적이 모두 같음:
+  `machine_switch_context ← thread_invoke ← thread_block_reason ← throttle_lowpri_io ← vm_fault_internal`.
+  → 백그라운드 우선순위 스레드가 페이지 폴트 중 저우선순위 I/O 스로틀에 걸려 깨어나지 못함. eMMC는 PIO로 한 번에
+  한 요청만 처리하고, 크래시를 반복하는 데몬(locationd, WirelessRadioManager, ReportCrash)이 계속 I/O를 내서
+  스로틀이 풀리지 않는 것으로 추정. 수정: `lowpri_throttle_enabled = 0` (boot-arg `xc5throttle=1`로 되돌림),
+  CI run 41637215054.
 
 ## S8 포트와 다른 점
 
