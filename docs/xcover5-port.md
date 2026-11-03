@@ -101,6 +101,10 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   한 요청만 처리하고, 크래시를 반복하는 데몬(locationd, WirelessRadioManager, ReportCrash)이 계속 I/O를 내서
   스로틀이 풀리지 않는 것으로 추정. 수정: `lowpri_throttle_enabled = 0` (boot-arg `xc5throttle=1`로 되돌림),
   CI run 41637215054.
+- 부팅 27 (cpus=4 console, 영상 20261103_215855): 그대로 swap 14에서 정지, SpringBoard tid 1797/backboardd tid 1530
+  (pri 4)이 여전히 `throttle_lowpri_io+0x35c`. 시스템 오버라이드 해제(kern_overrides.c → sys_override_io_throttle)가
+  플래그를 1로 되돌림. 수정: XCOVER5에서는 해제 시 부팅 값 유지, 플래그가 0이면 throttle_lowpri_io가 바로 반환
+  (CI run 41641434949).
 
 ## S8 포트와 다른 점
 
