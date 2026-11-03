@@ -1136,9 +1136,18 @@ index 6d56a33..84b7c93 100644
  #if defined(SWEET)
  		/* Use the ADT values for both donor and A5XELTE cluster metadata. */
 diff --git a/osfmk/arm64/proc_reg.h b/osfmk/arm64/proc_reg.h
-index e01c124..6896d02 100644
+index e01c124..cc4c2c9 100644
 --- a/osfmk/arm64/proc_reg.h
 +++ b/osfmk/arm64/proc_reg.h
+@@ -92,7 +92,7 @@
+ #define CONFIG_SCHED_EDGE   1
+ #endif /* XNU_TARGET_OS_OSX */
+ 
+-#else /* __ARM_AMP__ */
++#elif !defined(ARM64_BOARD_CONFIG_A5XELTE) /* __ARM_AMP__ */
+ #define CONFIG_SCHED_CLUTCH 1
+ #endif /* __ARM_AMP__ */
+ 
 @@ -651,12 +651,19 @@
  #define SCTLR_JOP_KEYS_DEFAULT  0
  #endif

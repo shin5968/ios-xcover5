@@ -78,6 +78,14 @@ edit('osfmk/arm64/proc_reg.h', [
      '#define SCTLR_EL1_DEFAULT \\\n', 1),
     ('\t SCTLR_ROP_KEYS_DEFAULT | SCTLR_JOP_KEYS_DEFAULT)\n',
      '\t SCTLR_ROP_KEYS_DEFAULT | SCTLR_JOP_KEYS_DEFAULT | SCTLR_SPAN_DEFAULT)\n', 1),
+    # Boot 31 (cpus=4, -no_corpses): CPUs ran other priority-4 threads while
+    # SpringBoard's stayed runnable for 100+ s. The clutch scheduler picks
+    # per thread group; use the dual-queue timeshare scheduler on this
+    # board instead (keyed on the global -D flag so every file agrees).
+    ('#else /* __ARM_AMP__ */\n#define CONFIG_SCHED_CLUTCH 1\n#endif /* __ARM_AMP__ */\n',
+     '#elif !defined(ARM64_BOARD_CONFIG_A5XELTE) /* __ARM_AMP__ */\n'
+     '#define CONFIG_SCHED_CLUTCH 1\n'
+     '#endif /* __ARM_AMP__ */\n', 1),
 ])
 
 # cpus=4: the lock screen comes up different (battery state) and frozen
