@@ -431,7 +431,7 @@ index dcbd143..61de944 100644
  					int down = !(sample & bit);
  					printf("A5XELTE KEYS: key=%u down=%d gpio=%#x\n",
 diff --git a/bsd/dev/a5xelte_touch.c b/bsd/dev/a5xelte_touch.c
-index ba647a8..eadf25e 100644
+index ba647a8..979c83f 100644
 --- a/bsd/dev/a5xelte_touch.c
 +++ b/bsd/dev/a5xelte_touch.c
 @@ -920,11 +920,229 @@ dreamlte_touch_start(void)
@@ -547,10 +547,10 @@ index ba647a8..eadf25e 100644
 +{
 +	uint8_t pt[66];
 +	unsigned errors = 0;
-+	/* cpus=4: touches reach SweetHID but SpringBoard never redraws (no
-+	 * swaps), unlike cpus=1. Experiment: deliver HID events from CPU 0
-+	 * only. Boot-arg xc5tscpu=-1 leaves the thread unbound. */
-+	int cpu = 0;
++	/* Boot-arg xc5tscpu=N binds this thread to CPU N. Off by default:
++	 * binding to CPU 0 broke swipe-to-unlock even with cpus=1 (boot 25,
++	 * unbound boot 26 unlocked with the same kernel). */
++	int cpu = -1;
 +	(void)PE_parse_boot_argn("xc5tscpu", &cpu, sizeof(cpu));
 +	if (cpu >= 0) {
 +		thread_bind(cpu_to_processor(cpu));
@@ -1099,7 +1099,7 @@ index f2489bd..7d90710 100644
  	}
  #endif
 diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
-index 1966bdd..d55120d 100644
+index 1966bdd..e981b1f 100644
 --- a/pexpert/arm/pe_serial.c
 +++ b/pexpert/arm/pe_serial.c
 @@ -721,7 +721,7 @@ static volatile uint32_t *fbcon_base;
@@ -1170,16 +1170,25 @@ index 1966bdd..d55120d 100644
  	fbcon_col = fbcon_row = 0;
  	for (uint32_t r = 0; r < fbcon_rows; r++) {
  		fbcon_clear_row(r);
-@@ -814,7 +852,7 @@ fbcon_transmit_ready(void)
+@@ -814,8 +852,16 @@ fbcon_transmit_ready(void)
  static void
  fbcon_transmit_data(uint8_t c)
  {
 -#if defined(DREAMLTE)
 +#if (defined(DREAMLTE) || defined(XCOVER5))
  	klog_putc(c);
++#endif
++#if defined(XCOVER5)
++	{
++		extern int sweet_console_muted;
++		if (sweet_console_muted && !panic_active()) {
++			return;     /* kept in the RAM log above */
++		}
++	}
  #endif
  	if (c == '\r') {
-@@ -829,7 +867,7 @@ fbcon_transmit_data(uint8_t c)
+ 		fbcon_col = 0;
+@@ -829,7 +875,7 @@ fbcon_transmit_data(uint8_t c)
  		fbcon_newline();
  	}
  	const unsigned char *glyph = iso_font + c * 16;
@@ -1188,7 +1197,7 @@ index 1966bdd..d55120d 100644
  	for (uint32_t gy = 0; gy < 16; gy++) {
  		for (uint32_t sy = 0; sy < FBCON_SCALE; sy++) {
  			volatile uint32_t *line = fbcon_base + (y0 + gy * FBCON_SCALE + sy) * (fbcon_stride / 4) + x0;
-@@ -896,7 +934,7 @@ fbcon_probe(void)
+@@ -896,7 +942,7 @@ fbcon_probe(void)
  	}
  	sweet_early_mark(17, "fbcon config read; mapping");
  	fbcon_base = (volatile uint32_t *)ml_io_map_wcomb(reg[0], reg[1]);

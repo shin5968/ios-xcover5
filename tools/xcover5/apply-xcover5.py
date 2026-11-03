@@ -139,6 +139,19 @@ edit('pexpert/arm/pe_serial.c', [
      '\tfbcon_col = fbcon_row = 0;\n', 1),
     ('\tuint32_t x0 = fbcon_col * 8 * FBCON_SCALE, y0 = fbcon_row * 16 * FBCON_SCALE;\n',
      '\tuint32_t x0 = fbcon_col * 8 * FBCON_SCALE, y0 = fbcon_y0 + fbcon_row * 16 * FBCON_SCALE;\n', 1),
+    # Boot 26: with a5fb_noconsole=1, skywalk "SK[0]: __nexus_register ..."
+    # lines still landed on the GUI: kprintf (-enable_kprintf_spam) reaches
+    # the screen console through PE_kputc, not _cnputs where the mute is.
+    ('\tif (c == \'\\r\') {\n\t\tfbcon_col = 0;\n\t\treturn;\n\t}\n',
+     '#if defined(XCOVER5)\n'
+     '\t{\n'
+     '\t\textern int sweet_console_muted;\n'
+     '\t\tif (sweet_console_muted && !panic_active()) {\n'
+     '\t\t\treturn;     /* kept in the RAM log above */\n'
+     '\t\t}\n'
+     '\t}\n'
+     '#endif\n'
+     '\tif (c == \'\\r\') {\n\t\tfbcon_col = 0;\n\t\treturn;\n\t}\n', 1),
 ])
 
 # Kernel console copy in the loader's RAM log zone (S8: TWRP's pmsg zone).
@@ -578,10 +591,10 @@ edit('bsd/dev/a5xelte_touch.c', [
      '{\n'
      '\tuint8_t pt[66];\n'
      '\tunsigned errors = 0;\n'
-     '\t/* cpus=4: touches reach SweetHID but SpringBoard never redraws (no\n'
-     '\t * swaps), unlike cpus=1. Experiment: deliver HID events from CPU 0\n'
-     '\t * only. Boot-arg xc5tscpu=-1 leaves the thread unbound. */\n'
-     '\tint cpu = 0;\n'
+     '\t/* Boot-arg xc5tscpu=N binds this thread to CPU N. Off by default:\n'
+     '\t * binding to CPU 0 broke swipe-to-unlock even with cpus=1 (boot 25,\n'
+     '\t * unbound boot 26 unlocked with the same kernel). */\n'
+     '\tint cpu = -1;\n'
      '\t(void)PE_parse_boot_argn("xc5tscpu", &cpu, sizeof(cpu));\n'
      '\tif (cpu >= 0) {\n'
      '\t\tthread_bind(cpu_to_processor(cpu));\n'
