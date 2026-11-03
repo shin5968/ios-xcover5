@@ -1,5 +1,5 @@
 diff --git a/bsd/dev/a5xelte_emmc.c b/bsd/dev/a5xelte_emmc.c
-index ffd011a..904bfe7 100644
+index ffd011a..d8f0f00 100644
 --- a/bsd/dev/a5xelte_emmc.c
 +++ b/bsd/dev/a5xelte_emmc.c
 @@ -22,6 +22,7 @@
@@ -324,7 +324,22 @@ index ffd011a..904bfe7 100644
  		printf("A5XELTE eMMC: missing or unexpected ADT register window\n");
  		return ENXIO;
  	}
-@@ -518,6 +754,33 @@ emmc_strategy(buf_t bp)
+@@ -464,6 +700,14 @@ emmc_map_host(void)
+ void
+ a5xelte_emmc_probe(void)
+ {
++#if defined(XCOVER5)
++	{
++		extern int lowpri_throttle_enabled;
++		int throttle = 0;
++		(void)PE_parse_boot_argn("xc5throttle", &throttle, sizeof(throttle));
++		lowpri_throttle_enabled = throttle;
++	}
++#endif
+ 	if (!emmc_map_host()) {
+ 		(void)emmc_find_root_partition();
+ 	}
+@@ -518,6 +762,33 @@ emmc_strategy(buf_t bp)
  		uint32_t skip = pos & 511u;
  		uint32_t take = MIN(count - n, 512u - skip);
  		uint32_t lba = (uint32_t)(emmc_first_lba + pos / 512u);
@@ -358,7 +373,7 @@ index ffd011a..904bfe7 100644
  		if (buf_flags(bp) & B_READ) {
  			error = emmc_read_sector(lba, emmc_bounce);
  			if (!error) {
-@@ -573,10 +836,19 @@ emmc_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
+@@ -573,10 +844,19 @@ emmc_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
  		*(uint32_t *)data = emmc_writable ? 1 : 0;
  		return 0;
  	case DKIOCGETMAXBLOCKCOUNTREAD:
@@ -378,7 +393,7 @@ index ffd011a..904bfe7 100644
  		return 0;
  	case DKIOCGETMAXSEGMENTCOUNTREAD:
  	case DKIOCGETMAXSEGMENTCOUNTWRITE:
-@@ -702,7 +974,7 @@ emmc_log_start(void)
+@@ -702,7 +982,7 @@ emmc_log_start(void)
  		return;
  	}
  	emmc_log_enabled = true;
