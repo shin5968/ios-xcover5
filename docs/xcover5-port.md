@@ -88,6 +88,12 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   실행 작업도 계속 바뀜 → CPU 멈춤이나 인터럽트 문제 아님. fb swap 16에서 정지 = backboardd가 프레임을 더 내지 않음.
   SpringBoard가 AKS 26/27/8을 빠르게 반복(1000번에 1줄 로그가 연달아 찍힘). 다음: AKS 호출 수와
   SpringBoard/backboardd 스레드 상태를 heartbeat에 기록해 cpus=1과 비교(CI run 41626090600).
+- 부팅 24 (cpus=1): AKS 26/27=8회, 8=3회에서 멈춤(반복 없음), 잠금 해제 후 fb swap 46.
+- 부팅 25 (cpus=4, `xc5conrows=40` 화면 콘솔, 영상 20261103_210150): 4코어는 재시작 후 RAM 로그가 남지 않음
+  (2회 연속). 이번엔 AKS 26/27=6회로 반복 없음 → AKS 반복은 원인이 아니라 증상. fb swap/present 15에서 정지.
+  SpringBoard 스레드 3개(tid 1693/1821/1824)가 st=0x49(WAIT|UNINT|WAIT_REPORT), hint 0, 사용자 pc가 시스템콜
+  스텁이 아닌 프레임워크 코드 → 페이지 폴트 등 커널 안에서 끊을 수 없는 대기로 추정(cpus=1에서는 없음).
+  다음: 해당 스레드의 커널 반환 주소(unslid)와 wait event 기록(CI run 41633066179).
 
 ## S8 포트와 다른 점
 
