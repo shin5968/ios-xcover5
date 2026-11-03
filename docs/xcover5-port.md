@@ -105,6 +105,9 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   (pri 4)이 여전히 `throttle_lowpri_io+0x35c`. 시스템 오버라이드 해제(kern_overrides.c → sys_override_io_throttle)가
   플래그를 1로 되돌림. 수정: XCOVER5에서는 해제 시 부팅 값 유지, 플래그가 0이면 throttle_lowpri_io가 바로 반환
   (CI run 41641434949).
+- 부팅 28 (cpus=4 console, 영상 20261103_222048): 여전히 swap 13, SpringBoard tid 1798/1865, backboardd tid 1553이
+  `throttle_lowpri_io+0x344`(새 검사 뒤의 sleep). 플래그가 부팅 뒤 다시 1이 되는 경로가 더 있음(누가 바꾸는지 미확인).
+  수정: 플래그와 상관없이 boot-arg `xc5throttle`만으로 결정, heartbeat에 플래그 값 출력(CI run 41643952043).
 
 ## S8 포트와 다른 점
 
