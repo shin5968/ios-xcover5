@@ -681,7 +681,7 @@ index ba647a8..979c83f 100644
  	int enabled = A5_TOUCH_DEFAULT; /* A5 touch: off on the S8 */
  	int log_contacts = 0;
 diff --git a/bsd/miscfs/specfs/spec_vnops.c b/bsd/miscfs/specfs/spec_vnops.c
-index 4ab3ef3..6bcfb0a 100644
+index 4ab3ef3..a5e3527 100644
 --- a/bsd/miscfs/specfs/spec_vnops.c
 +++ b/bsd/miscfs/specfs/spec_vnops.c
 @@ -243,6 +243,12 @@ struct _throttle_io_info_t _throttle_io_info[LOWPRI_MAX_NUM_DEV];
@@ -709,12 +709,14 @@ index 4ab3ef3..6bcfb0a 100644
  	}
  }
  
-@@ -1938,6 +1948,11 @@ throttle_lowpri_io(int sleep_amount)
+@@ -1938,6 +1948,13 @@ throttle_lowpri_io(int sleep_amount)
  	if (sleep_amount == 0) {
  		goto done;
  	}
 +#if defined(XCOVER5)
-+	if (lowpri_throttle_enabled == 0) {
++	/* Boot 28: still asleep here, so something turns the flag back on;
++	 * only the boot-arg decides. */
++	if (!xcover5_lowpri_throttle) {
 +		goto done;
 +	}
 +#endif
@@ -987,10 +989,10 @@ index d11fe26..6f5de61 100644
  	    arg0, in_scalars, in_struct, out_scalars, out_struct, ret);
  	return ret;
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-index 193845f..f655398 100644
+index 193845f..f81ca95 100644
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -22,6 +22,61 @@ public:
+@@ -22,6 +22,62 @@ public:
  
  OSDefineMetaClassAndStructors(SweetPlatformExpert, IODTPlatformExpert);
  
@@ -1007,6 +1009,7 @@ index 193845f..f655398 100644
 +void xcover5_cpu_report(void);
 +void xcover5_task_report(const char *want);
 +extern uint32_t xcover5_aks_calls[128];
++extern int lowpri_throttle_enabled;
 +kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
 +void thread_deallocate(thread_t);
 +}
@@ -1037,9 +1040,9 @@ index 193845f..f655398 100644
 +		    xcover5_emmc_writes, xcover5_fb_swaps, xcover5_fb_presents,
 +		    xcover5_fb_vsyncs, xcover5_fb_off);
 +		xcover5_cpu_report();
-+		IOLog("XC5 aks sel7=%u sel8=%u sel26=%u sel27=%u sel17=%u\n",
++		IOLog("XC5 aks sel7=%u sel8=%u sel26=%u sel27=%u sel17=%u throttle=%d\n",
 +		    xcover5_aks_calls[7], xcover5_aks_calls[8], xcover5_aks_calls[26],
-+		    xcover5_aks_calls[27], xcover5_aks_calls[17]);
++		    xcover5_aks_calls[27], xcover5_aks_calls[17], lowpri_throttle_enabled);
 +		if (n % 2 == 0) {
 +			xcover5_task_report("SpringBoard");
 +		} else {
@@ -1052,7 +1055,7 @@ index 193845f..f655398 100644
  bool
  SweetPlatformExpert::start(IOService *provider)
  {
-@@ -36,6 +91,16 @@ SweetPlatformExpert::start(IOService *provider)
+@@ -36,6 +92,16 @@ SweetPlatformExpert::start(IOService *provider)
  	registerService();
  #if defined(A5XELTE)
  	IOLog("A5XELTE: platform expert registered\n");

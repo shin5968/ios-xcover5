@@ -376,6 +376,7 @@ edit('iokit/Kernel/arm/SweetPlatformExpert.cpp', [
      'void xcover5_cpu_report(void);\n'
      'void xcover5_task_report(const char *want);\n'
      'extern uint32_t xcover5_aks_calls[128];\n'
+     'extern int lowpri_throttle_enabled;\n'
      'kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);\n'
      'void thread_deallocate(thread_t);\n'
      '}\n'
@@ -406,9 +407,9 @@ edit('iokit/Kernel/arm/SweetPlatformExpert.cpp', [
      '\t\t    xcover5_emmc_writes, xcover5_fb_swaps, xcover5_fb_presents,\n'
      '\t\t    xcover5_fb_vsyncs, xcover5_fb_off);\n'
      '\t\txcover5_cpu_report();\n'
-     '\t\tIOLog("XC5 aks sel7=%u sel8=%u sel26=%u sel27=%u sel17=%u\\n",\n'
+     '\t\tIOLog("XC5 aks sel7=%u sel8=%u sel26=%u sel27=%u sel17=%u throttle=%d\\n",\n'
      '\t\t    xcover5_aks_calls[7], xcover5_aks_calls[8], xcover5_aks_calls[26],\n'
-     '\t\t    xcover5_aks_calls[27], xcover5_aks_calls[17]);\n'
+     '\t\t    xcover5_aks_calls[27], xcover5_aks_calls[17], lowpri_throttle_enabled);\n'
      '\t\tif (n % 2 == 0) {\n'
      '\t\t\txcover5_task_report("SpringBoard");\n'
      '\t\t} else {\n'
@@ -860,7 +861,9 @@ edit('bsd/miscfs/specfs/spec_vnops.c', [
     ('\tif (sleep_amount == 0) {\n\t\tgoto done;\n\t}\n\n\tif (sleep_amount == 1 && !ut->uu_throttle_bc) {\n',
      '\tif (sleep_amount == 0) {\n\t\tgoto done;\n\t}\n'
      '#if defined(XCOVER5)\n'
-     '\tif (lowpri_throttle_enabled == 0) {\n\t\tgoto done;\n\t}\n'
+     '\t/* Boot 28: still asleep here, so something turns the flag back on;\n'
+     '\t * only the boot-arg decides. */\n'
+     '\tif (!xcover5_lowpri_throttle) {\n\t\tgoto done;\n\t}\n'
      '#endif\n'
      '\n\tif (sleep_amount == 1 && !ut->uu_throttle_bc) {\n', 1),
 ])
