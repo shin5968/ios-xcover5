@@ -1161,10 +1161,10 @@ index e01c124..6896d02 100644
  /*
   * Coprocessor Access Control Register (CPACR)
 diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
-index 87fb8a8..86b6bef 100644
+index 87fb8a8..aec0000 100644
 --- a/osfmk/arm64/sleh.c
 +++ b/osfmk/arm64/sleh.c
-@@ -1847,6 +1847,86 @@ handle_simd_trap(arm_saved_state_t *state, uint32_t esr)
+@@ -1847,6 +1847,98 @@ handle_simd_trap(arm_saved_state_t *state, uint32_t esr)
  	__builtin_unreachable();
  }
  
@@ -1189,10 +1189,12 @@ index 87fb8a8..86b6bef 100644
 +		thread_t th = cdp->cpu_active_thread;
 +		task_t task = th ? get_threadtask(th) : TASK_NULL;
 +		void *p = task ? get_bsdtask_info(task) : NULL;
-+		printf("XC5 cpu%d tmr=%u ipi=%u irq=%u run=%s tid=%llu\n", i,
++		processor_t pr = cpu_to_processor(i);
++		printf("XC5 cpu%d tmr=%u ipi=%u irq=%u run=%s tid=%llu st=%d pri=%d\n", i,
 +		    xcover5_irqs[i][0], xcover5_irqs[i][1], xcover5_irqs[i][2],
 +		    p ? proc_name_address(p) : (task ? "kernel" : "-"),
-+		    th ? thread_tid(th) : 0ULL);
++		    th ? thread_tid(th) : 0ULL, pr ? (int)pr->state : -1,
++		    pr ? (int)pr->current_pri : -1);
 +	}
 +}
 +
@@ -1221,6 +1223,16 @@ index 87fb8a8..86b6bef 100644
 +			    want, thread_tid(th), th->state, (int)th->block_hint, th->sched_pri,
 +			    us ? (uint64_t)get_saved_state_pc(us) : 0ULL,
 +			    us ? (uint64_t)get_saved_state_lr(us) : 0ULL);
++			/* Boot 29: runnable priority-4 threads did not run for minutes.
++			 * How long since they last ran, and which CPU queues hold them. */
++			if (th->state & TH_RUN) {
++				uint64_t age = mach_absolute_time() - th->last_run_time;
++				printf("XC5   run age=%llums runq=%d bound=%d last=%d mode=%d base=%d sfl=%x\n",
++				    age / 26000, th->runq ? th->runq->cpu_id : -1,
++				    th->bound_processor ? th->bound_processor->cpu_id : -1,
++				    th->last_processor ? th->last_processor->cpu_id : -1,
++				    (int)th->sched_mode, th->base_pri, th->sched_flags);
++			}
 +			/* Uninterruptible waits (boot 25: only with cpus=4): where in
 +			 * the kernel, as unslid addresses for the kernel symbols. */
 +			vm_offset_t top = th->machine.kstackptr;
@@ -1251,7 +1263,7 @@ index 87fb8a8..86b6bef 100644
  void
  sleh_irq(arm_saved_state_t *state)
  {
-@@ -1883,6 +1963,9 @@ sleh_irq(arm_saved_state_t *state)
+@@ -1883,6 +1975,9 @@ sleh_irq(arm_saved_state_t *state)
  	if (intid >= 1020 && intid <= 1023) {
  		return; /* spurious */
  	}
