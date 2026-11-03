@@ -1101,10 +1101,10 @@ index e01c124..6896d02 100644
  /*
   * Coprocessor Access Control Register (CPACR)
 diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
-index 87fb8a8..9d37c44 100644
+index 87fb8a8..5e73378 100644
 --- a/osfmk/arm64/sleh.c
 +++ b/osfmk/arm64/sleh.c
-@@ -1847,6 +1847,65 @@ handle_simd_trap(arm_saved_state_t *state, uint32_t esr)
+@@ -1847,6 +1847,87 @@ handle_simd_trap(arm_saved_state_t *state, uint32_t esr)
  	__builtin_unreachable();
  }
  
@@ -1112,6 +1112,8 @@ index 87fb8a8..9d37c44 100644
 +#include <string.h>
 +#include <kern/processor.h>
 +#include <kern/task.h>
++#include <kern/thread_kernel_state.h>
++#include <vm/vm_kern.h>
 +/* Per CPU: timer, IPI and other IRQs (XC5 heartbeat). */
 +uint32_t xcover5_irqs[MAX_CPUS][3];
 +extern char *proc_name_address(void *p);
@@ -1160,6 +1162,26 @@ index 87fb8a8..9d37c44 100644
 +			    want, thread_tid(th), th->state, (int)th->block_hint, th->sched_pri,
 +			    us ? (uint64_t)get_saved_state_pc(us) : 0ULL,
 +			    us ? (uint64_t)get_saved_state_lr(us) : 0ULL);
++			/* Uninterruptible waits (boot 25: only with cpus=4): where in
++			 * the kernel, as unslid addresses for the kernel symbols. */
++			vm_offset_t top = th->machine.kstackptr;
++			if ((th->state & TH_UNINT) && top != 0) {
++				arm_kernel_saved_state_t *ks =
++				    &((thread_kernel_state_t)top)->machine.ss;
++				uint64_t pcs[5] = { ks->lr, 0, 0, 0, 0 };
++				uint64_t fp = ks->fp;
++				for (int k = 1; k < 5; k++) {
++					if (fp < top - kernel_stack_size || fp + 16 > top || (fp & 7)) {
++						break;
++					}
++					pcs[k] = ((uint64_t *)fp)[1];
++					fp = ((uint64_t *)fp)[0];
++				}
++				printf("XC5   kbt %llx %llx %llx %llx %llx ev=%llx\n",
++				    pcs[0] ? pcs[0] - vm_kernel_slide : 0, pcs[1] ? pcs[1] - vm_kernel_slide : 0,
++				    pcs[2] ? pcs[2] - vm_kernel_slide : 0, pcs[3] ? pcs[3] - vm_kernel_slide : 0,
++				    pcs[4] ? pcs[4] - vm_kernel_slide : 0, (uint64_t)th->wait_event);
++			}
 +		}
 +		task_unlock(task);
 +	}
@@ -1170,7 +1192,7 @@ index 87fb8a8..9d37c44 100644
  void
  sleh_irq(arm_saved_state_t *state)
  {
-@@ -1883,6 +1942,9 @@ sleh_irq(arm_saved_state_t *state)
+@@ -1883,6 +1964,9 @@ sleh_irq(arm_saved_state_t *state)
  	if (intid >= 1020 && intid <= 1023) {
  		return; /* spurious */
  	}
