@@ -113,6 +113,11 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   heartbeat 34→58(약 2분) 동안 pc가 그대로 → 실행 대기열에서 CPU를 받지 못함(기아). 한 번 lck_mtx_lock_contended 대기
   (SpringBoard tid 1726, pri 46)도 보임. 다음: 실행 가능 스레드의 마지막 실행 후 경과, 대기열/바인딩 CPU, 각 CPU 상태와
   현재 우선순위(CI run 41647468196).
+- 부팅 30 (cpus=4 console, 영상 20261103_230240): fb swap 12 정지. SpringBoard tid 1708(base 4, timeshare)
+  `age` 169808→179096 ms, runq=2, 바인딩 없음; backboardd tid 1481 age 138 s, runq=0. 모든 CPU가 st=6(실행 중),
+  pri 31~46 사용자 작업(ReportCrash, locationd, …)과 heartbeat 자신(kernel_task, pri 81)을 실행 → CPU 포화로 base 4
+  스레드가 굶음(추정). 부하 원인 후보: locationd/WirelessRadioManager 크래시 반복과 ReportCrash("Too many corpses").
+  시험: `-no_corpses` boot-arg 이미지(커널 그대로).
 
 ## S8 포트와 다른 점
 
