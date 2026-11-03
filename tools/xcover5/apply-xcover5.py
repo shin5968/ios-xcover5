@@ -138,7 +138,6 @@ edit('osfmk/arm64/sleh.c', [
      '#include <string.h>\n'
      '#include <kern/processor.h>\n'
      '#include <kern/task.h>\n'
-     '#include <kern/thread_kernel_state.h>\n'
      '#include <vm/vm_kern.h>\n'
      '/* Per CPU: timer, IPI and other IRQs (XC5 heartbeat). */\n'
      'uint32_t xcover5_irqs[MAX_CPUS][3];\n'

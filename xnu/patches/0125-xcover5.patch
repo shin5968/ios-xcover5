@@ -1101,10 +1101,10 @@ index e01c124..6896d02 100644
  /*
   * Coprocessor Access Control Register (CPACR)
 diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
-index 87fb8a8..5e73378 100644
+index 87fb8a8..86b6bef 100644
 --- a/osfmk/arm64/sleh.c
 +++ b/osfmk/arm64/sleh.c
-@@ -1847,6 +1847,87 @@ handle_simd_trap(arm_saved_state_t *state, uint32_t esr)
+@@ -1847,6 +1847,86 @@ handle_simd_trap(arm_saved_state_t *state, uint32_t esr)
  	__builtin_unreachable();
  }
  
@@ -1112,7 +1112,6 @@ index 87fb8a8..5e73378 100644
 +#include <string.h>
 +#include <kern/processor.h>
 +#include <kern/task.h>
-+#include <kern/thread_kernel_state.h>
 +#include <vm/vm_kern.h>
 +/* Per CPU: timer, IPI and other IRQs (XC5 heartbeat). */
 +uint32_t xcover5_irqs[MAX_CPUS][3];
@@ -1192,7 +1191,7 @@ index 87fb8a8..5e73378 100644
  void
  sleh_irq(arm_saved_state_t *state)
  {
-@@ -1883,6 +1964,9 @@ sleh_irq(arm_saved_state_t *state)
+@@ -1883,6 +1963,9 @@ sleh_irq(arm_saved_state_t *state)
  	if (intid >= 1020 && intid <= 1023) {
  		return; /* spurious */
  	}
