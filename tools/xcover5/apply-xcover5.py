@@ -129,6 +129,46 @@ edit('osfmk/arm64/machine_routines.c', [
      '#endif\n', 1),
 ])
 
+# cpus=4 with PAN cleared reaches the same lock screen as cpus=1, but the
+# frame swaps stop (14 in 7 minutes) while touches still arrive. Count each
+# CPU's timer, IPI and other IRQs and show what it runs, for the heartbeat.
+edit('osfmk/arm64/sleh.c', [
+    ('void\nsleh_irq(arm_saved_state_t *state)\n{\n',
+     '#if defined(XCOVER5)\n'
+     '/* Per CPU: timer, IPI and other IRQs (XC5 heartbeat). */\n'
+     'uint32_t xcover5_irqs[MAX_CPUS][3];\n'
+     'extern char *proc_name_address(void *p);\n'
+     'void xcover5_cpu_report(void);\n'
+     '\n'
+     'void\n'
+     'xcover5_cpu_report(void)\n'
+     '{\n'
+     '\tfor (int i = 0; i <= ml_get_max_cpu_number() && i < MAX_CPUS; i++) {\n'
+     '\t\tcpu_data_t *cdp = cpu_datap(i);\n'
+     '\t\tif (cdp == NULL) {\n'
+     '\t\t\tcontinue;\n'
+     '\t\t}\n'
+     '\t\tthread_t th = cdp->cpu_active_thread;\n'
+     '\t\ttask_t task = th ? get_threadtask(th) : TASK_NULL;\n'
+     '\t\tvoid *p = task ? get_bsdtask_info(task) : NULL;\n'
+     '\t\tprintf("XC5 cpu%d tmr=%u ipi=%u irq=%u run=%s tid=%llu\\n", i,\n'
+     '\t\t    xcover5_irqs[i][0], xcover5_irqs[i][1], xcover5_irqs[i][2],\n'
+     '\t\t    p ? proc_name_address(p) : (task ? "kernel" : "-"),\n'
+     '\t\t    th ? thread_tid(th) : 0ULL);\n'
+     '\t}\n'
+     '}\n'
+     '#endif\n'
+     '\n'
+     'void\nsleh_irq(arm_saved_state_t *state)\n{\n', 1),
+    ('\tif (intid == timer_intid) {\n'
+     '\t\tsleh_interrupt_handler_prologue(state, DBG_INTR_TYPE_TIMER);\n',
+     '#if defined(XCOVER5)\n'
+     '\txcover5_irqs[cdp->cpu_number][intid == timer_intid ? 0 : intid < 16 ? 1 : 2]++;\n'
+     '#endif\n'
+     '\tif (intid == timer_intid) {\n'
+     '\t\tsleh_interrupt_handler_prologue(state, DBG_INTR_TYPE_TIMER);\n', 1),
+])
+
 # cpus=4 diagnostics need the console on screen (the RAM log does not
 # survive the restart there), but it covered the lock screen. Boot-arg
 # xc5conrows=N keeps the console in the bottom N text rows only.
@@ -278,6 +318,7 @@ edit('iokit/Kernel/arm/SweetPlatformExpert.cpp', [
      'extern uint64_t xcover5_fb_swaps, xcover5_fb_presents, xcover5_fb_vsyncs;\n'
      'extern int xcover5_fb_off;\n'
      'void a5xelte_gic_diagnostics(unsigned int logical, const char *stage);\n'
+     'void xcover5_cpu_report(void);\n'
      'kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);\n'
      'void thread_deallocate(thread_t);\n'
      '}\n'
@@ -307,6 +348,7 @@ edit('iokit/Kernel/arm/SweetPlatformExpert.cpp', [
      '\t\t    mach_absolute_time(), xcover5_klog_size(), xcover5_emmc_reads,\n'
      '\t\t    xcover5_emmc_writes, xcover5_fb_swaps, xcover5_fb_presents,\n'
      '\t\t    xcover5_fb_vsyncs, xcover5_fb_off);\n'
+     '\t\txcover5_cpu_report();\n'
      '\t}\n'
      '}\n'
      '#endif\n', 1),

@@ -917,10 +917,10 @@ index d11fe26..02f3e35 100644
  	    arg0, in_scalars, in_struct, out_scalars, out_struct, ret);
  	return ret;
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-index 193845f..e7b3ff6 100644
+index 193845f..1ac5899 100644
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -22,6 +22,49 @@ public:
+@@ -22,6 +22,51 @@ public:
  
  OSDefineMetaClassAndStructors(SweetPlatformExpert, IODTPlatformExpert);
  
@@ -934,6 +934,7 @@ index 193845f..e7b3ff6 100644
 +extern uint64_t xcover5_fb_swaps, xcover5_fb_presents, xcover5_fb_vsyncs;
 +extern int xcover5_fb_off;
 +void a5xelte_gic_diagnostics(unsigned int logical, const char *stage);
++void xcover5_cpu_report(void);
 +kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
 +void thread_deallocate(thread_t);
 +}
@@ -963,6 +964,7 @@ index 193845f..e7b3ff6 100644
 +		    mach_absolute_time(), xcover5_klog_size(), xcover5_emmc_reads,
 +		    xcover5_emmc_writes, xcover5_fb_swaps, xcover5_fb_presents,
 +		    xcover5_fb_vsyncs, xcover5_fb_off);
++		xcover5_cpu_report();
 +	}
 +}
 +#endif
@@ -970,7 +972,7 @@ index 193845f..e7b3ff6 100644
  bool
  SweetPlatformExpert::start(IOService *provider)
  {
-@@ -36,6 +79,16 @@ SweetPlatformExpert::start(IOService *provider)
+@@ -36,6 +81,16 @@ SweetPlatformExpert::start(IOService *provider)
  	registerService();
  #if defined(A5XELTE)
  	IOLog("A5XELTE: platform expert registered\n");
@@ -1075,6 +1077,52 @@ index e01c124..6896d02 100644
  
  /*
   * Coprocessor Access Control Register (CPACR)
+diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
+index 87fb8a8..f74fb1d 100644
+--- a/osfmk/arm64/sleh.c
++++ b/osfmk/arm64/sleh.c
+@@ -1847,6 +1847,31 @@ handle_simd_trap(arm_saved_state_t *state, uint32_t esr)
+ 	__builtin_unreachable();
+ }
+ 
++#if defined(XCOVER5)
++/* Per CPU: timer, IPI and other IRQs (XC5 heartbeat). */
++uint32_t xcover5_irqs[MAX_CPUS][3];
++extern char *proc_name_address(void *p);
++void xcover5_cpu_report(void);
++
++void
++xcover5_cpu_report(void)
++{
++	for (int i = 0; i <= ml_get_max_cpu_number() && i < MAX_CPUS; i++) {
++		cpu_data_t *cdp = cpu_datap(i);
++		if (cdp == NULL) {
++			continue;
++		}
++		thread_t th = cdp->cpu_active_thread;
++		task_t task = th ? get_threadtask(th) : TASK_NULL;
++		void *p = task ? get_bsdtask_info(task) : NULL;
++		printf("XC5 cpu%d tmr=%u ipi=%u irq=%u run=%s tid=%llu\n", i,
++		    xcover5_irqs[i][0], xcover5_irqs[i][1], xcover5_irqs[i][2],
++		    p ? proc_name_address(p) : (task ? "kernel" : "-"),
++		    th ? thread_tid(th) : 0ULL);
++	}
++}
++#endif
++
+ void
+ sleh_irq(arm_saved_state_t *state)
+ {
+@@ -1883,6 +1908,9 @@ sleh_irq(arm_saved_state_t *state)
+ 	if (intid >= 1020 && intid <= 1023) {
+ 		return; /* spurious */
+ 	}
++#if defined(XCOVER5)
++	xcover5_irqs[cdp->cpu_number][intid == timer_intid ? 0 : intid < 16 ? 1 : 2]++;
++#endif
+ 	if (intid == timer_intid) {
+ 		sleh_interrupt_handler_prologue(state, DBG_INTR_TYPE_TIMER);
+ 		cdp->cpu_decrementer = -1; /* Large */
 diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
 index 1606c91..a7e19ed 100644
 --- a/osfmk/arm64/start.s
