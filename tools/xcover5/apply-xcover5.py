@@ -838,6 +838,33 @@ edit('bsd/dev/a5xelte_touch.c', [
      '#if defined(XCOVER5)\n\txcover5_touch_start();    /* the A5 path below stays off */\n#endif\n', 1),
 ])
 
+# Boot 27: lowpri_throttle_enabled = 0 at boot was not enough. Ending a
+# system override (kern_overrides.c) sets it back to 1, and a thread already
+# marked for throttling still sleeps. With XCOVER5 the override end restores
+# the boot choice, and throttle_lowpri_io never sleeps while throttling is off.
+edit('bsd/miscfs/specfs/spec_vnops.c', [
+    ('int     lowpri_throttle_enabled = 1;\n',
+     'int     lowpri_throttle_enabled = 1;\n'
+     '#if defined(__arm64__)\n#include <pexpert/arm64/board_config.h>\n#endif\n'
+     '#if defined(XCOVER5)\n'
+     'int     xcover5_lowpri_throttle = 0;   /* boot-arg xc5throttle */\n'
+     '#endif\n', 1),
+    ('\t} else {\n\t\tlowpri_throttle_enabled = 1;\n\t}\n',
+     '\t} else {\n'
+     '#if defined(XCOVER5)\n'
+     '\t\tlowpri_throttle_enabled = xcover5_lowpri_throttle;\n'
+     '#else\n'
+     '\t\tlowpri_throttle_enabled = 1;\n'
+     '#endif\n'
+     '\t}\n', 1),
+    ('\tif (sleep_amount == 0) {\n\t\tgoto done;\n\t}\n\n\tif (sleep_amount == 1 && !ut->uu_throttle_bc) {\n',
+     '\tif (sleep_amount == 0) {\n\t\tgoto done;\n\t}\n'
+     '#if defined(XCOVER5)\n'
+     '\tif (lowpri_throttle_enabled == 0) {\n\t\tgoto done;\n\t}\n'
+     '#endif\n'
+     '\n\tif (sleep_amount == 1 && !ut->uu_throttle_bc) {\n', 1),
+])
+
 # Boot 26 (cpus=4): the SpringBoard/backboardd threads that never wake sit in
 # vm_fault -> throttle_lowpri_io (priority 4, background I/O tier). The polled
 # eMMC serves one request at a time and crash-looping daemons keep it busy, so
@@ -849,10 +876,11 @@ edit('bsd/dev/a5xelte_emmc.c', [
     ('\tif (!emmc_map_host()) {\n\t\t(void)emmc_find_root_partition();\n\t}\n',
      '#if defined(XCOVER5)\n'
      '\t{\n'
-     '\t\textern int lowpri_throttle_enabled;\n'
+     '\t\textern int lowpri_throttle_enabled, xcover5_lowpri_throttle;\n'
      '\t\tint throttle = 0;\n'
      '\t\t(void)PE_parse_boot_argn("xc5throttle", &throttle, sizeof(throttle));\n'
-     '\t\tlowpri_throttle_enabled = throttle;\n'
+     '\t\txcover5_lowpri_throttle = throttle ? 1 : 0;\n'
+     '\t\tlowpri_throttle_enabled = xcover5_lowpri_throttle;\n'
      '\t}\n'
      '#endif\n'
      '\tif (!emmc_map_host()) {\n\t\t(void)emmc_find_root_partition();\n\t}\n', 1),

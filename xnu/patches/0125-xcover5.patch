@@ -1,5 +1,5 @@
 diff --git a/bsd/dev/a5xelte_emmc.c b/bsd/dev/a5xelte_emmc.c
-index ffd011a..d8f0f00 100644
+index ffd011a..b931b91 100644
 --- a/bsd/dev/a5xelte_emmc.c
 +++ b/bsd/dev/a5xelte_emmc.c
 @@ -22,6 +22,7 @@
@@ -324,22 +324,23 @@ index ffd011a..d8f0f00 100644
  		printf("A5XELTE eMMC: missing or unexpected ADT register window\n");
  		return ENXIO;
  	}
-@@ -464,6 +700,14 @@ emmc_map_host(void)
+@@ -464,6 +700,15 @@ emmc_map_host(void)
  void
  a5xelte_emmc_probe(void)
  {
 +#if defined(XCOVER5)
 +	{
-+		extern int lowpri_throttle_enabled;
++		extern int lowpri_throttle_enabled, xcover5_lowpri_throttle;
 +		int throttle = 0;
 +		(void)PE_parse_boot_argn("xc5throttle", &throttle, sizeof(throttle));
-+		lowpri_throttle_enabled = throttle;
++		xcover5_lowpri_throttle = throttle ? 1 : 0;
++		lowpri_throttle_enabled = xcover5_lowpri_throttle;
 +	}
 +#endif
  	if (!emmc_map_host()) {
  		(void)emmc_find_root_partition();
  	}
-@@ -518,6 +762,33 @@ emmc_strategy(buf_t bp)
+@@ -518,6 +763,33 @@ emmc_strategy(buf_t bp)
  		uint32_t skip = pos & 511u;
  		uint32_t take = MIN(count - n, 512u - skip);
  		uint32_t lba = (uint32_t)(emmc_first_lba + pos / 512u);
@@ -373,7 +374,7 @@ index ffd011a..d8f0f00 100644
  		if (buf_flags(bp) & B_READ) {
  			error = emmc_read_sector(lba, emmc_bounce);
  			if (!error) {
-@@ -573,10 +844,19 @@ emmc_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
+@@ -573,10 +845,19 @@ emmc_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
  		*(uint32_t *)data = emmc_writable ? 1 : 0;
  		return 0;
  	case DKIOCGETMAXBLOCKCOUNTREAD:
@@ -393,7 +394,7 @@ index ffd011a..d8f0f00 100644
  		return 0;
  	case DKIOCGETMAXSEGMENTCOUNTREAD:
  	case DKIOCGETMAXSEGMENTCOUNTWRITE:
-@@ -702,7 +982,7 @@ emmc_log_start(void)
+@@ -702,7 +983,7 @@ emmc_log_start(void)
  		return;
  	}
  	emmc_log_enabled = true;
@@ -679,6 +680,47 @@ index ba647a8..979c83f 100644
  #endif
  	int enabled = A5_TOUCH_DEFAULT; /* A5 touch: off on the S8 */
  	int log_contacts = 0;
+diff --git a/bsd/miscfs/specfs/spec_vnops.c b/bsd/miscfs/specfs/spec_vnops.c
+index 4ab3ef3..6bcfb0a 100644
+--- a/bsd/miscfs/specfs/spec_vnops.c
++++ b/bsd/miscfs/specfs/spec_vnops.c
+@@ -243,6 +243,12 @@ struct _throttle_io_info_t _throttle_io_info[LOWPRI_MAX_NUM_DEV];
+ 
+ 
+ int     lowpri_throttle_enabled = 1;
++#if defined(__arm64__)
++#include <pexpert/arm64/board_config.h>
++#endif
++#if defined(XCOVER5)
++int     xcover5_lowpri_throttle = 0;   /* boot-arg xc5throttle */
++#endif
+ 
+ 
+ static void throttle_info_end_io_internal(struct _throttle_io_info_t *info, int throttle_level);
+@@ -1460,7 +1466,11 @@ sys_override_io_throttle(boolean_t enable_override)
+ 	if (enable_override) {
+ 		lowpri_throttle_enabled = 0;
+ 	} else {
++#if defined(XCOVER5)
++		lowpri_throttle_enabled = xcover5_lowpri_throttle;
++#else
+ 		lowpri_throttle_enabled = 1;
++#endif
+ 	}
+ }
+ 
+@@ -1938,6 +1948,11 @@ throttle_lowpri_io(int sleep_amount)
+ 	if (sleep_amount == 0) {
+ 		goto done;
+ 	}
++#if defined(XCOVER5)
++	if (lowpri_throttle_enabled == 0) {
++		goto done;
++	}
++#endif
+ 
+ 	if (sleep_amount == 1 && !ut->uu_throttle_bc) {
+ 		sleep_amount = 0;
 diff --git a/iokit/Kernel/arm/SweetCPU.cpp b/iokit/Kernel/arm/SweetCPU.cpp
 index 5bd24a7..84f5069 100644
 --- a/iokit/Kernel/arm/SweetCPU.cpp
