@@ -1161,10 +1161,10 @@ index e01c124..6896d02 100644
  /*
   * Coprocessor Access Control Register (CPACR)
 diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
-index 87fb8a8..aec0000 100644
+index 87fb8a8..75ae860 100644
 --- a/osfmk/arm64/sleh.c
 +++ b/osfmk/arm64/sleh.c
-@@ -1847,6 +1847,98 @@ handle_simd_trap(arm_saved_state_t *state, uint32_t esr)
+@@ -1847,6 +1847,103 @@ handle_simd_trap(arm_saved_state_t *state, uint32_t esr)
  	__builtin_unreachable();
  }
  
@@ -1175,6 +1175,9 @@ index 87fb8a8..aec0000 100644
 +#include <vm/vm_kern.h>
 +/* Per CPU: timer, IPI and other IRQs (XC5 heartbeat). */
 +uint32_t xcover5_irqs[MAX_CPUS][3];
++/* Boot 30: CPUs kept running kernel_task tid 133 at priority 81; the
++ * pc each CPU was interrupted at shows what that kernel code is. */
++uint64_t xcover5_irq_pc[MAX_CPUS];
 +extern char *proc_name_address(void *p);
 +void xcover5_cpu_report(void);
 +
@@ -1190,11 +1193,13 @@ index 87fb8a8..aec0000 100644
 +		task_t task = th ? get_threadtask(th) : TASK_NULL;
 +		void *p = task ? get_bsdtask_info(task) : NULL;
 +		processor_t pr = cpu_to_processor(i);
-+		printf("XC5 cpu%d tmr=%u ipi=%u irq=%u run=%s tid=%llu st=%d pri=%d\n", i,
++		uint64_t ipc = xcover5_irq_pc[i];
++		printf("XC5 cpu%d tmr=%u ipi=%u irq=%u run=%s tid=%llu st=%d pri=%d ipc=%llx\n", i,
 +		    xcover5_irqs[i][0], xcover5_irqs[i][1], xcover5_irqs[i][2],
 +		    p ? proc_name_address(p) : (task ? "kernel" : "-"),
 +		    th ? thread_tid(th) : 0ULL, pr ? (int)pr->state : -1,
-+		    pr ? (int)pr->current_pri : -1);
++		    pr ? (int)pr->current_pri : -1,
++		    ipc >= vm_kernel_slide + VM_MIN_KERNEL_ADDRESS ? ipc - vm_kernel_slide : ipc);
 +	}
 +}
 +
@@ -1263,12 +1268,13 @@ index 87fb8a8..aec0000 100644
  void
  sleh_irq(arm_saved_state_t *state)
  {
-@@ -1883,6 +1975,9 @@ sleh_irq(arm_saved_state_t *state)
+@@ -1883,6 +1980,10 @@ sleh_irq(arm_saved_state_t *state)
  	if (intid >= 1020 && intid <= 1023) {
  		return; /* spurious */
  	}
 +#if defined(XCOVER5)
 +	xcover5_irqs[cdp->cpu_number][intid == timer_intid ? 0 : intid < 16 ? 1 : 2]++;
++	xcover5_irq_pc[cdp->cpu_number] = get_saved_state_pc(state);
 +#endif
  	if (intid == timer_intid) {
  		sleh_interrupt_handler_prologue(state, DBG_INTR_TYPE_TIMER);
