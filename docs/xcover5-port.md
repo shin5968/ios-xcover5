@@ -118,6 +118,11 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   pri 31~46 사용자 작업(ReportCrash, locationd, …)과 heartbeat 자신(kernel_task, pri 81)을 실행 → CPU 포화로 base 4
   스레드가 굶음(추정). 부하 원인 후보: locationd/WirelessRadioManager 크래시 반복과 ReportCrash("Too many corpses").
   시험: `-no_corpses` boot-arg 이미지(커널 그대로).
+- 부팅 31 (cpus=4 console, `-no_corpses`, 영상 20261103_231942): corpse 생성은 꺼짐("corpse is disabled by
+  config")이지만 fb swap 14 정지. CPU는 다른 pri 4 스레드(launchd, accountsd, rtcreportingd)는 실행하는데
+  SpringBoard tid 1657/1693/1695(base 4) age 74→114 s, backboardd tid 1030 age 125 s → 단순 포화가 아니라 clutch
+  스케줄러가 특정 스레드 그룹을 건너뜀(추정). 수정: A5XELTE에서 CONFIG_SCHED_CLUTCH를 끄고 dualq 스케줄러 사용
+  (CI run 41653549707).
 
 ## S8 포트와 다른 점
 
