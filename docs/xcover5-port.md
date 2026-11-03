@@ -108,6 +108,11 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
 - 부팅 28 (cpus=4 console, 영상 20261103_222048): 여전히 swap 13, SpringBoard tid 1798/1865, backboardd tid 1553이
   `throttle_lowpri_io+0x344`(새 검사 뒤의 sleep). 플래그가 부팅 뒤 다시 1이 되는 경로가 더 있음(누가 바꾸는지 미확인).
   수정: 플래그와 상관없이 boot-arg `xc5throttle`만으로 결정, heartbeat에 플래그 값 출력(CI run 41643952043).
+- 부팅 29 (cpus=4 console, 영상 20261103_223642): `throttle=1`(부팅 뒤 누군가 다시 켬). throttle_lowpri_io 대기는
+  사라짐. 그래도 fb swap 12에서 정지. SpringBoard tid 1721/1727, backboardd tid 964/1246(pri 4)이 st=4(실행 가능)인데
+  heartbeat 34→58(약 2분) 동안 pc가 그대로 → 실행 대기열에서 CPU를 받지 못함(기아). 한 번 lck_mtx_lock_contended 대기
+  (SpringBoard tid 1726, pri 46)도 보임. 다음: 실행 가능 스레드의 마지막 실행 후 경과, 대기열/바인딩 CPU, 각 CPU 상태와
+  현재 우선순위(CI run 41647468196).
 
 ## S8 포트와 다른 점
 
