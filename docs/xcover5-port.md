@@ -84,6 +84,10 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   (충전 배터리 아이콘, `4:02`). 4코어에서도 이전 부팅 RAM 로그가 남음. 터치는 SweetHID까지 오지만
   heartbeat 75→88(약 65초) 동안 fb swap 14→16, present 13 그대로 → 화면 갱신이 멈춤, 잠금 해제 안 됨.
   locationd/WirelessRadioManager sig 5 반복은 cpus=1과 같음. 다음: 코어별 IRQ 수와 실행 중 작업을 heartbeat에 기록.
+- 부팅 23 (cpus=4, CI run 41622079432): 4개 코어 모두 5초마다 타이머 약 1150회, IPI 약 4400회(irq=0)를 받고
+  실행 작업도 계속 바뀜 → CPU 멈춤이나 인터럽트 문제 아님. fb swap 16에서 정지 = backboardd가 프레임을 더 내지 않음.
+  SpringBoard가 AKS 26/27/8을 빠르게 반복(1000번에 1줄 로그가 연달아 찍힘). 다음: AKS 호출 수와
+  SpringBoard/backboardd 스레드 상태를 heartbeat에 기록해 cpus=1과 비교(CI run 41626090600).
 
 ## S8 포트와 다른 점
 
