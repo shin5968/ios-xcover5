@@ -1277,10 +1277,10 @@ index d11fe26..6f5de61 100644
  	    arg0, in_scalars, in_struct, out_scalars, out_struct, ret);
  	return ret;
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-index 193845f..190ef2d 100644
+index 193845f..536189f 100644
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -22,6 +22,300 @@ public:
+@@ -22,6 +22,302 @@ public:
  
  OSDefineMetaClassAndStructors(SweetPlatformExpert, IODTPlatformExpert);
  
@@ -1500,7 +1500,9 @@ index 193845f..190ef2d 100644
 +	/* A clock-gated Mali can stop the bus: say so first, then read. */
 +	IOLog("XC5 GPU: reading Mali registers at 0x11500000\n");
 +	IOSleep(1000);
-+	vm_offset_t mali = ml_io_map(0x11500000, 0x1000);
++	/* The whole block (DT size 0x5000): job slots at 0x1000, MMU/AS at 0x2000.
++	 * Boot 45 mapped one page and faulted writing AS0 (0x2400). */
++	vm_offset_t mali = ml_io_map(0x11500000, 0x5000);
 +	if (mali == 0) {
 +		return;
 +	}
@@ -1581,7 +1583,7 @@ index 193845f..190ef2d 100644
  bool
  SweetPlatformExpert::start(IOService *provider)
  {
-@@ -36,6 +330,16 @@ SweetPlatformExpert::start(IOService *provider)
+@@ -36,6 +332,16 @@ SweetPlatformExpert::start(IOService *provider)
  	registerService();
  #if defined(A5XELTE)
  	IOLog("A5XELTE: platform expert registered\n");
