@@ -1,5 +1,5 @@
 diff --git a/bsd/dev/a5xelte_emmc.c b/bsd/dev/a5xelte_emmc.c
-index ffd011a..b931b91 100644
+index ffd011a..54ced88 100644
 --- a/bsd/dev/a5xelte_emmc.c
 +++ b/bsd/dev/a5xelte_emmc.c
 @@ -22,6 +22,7 @@
@@ -46,7 +46,7 @@ index ffd011a..b931b91 100644
  }
  
 +#if defined(XCOVER5)
-+#define EMMC_MULTI_MAX  128u            /* sectors per command: 64 KiB */
++#define EMMC_MULTI_MAX  512u            /* sectors per command: 256 KiB */
 +#define CMD_SEND_STOP   (1u << 12)
 +#define INT_ACD         (1u << 14)
 +/* Boot 11: rint 0x424 = HTO, the FIFO was full and the controller paused
@@ -680,6 +680,33 @@ index ba647a8..979c83f 100644
  #endif
  	int enabled = A5_TOUCH_DEFAULT; /* A5 touch: off on the S8 */
  	int log_contacts = 0;
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index deccec2..d53cf40 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -7414,6 +7414,22 @@ process_signature(proc_t p, struct image_params *imgp)
+ #if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_A5XELTE)
+ 			/* A short line keeps the persistent console ring useful. */
+ 			printf("exec %s\n", p->p_name);
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++			{
++				static const char *const xc5_noexec[] = {
++					"locationd", "WirelessRadioManagerd",
++				};
++				int block = 1;
++				(void)PE_parse_boot_argn("xc5noexec", &block, sizeof(block));
++				for (unsigned i = 0; block && i < sizeof(xc5_noexec) / sizeof(xc5_noexec[0]); i++) {
++					if (strncmp(p->p_name, xc5_noexec[i], sizeof(p->p_name)) == 0) {
++						printf("exec %s refused (xc5noexec)\n", p->p_name);
++						error = EPERM;
++						goto done;
++					}
++				}
++			}
++#endif
+ #else
+ 			printf("Allowing spawn of iOS binary %s since it has "
+ 			    "com.apple.private.security.no-sandbox entitlement or unentitled_ios_sim_launch "
 diff --git a/bsd/miscfs/specfs/spec_vnops.c b/bsd/miscfs/specfs/spec_vnops.c
 index 4ab3ef3..a5e3527 100644
 --- a/bsd/miscfs/specfs/spec_vnops.c
@@ -1362,6 +1389,23 @@ index f2489bd..7d90710 100644
  		return;
  	}
  #endif
+diff --git a/osfmk/vm/vm_kern.c b/osfmk/vm/vm_kern.c
+index 54edb01..bead22e 100644
+--- a/osfmk/vm/vm_kern.c
++++ b/osfmk/vm/vm_kern.c
+@@ -3527,6 +3527,12 @@ kmem_add_extra_claims(void)
+ 
+ 	vm_map_sizes(kernel_map, NULL, NULL, &largest_free_size);
+ 	largest_free_size = trunc_page(largest_free_size);
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	kprintf("XC5 kmem: largest free 0x%llx of map 0x%llx-0x%llx, mem 0x%llx\n",
++	    (uint64_t)largest_free_size, (uint64_t)kernel_map->min_offset,
++	    (uint64_t)kernel_map->max_offset, (uint64_t)sane_size);
++	largest_free_size -= trunc_page(largest_free_size / 16);
++#endif
+ 
+ 	/*
+ 	 * kasan and configs w/o *TRR need to have just one ptr range due to
 diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
 index 1966bdd..e981b1f 100644
 --- a/pexpert/arm/pe_serial.c

@@ -954,7 +954,7 @@ edit('bsd/dev/a5xelte_emmc.c', [
     # same PIO FIFO rules as the single-sector path. emmcmulti=0 reverts.
     ('static uint32_t\nemmc_le32(const uint8_t *p)\n',
      '#if defined(XCOVER5)\n'
-     '#define EMMC_MULTI_MAX  128u            /* sectors per command: 64 KiB */\n'
+     '#define EMMC_MULTI_MAX  512u            /* sectors per command: 256 KiB */\n'
      '#define CMD_SEND_STOP   (1u << 12)\n'
      '#define INT_ACD         (1u << 14)\n'
      '/* Boot 11: rint 0x424 = HTO, the FIFO was full and the controller paused\n'
@@ -1241,4 +1241,49 @@ edit('bsd/dev/a5xelte_emmc.c', [
      '\t\tprintf("\\n");\n', 1),
     ('\tprintf("A5XELTE LOG: SYSTEM GPT first=%llu, %u sectors reserved\\n",\n',
      '\tprintf("A5XELTE LOG: " A5_LOG_PARTITION " GPT first=%llu, %u sectors reserved\\n",\n', 1),
+])
+
+# Boot 33: with 1496 MiB of RAM, kmem_range_init panicked placing
+# kmem_ptr_range_meta. The claims add up to exactly the largest free hole
+# of kernel_map, but are laid out from a fuzzed start, so the last one can
+# run out. Leave 1/16 of the hole unclaimed (the data range shrinks; the
+# kernel VA is over 100 GiB) and log the sizes.
+edit('osfmk/vm/vm_kern.c', [
+    ('\tvm_map_sizes(kernel_map, NULL, NULL, &largest_free_size);\n'
+     '\tlargest_free_size = trunc_page(largest_free_size);\n',
+     '\tvm_map_sizes(kernel_map, NULL, NULL, &largest_free_size);\n'
+     '\tlargest_free_size = trunc_page(largest_free_size);\n'
+     '#if defined(ARM64_BOARD_CONFIG_A5XELTE)\n'
+     '\tkprintf("XC5 kmem: largest free 0x%llx of map 0x%llx-0x%llx, mem 0x%llx\\n",\n'
+     '\t    (uint64_t)largest_free_size, (uint64_t)kernel_map->min_offset,\n'
+     '\t    (uint64_t)kernel_map->max_offset, (uint64_t)sane_size);\n'
+     '\tlargest_free_size -= trunc_page(largest_free_size / 16);\n'
+     '#endif\n', 1),
+])
+
+# locationd (no GPS) and WirelessRadioManagerd (no baseband) crash with
+# SIGTRAP within a second of every launch; with ReportCrash for each crash
+# they kept 1-2 CPUs busy and filled the corpse limit. Refuse to exec them
+# (launchd throttles the failing job). Boot-arg xc5noexec=0 allows them.
+edit('bsd/kern/kern_exec.c', [
+    ('\t\t\t/* A short line keeps the persistent console ring useful. */\n'
+     '\t\t\tprintf("exec %s\\n", p->p_name);\n',
+     '\t\t\t/* A short line keeps the persistent console ring useful. */\n'
+     '\t\t\tprintf("exec %s\\n", p->p_name);\n'
+     '#if defined(ARM64_BOARD_CONFIG_A5XELTE)\n'
+     '\t\t\t{\n'
+     '\t\t\t\tstatic const char *const xc5_noexec[] = {\n'
+     '\t\t\t\t\t"locationd", "WirelessRadioManagerd",\n'
+     '\t\t\t\t};\n'
+     '\t\t\t\tint block = 1;\n'
+     '\t\t\t\t(void)PE_parse_boot_argn("xc5noexec", &block, sizeof(block));\n'
+     '\t\t\t\tfor (unsigned i = 0; block && i < sizeof(xc5_noexec) / sizeof(xc5_noexec[0]); i++) {\n'
+     '\t\t\t\t\tif (strncmp(p->p_name, xc5_noexec[i], sizeof(p->p_name)) == 0) {\n'
+     '\t\t\t\t\t\tprintf("exec %s refused (xc5noexec)\\n", p->p_name);\n'
+     '\t\t\t\t\t\terror = EPERM;\n'
+     '\t\t\t\t\t\tgoto done;\n'
+     '\t\t\t\t\t}\n'
+     '\t\t\t\t}\n'
+     '\t\t\t}\n'
+     '#endif\n', 1),
 ])
