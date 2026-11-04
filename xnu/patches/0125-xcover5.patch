@@ -1,5 +1,5 @@
 diff --git a/bsd/dev/a5xelte_emmc.c b/bsd/dev/a5xelte_emmc.c
-index ffd011a..e05824c 100644
+index ffd011a..a25e2ea 100644
 --- a/bsd/dev/a5xelte_emmc.c
 +++ b/bsd/dev/a5xelte_emmc.c
 @@ -22,6 +22,7 @@
@@ -41,7 +41,7 @@ index ffd011a..e05824c 100644
  	if ((emmc_rd(EMMC_CLKSEL) >> 16) & 7u) {
  		command |= CMD_HOLD;
  	}
-@@ -301,6 +312,422 @@ out:
+@@ -301,6 +312,435 @@ out:
  	return error;
  }
  
@@ -268,6 +268,8 @@ index ffd011a..e05824c 100644
 +int xcover5_emmc_dma_on;
 +unsigned emmc_dma_errors, xcover5_emmc_dma_checks_left;
 +int xcover5_emmc_dma_last_error;
++/* rint idsts bmod ctrl dscaddr bufaddr tbbcnt status at the last DMA error. */
++uint32_t xcover5_emmc_dma_diag[8];
 +
 +/* The device does not snoop: clean and invalidate to the point of coherency. */
 +static void
@@ -324,8 +326,10 @@ index ffd011a..e05824c 100644
 +		uint32_t *d = emmc_desc[i];
 +		uint64_t a = buf_pa + (uint64_t)i * EMMC_DMA_SEG;
 +		uint64_t next = i + 1 < nseg ? desc_pa + (uint64_t)(i + 1) * sizeof(emmc_desc[0]) : 0;
-+		d[0] = DES0_OWN | DES0_CH | DES0_DIC | (i == 0 ? DES0_FS : 0) |
-+		    (i + 1 == nseg ? DES0_LD : 0);
++		/* Boot 41: DIC on the last descriptor too kept IDSTS.RI clear and
++		 * every DMA read timed out (err 60). Only the last one interrupts. */
++		d[0] = DES0_OWN | DES0_CH | (i == 0 ? DES0_FS : 0) |
++		    (i + 1 == nseg ? DES0_LD : DES0_DIC);
 +		d[2] = MIN(EMMC_DMA_SEG, bytes - i * EMMC_DMA_SEG);
 +		d[4] = (uint32_t)a;
 +		d[5] = (uint32_t)(a >> 32);
@@ -394,6 +398,15 @@ index ffd011a..e05824c 100644
 +	if (error) {
 +		printf("XC5 eMMC: DMA read error %d lba=%u n=%u rint=%x idsts=%x bmod=%x ctrl=%x\n",
 +		    error, lba, nblk, pending, idsts, emmc_rd(EMMC_BMOD), emmc_rd(EMMC_CTRL));
++		/* For the heartbeat: the error lines scroll away during boot. */
++		xcover5_emmc_dma_diag[0] = pending;
++		xcover5_emmc_dma_diag[1] = idsts;
++		xcover5_emmc_dma_diag[2] = emmc_rd(EMMC_BMOD);
++		xcover5_emmc_dma_diag[3] = emmc_rd(EMMC_CTRL);
++		xcover5_emmc_dma_diag[4] = emmc_rd(0x098u);   /* DSCADDRL */
++		xcover5_emmc_dma_diag[5] = emmc_rd(0x0a0u);   /* BUFADDRL */
++		xcover5_emmc_dma_diag[6] = emmc_rd(EMMC_TBBCNT);
++		xcover5_emmc_dma_diag[7] = emmc_rd(EMMC_STATUS);
 +	}
 +	emmc_wr(EMMC_BMOD, 0);
 +	emmc_wr(EMMC_CTRL, (emmc_rd(EMMC_CTRL) & ~(CTRL_USE_IDMAC | CTRL_DMA_ENABLE)) |
@@ -464,7 +477,7 @@ index ffd011a..e05824c 100644
  static uint32_t
  emmc_le32(const uint8_t *p)
  {
-@@ -326,6 +753,20 @@ emmc_crc32(uint32_t crc, const uint8_t *data, size_t len)
+@@ -326,6 +766,20 @@ emmc_crc32(uint32_t crc, const uint8_t *data, size_t len)
  	return crc;
  }
  
@@ -485,7 +498,7 @@ index ffd011a..e05824c 100644
  static int
  emmc_find_root_partition(void)
  {
-@@ -381,16 +822,16 @@ emmc_find_root_partition(void)
+@@ -381,16 +835,16 @@ emmc_find_root_partition(void)
  			const uint8_t *p = entry + j * 128;
  			bool match = true;
  			bool system_match = true;
@@ -505,7 +518,7 @@ index ffd011a..e05824c 100644
  				    p[57 + k * 2] != 0) {
  					system_match = false;
  					break;
-@@ -418,12 +859,29 @@ emmc_find_root_partition(void)
+@@ -418,12 +872,29 @@ emmc_find_root_partition(void)
  		return EIO;
  	}
  	if (emmc_log_first_lba == emmc_first_lba && emmc_log_nsectors &&
@@ -537,7 +550,7 @@ index ffd011a..e05824c 100644
  		return ENXIO;
  	}
  	int enable_write = 0;
-@@ -446,7 +904,7 @@ emmc_map_host(void)
+@@ -446,7 +917,7 @@ emmc_map_host(void)
  	}
  	if (SecureDTLookupEntry(NULL, "/a5xelte-emmc", &node) != kSuccess ||
  	    SecureDTGetProperty(node, "reg", (void const **)&reg, &size) != kSuccess ||
@@ -546,7 +559,7 @@ index ffd011a..e05824c 100644
  		printf("A5XELTE eMMC: missing or unexpected ADT register window\n");
  		return ENXIO;
  	}
-@@ -464,6 +922,15 @@ emmc_map_host(void)
+@@ -464,6 +935,15 @@ emmc_map_host(void)
  void
  a5xelte_emmc_probe(void)
  {
@@ -562,7 +575,7 @@ index ffd011a..e05824c 100644
  	if (!emmc_map_host()) {
  		(void)emmc_find_root_partition();
  	}
-@@ -518,6 +985,30 @@ emmc_strategy(buf_t bp)
+@@ -518,6 +998,30 @@ emmc_strategy(buf_t bp)
  		uint32_t skip = pos & 511u;
  		uint32_t take = MIN(count - n, 512u - skip);
  		uint32_t lba = (uint32_t)(emmc_first_lba + pos / 512u);
@@ -593,7 +606,7 @@ index ffd011a..e05824c 100644
  		if (buf_flags(bp) & B_READ) {
  			error = emmc_read_sector(lba, emmc_bounce);
  			if (!error) {
-@@ -573,10 +1064,19 @@ emmc_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
+@@ -573,10 +1077,19 @@ emmc_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
  		*(uint32_t *)data = emmc_writable ? 1 : 0;
  		return 0;
  	case DKIOCGETMAXBLOCKCOUNTREAD:
@@ -613,7 +626,7 @@ index ffd011a..e05824c 100644
  		return 0;
  	case DKIOCGETMAXSEGMENTCOUNTREAD:
  	case DKIOCGETMAXSEGMENTCOUNTWRITE:
-@@ -702,7 +1202,7 @@ emmc_log_start(void)
+@@ -702,7 +1215,7 @@ emmc_log_start(void)
  		return;
  	}
  	emmc_log_enabled = true;
@@ -900,7 +913,7 @@ index ba647a8..979c83f 100644
  	int enabled = A5_TOUCH_DEFAULT; /* A5 touch: off on the S8 */
  	int log_contacts = 0;
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
-index deccec2..e3ac28a 100644
+index deccec2..5436842 100644
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
 @@ -7414,6 +7414,25 @@ process_signature(proc_t p, struct image_params *imgp)
@@ -912,7 +925,7 @@ index deccec2..e3ac28a 100644
 +				static const char *const xc5_noexec[] = {
 +					"locationd", "WirelessRadioManagerd",
 +				};
-+				int block = 1;
++				int block = 0;
 +				(void)PE_parse_boot_argn("xc5noexec", &block, sizeof(block));
 +				for (unsigned i = 0; block && i < sizeof(xc5_noexec) / sizeof(xc5_noexec[0]); i++) {
 +					if (strncmp(p->p_name, xc5_noexec[i], sizeof(p->p_name)) == 0) {
@@ -1252,10 +1265,10 @@ index d11fe26..6f5de61 100644
  	    arg0, in_scalars, in_struct, out_scalars, out_struct, ret);
  	return ret;
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-index 193845f..5c9b90f 100644
+index 193845f..5452a28 100644
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -22,6 +22,66 @@ public:
+@@ -22,6 +22,71 @@ public:
  
  OSDefineMetaClassAndStructors(SweetPlatformExpert, IODTPlatformExpert);
  
@@ -1268,6 +1281,7 @@ index 193845f..5c9b90f 100644
 +extern uint64_t xcover5_emmc_reads, xcover5_emmc_writes, xcover5_emmc_dma_reads;
 +extern int xcover5_emmc_dma_on, xcover5_emmc_dma_last_error;
 +extern unsigned emmc_dma_errors, xcover5_emmc_dma_checks_left;
++extern uint32_t xcover5_emmc_dma_diag[8];
 +extern uint64_t xcover5_fb_swaps, xcover5_fb_presents, xcover5_fb_vsyncs;
 +extern int xcover5_fb_off;
 +void a5xelte_gic_diagnostics(unsigned int logical, const char *stage);
@@ -1305,8 +1319,12 @@ index 193845f..5c9b90f 100644
 +		    xcover5_emmc_dma_reads, xcover5_emmc_writes, xcover5_fb_swaps, xcover5_fb_presents,
 +		    xcover5_fb_vsyncs, xcover5_fb_off);
 +		xcover5_cpu_report();
-+		IOLog("XC5 dma on=%d err=%u last=%d checks=%u\n", xcover5_emmc_dma_on,
-+		    emmc_dma_errors, xcover5_emmc_dma_last_error, xcover5_emmc_dma_checks_left);
++		IOLog("XC5 dma on=%d err=%u last=%d checks=%u rint=%x ids=%x bmod=%x ctrl=%x "
++		    "dsc=%x buf=%x tbb=%x st=%x\n", xcover5_emmc_dma_on,
++		    emmc_dma_errors, xcover5_emmc_dma_last_error, xcover5_emmc_dma_checks_left,
++		    xcover5_emmc_dma_diag[0], xcover5_emmc_dma_diag[1], xcover5_emmc_dma_diag[2],
++		    xcover5_emmc_dma_diag[3], xcover5_emmc_dma_diag[4], xcover5_emmc_dma_diag[5],
++		    xcover5_emmc_dma_diag[6], xcover5_emmc_dma_diag[7]);
 +		IOLog("XC5 aks sel7=%u sel8=%u sel26=%u sel27=%u sel17=%u throttle=%d\n",
 +		    xcover5_aks_calls[7], xcover5_aks_calls[8], xcover5_aks_calls[26],
 +		    xcover5_aks_calls[27], xcover5_aks_calls[17], lowpri_throttle_enabled);
@@ -1322,7 +1340,7 @@ index 193845f..5c9b90f 100644
  bool
  SweetPlatformExpert::start(IOService *provider)
  {
-@@ -36,6 +96,16 @@ SweetPlatformExpert::start(IOService *provider)
+@@ -36,6 +101,16 @@ SweetPlatformExpert::start(IOService *provider)
  	registerService();
  #if defined(A5XELTE)
  	IOLog("A5XELTE: platform expert registered\n");

@@ -424,6 +424,7 @@ edit('iokit/Kernel/arm/SweetPlatformExpert.cpp', [
      'extern uint64_t xcover5_emmc_reads, xcover5_emmc_writes, xcover5_emmc_dma_reads;\n'
      'extern int xcover5_emmc_dma_on, xcover5_emmc_dma_last_error;\n'
      'extern unsigned emmc_dma_errors, xcover5_emmc_dma_checks_left;\n'
+     'extern uint32_t xcover5_emmc_dma_diag[8];\n'
      'extern uint64_t xcover5_fb_swaps, xcover5_fb_presents, xcover5_fb_vsyncs;\n'
      'extern int xcover5_fb_off;\n'
      'void a5xelte_gic_diagnostics(unsigned int logical, const char *stage);\n'
@@ -461,8 +462,12 @@ edit('iokit/Kernel/arm/SweetPlatformExpert.cpp', [
      '\t\t    xcover5_emmc_dma_reads, xcover5_emmc_writes, xcover5_fb_swaps, xcover5_fb_presents,\n'
      '\t\t    xcover5_fb_vsyncs, xcover5_fb_off);\n'
      '\t\txcover5_cpu_report();\n'
-     '\t\tIOLog("XC5 dma on=%d err=%u last=%d checks=%u\\n", xcover5_emmc_dma_on,\n'
-     '\t\t    emmc_dma_errors, xcover5_emmc_dma_last_error, xcover5_emmc_dma_checks_left);\n'
+     '\t\tIOLog("XC5 dma on=%d err=%u last=%d checks=%u rint=%x ids=%x bmod=%x ctrl=%x "\n'
+     '\t\t    "dsc=%x buf=%x tbb=%x st=%x\\n", xcover5_emmc_dma_on,\n'
+     '\t\t    emmc_dma_errors, xcover5_emmc_dma_last_error, xcover5_emmc_dma_checks_left,\n'
+     '\t\t    xcover5_emmc_dma_diag[0], xcover5_emmc_dma_diag[1], xcover5_emmc_dma_diag[2],\n'
+     '\t\t    xcover5_emmc_dma_diag[3], xcover5_emmc_dma_diag[4], xcover5_emmc_dma_diag[5],\n'
+     '\t\t    xcover5_emmc_dma_diag[6], xcover5_emmc_dma_diag[7]);\n'
      '\t\tIOLog("XC5 aks sel7=%u sel8=%u sel26=%u sel27=%u sel17=%u throttle=%d\\n",\n'
      '\t\t    xcover5_aks_calls[7], xcover5_aks_calls[8], xcover5_aks_calls[26],\n'
      '\t\t    xcover5_aks_calls[27], xcover5_aks_calls[17], lowpri_throttle_enabled);\n'
@@ -1334,6 +1339,8 @@ edit('bsd/dev/a5xelte_emmc.c', [
      'int xcover5_emmc_dma_on;\n'
      'unsigned emmc_dma_errors, xcover5_emmc_dma_checks_left;\n'
      'int xcover5_emmc_dma_last_error;\n'
+     '/* rint idsts bmod ctrl dscaddr bufaddr tbbcnt status at the last DMA error. */\n'
+     'uint32_t xcover5_emmc_dma_diag[8];\n'
      '\n'
      '/* The device does not snoop: clean and invalidate to the point of coherency. */\n'
      'static void\n'
@@ -1390,8 +1397,10 @@ edit('bsd/dev/a5xelte_emmc.c', [
      '\t\tuint32_t *d = emmc_desc[i];\n'
      '\t\tuint64_t a = buf_pa + (uint64_t)i * EMMC_DMA_SEG;\n'
      '\t\tuint64_t next = i + 1 < nseg ? desc_pa + (uint64_t)(i + 1) * sizeof(emmc_desc[0]) : 0;\n'
-     '\t\td[0] = DES0_OWN | DES0_CH | DES0_DIC | (i == 0 ? DES0_FS : 0) |\n'
-     '\t\t    (i + 1 == nseg ? DES0_LD : 0);\n'
+     '\t\t/* Boot 41: DIC on the last descriptor too kept IDSTS.RI clear and\n'
+     '\t\t * every DMA read timed out (err 60). Only the last one interrupts. */\n'
+     '\t\td[0] = DES0_OWN | DES0_CH | (i == 0 ? DES0_FS : 0) |\n'
+     '\t\t    (i + 1 == nseg ? DES0_LD : DES0_DIC);\n'
      '\t\td[2] = MIN(EMMC_DMA_SEG, bytes - i * EMMC_DMA_SEG);\n'
      '\t\td[4] = (uint32_t)a;\n'
      '\t\td[5] = (uint32_t)(a >> 32);\n'
@@ -1460,6 +1469,15 @@ edit('bsd/dev/a5xelte_emmc.c', [
      '\tif (error) {\n'
      '\t\tprintf("XC5 eMMC: DMA read error %d lba=%u n=%u rint=%x idsts=%x bmod=%x ctrl=%x\\n",\n'
      '\t\t    error, lba, nblk, pending, idsts, emmc_rd(EMMC_BMOD), emmc_rd(EMMC_CTRL));\n'
+     '\t\t/* For the heartbeat: the error lines scroll away during boot. */\n'
+     '\t\txcover5_emmc_dma_diag[0] = pending;\n'
+     '\t\txcover5_emmc_dma_diag[1] = idsts;\n'
+     '\t\txcover5_emmc_dma_diag[2] = emmc_rd(EMMC_BMOD);\n'
+     '\t\txcover5_emmc_dma_diag[3] = emmc_rd(EMMC_CTRL);\n'
+     '\t\txcover5_emmc_dma_diag[4] = emmc_rd(0x098u);   /* DSCADDRL */\n'
+     '\t\txcover5_emmc_dma_diag[5] = emmc_rd(0x0a0u);   /* BUFADDRL */\n'
+     '\t\txcover5_emmc_dma_diag[6] = emmc_rd(EMMC_TBBCNT);\n'
+     '\t\txcover5_emmc_dma_diag[7] = emmc_rd(EMMC_STATUS);\n'
      '\t}\n'
      '\temmc_wr(EMMC_BMOD, 0);\n'
      '\temmc_wr(EMMC_CTRL, (emmc_rd(EMMC_CTRL) & ~(CTRL_USE_IDMAC | CTRL_DMA_ENABLE)) |\n'
@@ -1539,8 +1557,9 @@ edit('bsd/dev/a5xelte_emmc.c', [
 
 # locationd (no GPS) and WirelessRadioManagerd (no baseband) crash with
 # SIGTRAP within a second of every launch; with ReportCrash for each crash
-# they kept 1-2 CPUs busy and filled the corpse limit. Refuse to exec them
-# (launchd throttles the failing job). Boot-arg xc5noexec=0 allows them.
+# they kept 1-2 CPUs busy and filled the corpse limit. Boot-arg xc5noexec=1
+# refuses to exec them. Off by default: with them refused the lock screen
+# never unlocked (boot 40); allowed, it unlocked (boot 41, same kernel).
 edit('bsd/kern/kern_exec.c', [
     ('\t\t\t/* A short line keeps the persistent console ring useful. */\n'
      '\t\t\tprintf("exec %s\\n", p->p_name);\n',
@@ -1551,7 +1570,7 @@ edit('bsd/kern/kern_exec.c', [
      '\t\t\t\tstatic const char *const xc5_noexec[] = {\n'
      '\t\t\t\t\t"locationd", "WirelessRadioManagerd",\n'
      '\t\t\t\t};\n'
-     '\t\t\t\tint block = 1;\n'
+     '\t\t\t\tint block = 0;\n'
      '\t\t\t\t(void)PE_parse_boot_argn("xc5noexec", &block, sizeof(block));\n'
      '\t\t\t\tfor (unsigned i = 0; block && i < sizeof(xc5_noexec) / sizeof(xc5_noexec[0]); i++) {\n'
      '\t\t\t\t\tif (strncmp(p->p_name, xc5_noexec[i], sizeof(p->p_name)) == 0) {\n'
