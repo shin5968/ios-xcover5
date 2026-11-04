@@ -1277,10 +1277,10 @@ index d11fe26..6f5de61 100644
  	    arg0, in_scalars, in_struct, out_scalars, out_struct, ret);
  	return ret;
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-index 193845f..5452a28 100644
+index 193845f..bf02a9d 100644
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -22,6 +22,71 @@ public:
+@@ -22,6 +22,143 @@ public:
  
  OSDefineMetaClassAndStructors(SweetPlatformExpert, IODTPlatformExpert);
  
@@ -1303,6 +1303,76 @@ index 193845f..5452a28 100644
 +extern int lowpri_throttle_enabled;
 +kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
 +void thread_deallocate(thread_t);
++vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++}
++
++/*
++ * GPU step 0 (docs/xcover5-gpu-plan.md), boot-arg xc5gpu: read only.
++ * 1: the G3D power domain (pd-g3d at 0x11861d00: config, status; the DT's
++ *    gpu_pmu_status_reg_offset 0x1d04, mask 1). 2: also, if powered, the
++ *    Mali-G52 identity and state registers at 0x11500000. No writes.
++ * Kept for the heartbeat: the console scrolls past the one-time lines.
++ */
++static const uint16_t xcover5_gpu_regs[] = {
++	0x000, 0x004, 0x008, 0x00c, 0x010, 0x014, 0x018, 0x01c, 0x034,   /* ID, L2/CORE/TILER/MEM/MMU_FEATURES, AS/JS_PRESENT, GPU_STATUS */
++	0x100, 0x110, 0x120, 0x140, 0x150, 0x160,                         /* SHADER/TILER/L2 PRESENT, READY */
++	0x300, 0x310, 0x04c,                                              /* COHERENCY_FEATURES, THREAD_TLS_ALLOC, AFBC_FEATURES */
++};
++static uint32_t xcover5_gpu_pd[2];
++static uint32_t xcover5_gpu_val[sizeof(xcover5_gpu_regs) / sizeof(xcover5_gpu_regs[0])];
++static int xcover5_gpu_state;   /* 0 off, 1 power read, 2 G3D off, 3 GPU read */
++
++static void
++xcover5_gpu_probe(void)
++{
++	int mode = 0;
++	(void)PE_parse_boot_argn("xc5gpu", &mode, sizeof(mode));
++	if (mode <= 0) {
++		return;
++	}
++	vm_offset_t pmu = ml_io_map(0x11861000, 0x1000);
++	if (pmu == 0) {
++		return;
++	}
++	xcover5_gpu_pd[0] = *(volatile uint32_t *)(pmu + 0xd00);
++	xcover5_gpu_pd[1] = *(volatile uint32_t *)(pmu + 0xd04);
++	xcover5_gpu_state = 1;
++	IOLog("XC5 GPU: pd-g3d config=%x status=%x (%s)\n", xcover5_gpu_pd[0], xcover5_gpu_pd[1],
++	    (xcover5_gpu_pd[1] & 1) ? "on" : "off");
++	if (mode < 2) {
++		return;
++	}
++	if (!(xcover5_gpu_pd[1] & 1)) {
++		xcover5_gpu_state = 2;
++		IOLog("XC5 GPU: G3D off, Mali not read\n");
++		return;
++	}
++	/* A clock-gated Mali can stop the bus: say so first, then read. */
++	IOLog("XC5 GPU: reading Mali registers at 0x11500000\n");
++	IOSleep(1000);
++	vm_offset_t mali = ml_io_map(0x11500000, 0x1000);
++	if (mali == 0) {
++		return;
++	}
++	for (unsigned i = 0; i < sizeof(xcover5_gpu_regs) / sizeof(xcover5_gpu_regs[0]); i++) {
++		xcover5_gpu_val[i] = *(volatile uint32_t *)(mali + xcover5_gpu_regs[i]);
++	}
++	xcover5_gpu_state = 3;
++	IOLog("XC5 GPU: id=%x (product %x) read\n", xcover5_gpu_val[0], xcover5_gpu_val[0] >> 16);
++}
++
++static void
++xcover5_gpu_report(void)
++{
++	if (xcover5_gpu_state == 0) {
++		return;
++	}
++	const uint32_t *v = xcover5_gpu_val;
++	IOLog("XC5 gpu st=%d pd=%x/%x id=%x l2f=%x core=%x tilf=%x mem=%x mmu=%x as=%x js=%x "
++	    "gst=%x\n", xcover5_gpu_state, xcover5_gpu_pd[0], xcover5_gpu_pd[1], v[0], v[1], v[2],
++	    v[3], v[4], v[5], v[6], v[7], v[8]);
++	IOLog("XC5 gpu shader=%x tiler=%x l2=%x ready %x/%x/%x coh=%x tls=%x afbc=%x\n",
++	    v[9], v[10], v[11], v[12], v[13], v[14], v[15], v[16], v[17]);
 +}
 +
 +static void
@@ -1323,6 +1393,7 @@ index 193845f..5452a28 100644
 +	xcover5_timer_state("before");
 +	IODelay(200000);
 +	xcover5_timer_state("after 200ms busy");
++	xcover5_gpu_probe();
 +	for (unsigned n = 1;; n++) {
 +		IOSleep(5000);
 +		IOLog("XC5 heartbeat %u t=%llu klog=%u emmc rd=%llu dma=%llu wr=%llu "
@@ -1331,6 +1402,7 @@ index 193845f..5452a28 100644
 +		    xcover5_emmc_dma_reads, xcover5_emmc_writes, xcover5_fb_swaps, xcover5_fb_presents,
 +		    xcover5_fb_vsyncs, xcover5_fb_off);
 +		xcover5_cpu_report();
++		xcover5_gpu_report();
 +		IOLog("XC5 dma on=%d err=%u last=%d checks=%u rint=%x ids=%x bmod=%x ctrl=%x "
 +		    "dsc=%x buf=%x tbb=%x st=%x\n", xcover5_emmc_dma_on,
 +		    emmc_dma_errors, xcover5_emmc_dma_last_error, xcover5_emmc_dma_checks_left,
@@ -1352,7 +1424,7 @@ index 193845f..5452a28 100644
  bool
  SweetPlatformExpert::start(IOService *provider)
  {
-@@ -36,6 +101,16 @@ SweetPlatformExpert::start(IOService *provider)
+@@ -36,6 +173,16 @@ SweetPlatformExpert::start(IOService *provider)
  	registerService();
  #if defined(A5XELTE)
  	IOLog("A5XELTE: platform expert registered\n");
