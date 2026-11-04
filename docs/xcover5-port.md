@@ -144,6 +144,11 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   → 공간 부족이 아님. 원래 배치로 되돌리고 패닉에 claim 크기/힌트/kr/전체 목록을 출력(CI run 41823429418).
 - 같은 커널: locationd/WirelessRadioManagerd exec 거부(`xc5noexec=0`으로 해제), eMMC 명령당 256 KiB,
   이미지에 `sweetfb_hz=24`. BearSSL은 bearssl.org 502로 `xnu/patches/vendor/`에 사본을 넣어 CI에서 사용.
+- 부팅 39: exec 거부 경로가 `kern_exec.c:7593 signature_failure_reason != OS_REASON_NULL` 단언으로 패닉 → 이유 추가.
+- 부팅 40 (userdata 재플래시 후 첫 부팅, cpus=8, 1 GiB): 약 16분(이전 25분). 잠금화면에서 밀어도 안 열림.
+  heartbeat `dma=0`. 부팅 41 (같은 커널, `xc5noexec=0`): **홈 화면/위젯 화면 정상** → locationd 등 거부가 잠금 해제를
+  막음. `xc5noexec`는 기본 꺼짐으로 변경. DMA: `on=0 err=3 last=60`(ETIMEDOUT) — 모든 디스크립터에 DIC를 켜서
+  IDSTS.RI가 오지 않음 → 마지막 디스크립터만 인터럽트(CI run 41834474116). 오류 시 레지스터를 heartbeat에 출력.
 
 ## S8 포트와 다른 점
 
