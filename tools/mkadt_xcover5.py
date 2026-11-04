@@ -10,8 +10,9 @@ read from the stock DT (G525NKXSFEYL1 boot.img dtb + dtbo, docs/xcover5-port.md)
     "use-physical-timer": non-secure physical timer PPI 14 = INTID 30
   - timer 26 MHz (clock-frequency = <0x18cba80>)
   - CPUs: 8 Cortex-A55 (MT bit set), MPIDR Aff1 = core, Aff2 = cluster.
-    XNU's SWEET path keys CPUs by MPIDR[15:0], so only the first cluster
-    (0x000-0x300) is listed; cpus=N selects a prefix.
+    XNU's SWEET path keys CPUs by MPIDR[15:0]; patch 0125 folds Aff2 into
+    the unused Aff0 byte, so logical 0-3 = 0x000-0x300 and 4-7 =
+    0x001-0x301 (MPIDR 0x10000-0x10300). cpus=N selects a prefix.
   - S-Boot framebuffer 720x1480 XRGB8888 at 0xfa000000 (fb_handover)
   - eMMC: DesignWare MSHC dwmmc0 at 0x12100000 (androidboot.boot_devices)
 The identity stays the donor's iPhone X (D22AP).
@@ -28,7 +29,7 @@ DRAM_SIZE = 0x20000000
 FB_PHYS, FB_W, FB_H = 0xfa000000, 720, 1480
 EMMC_PHYS = 0x12100000
 TIMEBASE = 26000000
-NCPUS = 4
+NCPUS = 8
 
 
 def set_prop(node, name, value):
@@ -53,7 +54,7 @@ def cpu_node(logical):
         # no CPU registers and XNU waits forever after AppleCLCD (boot 2).
         ('compatible', mkadt.cstr('arm,cortex-a55') + mkadt.cstr('arm,cortex-a53') +
          mkadt.cstr('ARM,v8')),
-        ('reg', mkadt.u32(logical << 8)),
+        ('reg', mkadt.u32((logical % 4) << 8 | logical // 4)),
         ('cpu-id', mkadt.u32(logical)),
         ('cluster-id', mkadt.u32(0)),
         ('cluster-type', mkadt.u32(0)),

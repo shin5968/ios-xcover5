@@ -106,6 +106,24 @@ edit('osfmk/arm64/start.s', [
      '\t.long\t0xd500409f\t\t\t\t\t// msr PAN, #0 (A55; kernel has no PAN support)\n'
      '\tisb\t\tsy\n'
      '#endif\n', 1),
+    # All 8 cores: MPIDR[15:0] of cluster 1 (0x10000-0x10300) equals cluster
+    # 0's. Aff0 is always 0 on the A55 (MT), so fold Aff2 into it: the CPU
+    # key is Aff1:Aff2, 0x000-0x300 and 0x001-0x301.
+    ('\tand\t\tx0, x15, #0xFFFF\t\t\t\t\t// Full Aff1:Aff0 (SWEET: core in Aff1)\n',
+     '\tand\t\tx0, x15, #0xFFFF\t\t\t\t\t// Full Aff1:Aff0 (SWEET: core in Aff1)\n'
+     '#if defined(XCOVER5)\n'
+     '\tubfx\tx1, x15, #16, #8\t\t\t\t\t// Aff2 (cluster) into the free Aff0 byte\n'
+     '\torr\t\tx0, x0, x1\n'
+     '#endif\n', 1),
+])
+
+edit('osfmk/arm64/machine_routines.c', [
+    ('\tphys_id &= MPIDR_AFF1_MASK | MPIDR_AFF0_MASK;\n',
+     '#if defined(XCOVER5)\n'
+     '\t/* Same key as start.s: Aff2 folded into Aff0 (a key passes unchanged). */\n'
+     '\tphys_id |= (phys_id >> 16) & 0xff;\n'
+     '#endif\n'
+     '\tphys_id &= MPIDR_AFF1_MASK | MPIDR_AFF0_MASK;\n', 1),
 ])
 
 edit('osfmk/arm64/arm_vm_init.c', [
@@ -306,10 +324,18 @@ edit('iokit/Kernel/arm/SweetCPU.cpp', [
     ('#if defined(DREAMLTE)\n\t/* Exynos 8895: logical 0..3',
      '#if defined(XCOVER5)\n'
      '\t/* Exynos 850: Cortex-A55 with MT, MPIDR Aff1 = core, Aff2 = cluster.\n'
-     '\t * MPIDR[15:0] (the SWEET key) is unique only inside cluster 0, so the\n'
-     '\t * ADT lists logical 0..3 = MPIDR 0x000..0x300. */\n'
-     '\tuint32_t expected_mpidr = cpu->cpu_id < 4 ? (uint32_t)cpu->cpu_id << 8 : ~0U;\n'
+     '\t * The key folds Aff2 into Aff0 (start.s): logical 0..3 = 0x000..0x300,\n'
+     '\t * logical 4..7 = 0x001..0x301 (MPIDR 0x10000..0x10300). */\n'
+     '\tuint32_t expected_mpidr = ((uint32_t)cpu->cpu_id % 4) << 8 | (uint32_t)cpu->cpu_id / 4;\n'
      '#elif defined(DREAMLTE)\n\t/* Exynos 8895: logical 0..3', 1),
+    ('\tint32_t rc = sweet_psci_cpu_on(cpu->phys_id, entry, getCPUNumber());\n',
+     '#if defined(XCOVER5)\n'
+     '\t/* PSCI wants the real MPIDR: the key byte 0 is Aff2. */\n'
+     '\tint32_t rc = sweet_psci_cpu_on((cpu->phys_id & 0xff00) | ((cpu->phys_id & 0xffULL) << 16),\n'
+     '\t    entry, getCPUNumber());\n'
+     '#else\n'
+     '\tint32_t rc = sweet_psci_cpu_on(cpu->phys_id, entry, getCPUNumber());\n'
+     '#endif\n', 1),
     ('\tcpuName = OSSymbol::withCStringNoCopy("Cortex-A53");\n',
      '#if defined(XCOVER5)\n'
      '\tcpuName = OSSymbol::withCStringNoCopy("Cortex-A55");\n'

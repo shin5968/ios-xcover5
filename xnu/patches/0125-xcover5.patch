@@ -724,7 +724,7 @@ index 4ab3ef3..a5e3527 100644
  	if (sleep_amount == 1 && !ut->uu_throttle_bc) {
  		sleep_amount = 0;
 diff --git a/iokit/Kernel/arm/SweetCPU.cpp b/iokit/Kernel/arm/SweetCPU.cpp
-index 5bd24a7..84f5069 100644
+index 5bd24a7..b238705 100644
 --- a/iokit/Kernel/arm/SweetCPU.cpp
 +++ b/iokit/Kernel/arm/SweetCPU.cpp
 @@ -17,7 +17,7 @@
@@ -743,9 +743,9 @@ index 5bd24a7..84f5069 100644
 -#if defined(DREAMLTE)
 +#if defined(XCOVER5)
 +	/* Exynos 850: Cortex-A55 with MT, MPIDR Aff1 = core, Aff2 = cluster.
-+	 * MPIDR[15:0] (the SWEET key) is unique only inside cluster 0, so the
-+	 * ADT lists logical 0..3 = MPIDR 0x000..0x300. */
-+	uint32_t expected_mpidr = cpu->cpu_id < 4 ? (uint32_t)cpu->cpu_id << 8 : ~0U;
++	 * The key folds Aff2 into Aff0 (start.s): logical 0..3 = 0x000..0x300,
++	 * logical 4..7 = 0x001..0x301 (MPIDR 0x10000..0x10300). */
++	uint32_t expected_mpidr = ((uint32_t)cpu->cpu_id % 4) << 8 | (uint32_t)cpu->cpu_id / 4;
 +#elif defined(DREAMLTE)
  	/* Exynos 8895: logical 0..3 = A53 MPIDR 0x100..0x103 (boot cluster);
  	 * logical 4..7 = Mongoose M2 MPIDR 0..3. */
@@ -790,6 +790,20 @@ index 5bd24a7..84f5069 100644
  	{
  		/*
  		 * The entry is in the high RAM bank (0x88xxxxxxx); the loader probe
+@@ -346,7 +374,13 @@ SweetCPU::startCPU(vm_offset_t start_paddr, vm_offset_t arg_paddr)
+ 	}
+ #endif
+ 	__builtin_arm_dsb(DSB_SY);
++#if defined(XCOVER5)
++	/* PSCI wants the real MPIDR: the key byte 0 is Aff2. */
++	int32_t rc = sweet_psci_cpu_on((cpu->phys_id & 0xff00) | ((cpu->phys_id & 0xffULL) << 16),
++	    entry, getCPUNumber());
++#else
+ 	int32_t rc = sweet_psci_cpu_on(cpu->phys_id, entry, getCPUNumber());
++#endif
+ 	IOLog(CPU_PORT_NAME " CPU: cpu=%u PSCI CPU_ON rc=%d\n", getCPUNumber(), rc);
+ 	/* cpu_start() discards PE_cpu_start's return; do not silently carry on. */
+ 	if (rc != 0) {
 diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
 index ec6b9da..8ea5e8f 100644
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
@@ -1104,7 +1118,7 @@ index 57e6096..cc8fe3e 100644
  #endif
  	va_l1_end = (va_l1_end + 0x00000000007FFFFFULL) & 0xFFFFFFFFFF800000ULL;
 diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
-index 6d56a33..84b7c93 100644
+index 6d56a33..7c5b649 100644
 --- a/osfmk/arm64/machine_routines.c
 +++ b/osfmk/arm64/machine_routines.c
 @@ -1050,7 +1050,9 @@ ml_parse_cpu_topology(void)
@@ -1135,6 +1149,17 @@ index 6d56a33..84b7c93 100644
  
  #if defined(SWEET)
  		/* Use the ADT values for both donor and A5XELTE cluster metadata. */
+@@ -1210,6 +1218,10 @@ ml_get_boot_cluster_type(void)
+ int
+ ml_get_cpu_number(uint32_t phys_id)
+ {
++#if defined(XCOVER5)
++	/* Same key as start.s: Aff2 folded into Aff0 (a key passes unchanged). */
++	phys_id |= (phys_id >> 16) & 0xff;
++#endif
+ 	phys_id &= MPIDR_AFF1_MASK | MPIDR_AFF0_MASK;
+ 
+ 	for (unsigned i = 0; i < topology_info.num_cpus; i++) {
 diff --git a/osfmk/arm64/proc_reg.h b/osfmk/arm64/proc_reg.h
 index e01c124..cc4c2c9 100644
 --- a/osfmk/arm64/proc_reg.h
@@ -1289,10 +1314,21 @@ index 87fb8a8..75ae860 100644
  		sleh_interrupt_handler_prologue(state, DBG_INTR_TYPE_TIMER);
  		cdp->cpu_decrementer = -1; /* Large */
 diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
-index 1606c91..a7e19ed 100644
+index 1606c91..5b9162e 100644
 --- a/osfmk/arm64/start.s
 +++ b/osfmk/arm64/start.s
-@@ -889,6 +889,10 @@ common_start:
+@@ -145,6 +145,10 @@ LEXT(reset_vector)
+ 	mrs		x15, MPIDR_EL1						// Load MPIDR to get CPU number
+ #if HAS_CLUSTER || defined(SWEET)
+ 	and		x0, x15, #0xFFFF					// Full Aff1:Aff0 (SWEET: core in Aff1)
++#if defined(XCOVER5)
++	ubfx	x1, x15, #16, #8					// Aff2 (cluster) into the free Aff0 byte
++	orr		x0, x0, x1
++#endif
+ #else
+ 	and		x0, x15, #0xFF						// CPU number is in MPIDR Affinity Level 0
+ #endif
+@@ -889,6 +893,10 @@ common_start:
  	MOV64   x0, SCTLR_EL1_DEFAULT
  	MSR_SCTLR_EL1_X0
  	isb		sy
