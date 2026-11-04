@@ -435,6 +435,7 @@ edit('iokit/Kernel/arm/SweetPlatformExpert.cpp', [
      'kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);\n'
      'void thread_deallocate(thread_t);\n'
      'vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);\n'
+     'extern uint32_t xcover5_gpusvc[8];\n'
      '}\n'
      '\n'
      '/*\n'
@@ -642,7 +643,7 @@ edit('iokit/Kernel/arm/SweetPlatformExpert.cpp', [
      '\t}\n'
      '\txcover5_gpu_state = 3;\n'
      '\tIOLog("XC5 GPU: id=%x (product %x) read\\n", xcover5_gpu_val[0], xcover5_gpu_val[0] >> 16);\n'
-     '\tif (mode >= 3) {\n'
+     '\tif (mode == 3) {                /* 4: the XC5GPU service does its own bring-up */\n'
      '\t\txcover5_gpu_first_jobs(mali);\n'
      '\t}\n'
      '}\n'
@@ -659,6 +660,9 @@ edit('iokit/Kernel/arm/SweetPlatformExpert.cpp', [
      '\t    v[3], v[4], v[5], v[6], v[7], v[8]);\n'
      '\tIOLog("XC5 gpu shader=%x tiler=%x l2=%x ready %x/%x/%x coh=%x tls=%x afbc=%x\\n",\n'
      '\t    v[9], v[10], v[11], v[12], v[13], v[14], v[15], v[16], v[17]);\n'
+     '\tIOLog("XC5 gpusvc state=%u clients=%u bos=%u jobs=%u failed=%u selftest=%u (%u us)\\n",\n'
+     '\t    xcover5_gpusvc[0], xcover5_gpusvc[1], xcover5_gpusvc[2], xcover5_gpusvc[3],\n'
+     '\t    xcover5_gpusvc[4], xcover5_gpusvc[5], xcover5_gpusvc[6]);\n'
      '\tconst uint32_t (*j)[5] = xcover5_gpu_jobres;\n'
      '\tIOLog("XC5 gpu step=%u job1 irq=%x js=%x flt=%x hdr=%x w=%x job2 irq=%x js=%x flt=%x "\n'
      '\t    "hdr=%x w=%x\\n", xcover5_gpu_step, j[0][0], j[0][1], j[0][2], j[0][3], j[0][4],\n'
@@ -1491,6 +1495,30 @@ edit('bsd/dev/a5xelte_emmc.c', [
 # all still failed, on varying claims, and the half-free kernel failed with
 # 1 GiB too. So it is not a lack of space. Behaviour is back to stock; the
 # panic now names the claim size, start, error and every claim.
+# GPU step 3 (docs/xcover5-gpu-plan.md): the XC5GPU IOKit service, a
+# Panfrost-style kernel half for Mesa (tools/xcover5/XC5GPU.cpp, after
+# herolte's HeroGPU.cpp and hakios-a32's Mali-G52 bring-up). Boot-arg
+# xc5gpu=4 starts it.
+(tree / 'iokit/Kernel/arm/XC5GPU.cpp').write_text(
+    (Path(__file__).resolve().parent / 'XC5GPU.cpp').read_text())
+print('wrote iokit/Kernel/arm/XC5GPU.cpp')
+edit('iokit/conf/files.arm64', [
+    ('iokit/Kernel/arm/SweetBattery.cpp                                optional iokitcpp\n',
+     'iokit/Kernel/arm/SweetBattery.cpp                                optional iokitcpp\n'
+     'iokit/Kernel/arm/XC5GPU.cpp                                      optional iokitcpp\n', 1),
+])
+edit('iokit/KernelConfigTables.cpp', [
+    ('    "   {"\n'
+     '    "     \'IOClass\'         = SweetBattery;"\n',
+     '    "   {"\n'
+     '    "     \'IOClass\'         = XC5GPU;"\n'
+     '    "     \'IOProviderClass\' = IOResources;"\n'
+     '    "     \'IOMatchCategory\' = XC5GPU;"\n'
+     '    "   },"\n'
+     '    "   {"\n'
+     '    "     \'IOClass\'         = SweetBattery;"\n', 1),
+])
+
 edit('osfmk/vm/vm_kern.c', [
     ('\tvm_map_sizes(kernel_map, NULL, NULL, &largest_free_size);\n'
      '\tlargest_free_size = trunc_page(largest_free_size);\n',
