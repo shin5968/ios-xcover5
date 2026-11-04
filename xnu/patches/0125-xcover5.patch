@@ -1390,7 +1390,7 @@ index f2489bd..7d90710 100644
  	}
  #endif
 diff --git a/osfmk/vm/vm_kern.c b/osfmk/vm/vm_kern.c
-index 54edb01..e37236f 100644
+index 54edb01..a76aa8c 100644
 --- a/osfmk/vm/vm_kern.c
 +++ b/osfmk/vm/vm_kern.c
 @@ -3527,6 +3527,12 @@ kmem_add_extra_claims(void)
@@ -1406,6 +1406,34 @@ index 54edb01..e37236f 100644
  
  	/*
  	 * kasan and configs w/o *TRR need to have just one ptr range due to
+@@ -3620,6 +3626,27 @@ kmem_scramble_ranges(void)
+ 	 * do not admit this address to be part of any zone submap.
+ 	 */
+ 	start = kmem_fuzz_start();
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	{
++		vm_map_offset_t prev = kernel_map->min_offset, best = start;
++		vm_map_size_t best_size = 0;
++		for (vm_map_entry_t e = vm_map_first_entry(kernel_map);
++		    e != vm_map_to_entry(kernel_map); e = e->vme_next) {
++			if (e->vme_start > prev && e->vme_start - prev > best_size) {
++				best_size = e->vme_start - prev;
++				best = prev;
++			}
++			prev = MAX(prev, e->vme_end);
++		}
++		if (kernel_map->max_offset > prev && kernel_map->max_offset - prev > best_size) {
++			best_size = kernel_map->max_offset - prev;
++			best = prev;
++		}
++		kprintf("XC5 kmem: fuzz start 0x%llx, claims from 0x%llx (hole 0x%llx)\n",
++		    (uint64_t)start, (uint64_t)best, (uint64_t)best_size);
++		start = round_page(best);
++	}
++#endif
+ 
+ 	/*
+ 	 * Add claims for ptr and data kmem_ranges
 diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
 index 1966bdd..e981b1f 100644
 --- a/pexpert/arm/pe_serial.c

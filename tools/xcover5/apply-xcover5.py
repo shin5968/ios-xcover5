@@ -1261,6 +1261,32 @@ edit('osfmk/vm/vm_kern.c', [
      '\t    (uint64_t)kernel_map->max_offset, (uint64_t)sane_size);\n'
      '\tlargest_free_size -= trunc_page(largest_free_size / 2);\n'
      '#endif\n', 1),
+    # Boot 37 with half left free: kmem_data_range still did not fit. The
+    # claims are placed one after another from the fuzzed start, so they
+    # only use holes after it; start them at the largest hole instead.
+    ('\tstart = kmem_fuzz_start();\n',
+     '\tstart = kmem_fuzz_start();\n'
+     '#if defined(ARM64_BOARD_CONFIG_A5XELTE)\n'
+     '\t{\n'
+     '\t\tvm_map_offset_t prev = kernel_map->min_offset, best = start;\n'
+     '\t\tvm_map_size_t best_size = 0;\n'
+     '\t\tfor (vm_map_entry_t e = vm_map_first_entry(kernel_map);\n'
+     '\t\t    e != vm_map_to_entry(kernel_map); e = e->vme_next) {\n'
+     '\t\t\tif (e->vme_start > prev && e->vme_start - prev > best_size) {\n'
+     '\t\t\t\tbest_size = e->vme_start - prev;\n'
+     '\t\t\t\tbest = prev;\n'
+     '\t\t\t}\n'
+     '\t\t\tprev = MAX(prev, e->vme_end);\n'
+     '\t\t}\n'
+     '\t\tif (kernel_map->max_offset > prev && kernel_map->max_offset - prev > best_size) {\n'
+     '\t\t\tbest_size = kernel_map->max_offset - prev;\n'
+     '\t\t\tbest = prev;\n'
+     '\t\t}\n'
+     '\t\tkprintf("XC5 kmem: fuzz start 0x%llx, claims from 0x%llx (hole 0x%llx)\\n",\n'
+     '\t\t    (uint64_t)start, (uint64_t)best, (uint64_t)best_size);\n'
+     '\t\tstart = round_page(best);\n'
+     '\t}\n'
+     '#endif\n', 1),
 ])
 
 # locationd (no GPS) and WirelessRadioManagerd (no baseband) crash with
