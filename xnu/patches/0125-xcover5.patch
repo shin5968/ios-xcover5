@@ -1,5 +1,5 @@
 diff --git a/bsd/dev/a5xelte_emmc.c b/bsd/dev/a5xelte_emmc.c
-index ffd011a..a25e2ea 100644
+index ffd011a..eee85af 100644
 --- a/bsd/dev/a5xelte_emmc.c
 +++ b/bsd/dev/a5xelte_emmc.c
 @@ -22,6 +22,7 @@
@@ -41,7 +41,7 @@ index ffd011a..a25e2ea 100644
  	if ((emmc_rd(EMMC_CLKSEL) >> 16) & 7u) {
  		command |= CMD_HOLD;
  	}
-@@ -301,6 +312,435 @@ out:
+@@ -301,6 +312,447 @@ out:
  	return error;
  }
  
@@ -380,8 +380,20 @@ index ffd011a..a25e2ea 100644
 +			error = EIO;
 +			goto out;
 +		}
-+		if ((pending & INT_DATA_OVER) && (pending & INT_CMD_DONE) && (idsts & IDSTS_RI)) {
-+			break;
++		/* Boot 42: rint=402c (CD, DTO, RXDR, ACD), TBBCNT = 0x1000 = the whole
++		 * read, BUFADDR inside our buffer, but IDSTS stayed 0 (no RI) even
++		 * with DIC cleared on the last descriptor. Done is: data over, all
++		 * bytes through the host bus, and the IDMAC gave every descriptor back. */
++		if ((pending & INT_DATA_OVER) && (pending & INT_CMD_DONE) &&
++		    emmc_rd(EMMC_TBBCNT) == bytes) {
++			emmc_dcache_flush(emmc_desc, nseg * sizeof(emmc_desc[0]));
++			bool owned = false;
++			for (uint32_t k = 0; k < nseg; k++) {
++				owned |= (*(volatile uint32_t *)&emmc_desc[k][0] & DES0_OWN) != 0;
++			}
++			if (!owned) {
++				break;
++			}
 +		}
 +		if (i == limit) {
 +			error = ETIMEDOUT;
@@ -477,7 +489,7 @@ index ffd011a..a25e2ea 100644
  static uint32_t
  emmc_le32(const uint8_t *p)
  {
-@@ -326,6 +766,20 @@ emmc_crc32(uint32_t crc, const uint8_t *data, size_t len)
+@@ -326,6 +778,20 @@ emmc_crc32(uint32_t crc, const uint8_t *data, size_t len)
  	return crc;
  }
  
@@ -498,7 +510,7 @@ index ffd011a..a25e2ea 100644
  static int
  emmc_find_root_partition(void)
  {
-@@ -381,16 +835,16 @@ emmc_find_root_partition(void)
+@@ -381,16 +847,16 @@ emmc_find_root_partition(void)
  			const uint8_t *p = entry + j * 128;
  			bool match = true;
  			bool system_match = true;
@@ -518,7 +530,7 @@ index ffd011a..a25e2ea 100644
  				    p[57 + k * 2] != 0) {
  					system_match = false;
  					break;
-@@ -418,12 +872,29 @@ emmc_find_root_partition(void)
+@@ -418,12 +884,29 @@ emmc_find_root_partition(void)
  		return EIO;
  	}
  	if (emmc_log_first_lba == emmc_first_lba && emmc_log_nsectors &&
@@ -550,7 +562,7 @@ index ffd011a..a25e2ea 100644
  		return ENXIO;
  	}
  	int enable_write = 0;
-@@ -446,7 +917,7 @@ emmc_map_host(void)
+@@ -446,7 +929,7 @@ emmc_map_host(void)
  	}
  	if (SecureDTLookupEntry(NULL, "/a5xelte-emmc", &node) != kSuccess ||
  	    SecureDTGetProperty(node, "reg", (void const **)&reg, &size) != kSuccess ||
@@ -559,7 +571,7 @@ index ffd011a..a25e2ea 100644
  		printf("A5XELTE eMMC: missing or unexpected ADT register window\n");
  		return ENXIO;
  	}
-@@ -464,6 +935,15 @@ emmc_map_host(void)
+@@ -464,6 +947,15 @@ emmc_map_host(void)
  void
  a5xelte_emmc_probe(void)
  {
@@ -575,7 +587,7 @@ index ffd011a..a25e2ea 100644
  	if (!emmc_map_host()) {
  		(void)emmc_find_root_partition();
  	}
-@@ -518,6 +998,30 @@ emmc_strategy(buf_t bp)
+@@ -518,6 +1010,30 @@ emmc_strategy(buf_t bp)
  		uint32_t skip = pos & 511u;
  		uint32_t take = MIN(count - n, 512u - skip);
  		uint32_t lba = (uint32_t)(emmc_first_lba + pos / 512u);
@@ -606,7 +618,7 @@ index ffd011a..a25e2ea 100644
  		if (buf_flags(bp) & B_READ) {
  			error = emmc_read_sector(lba, emmc_bounce);
  			if (!error) {
-@@ -573,10 +1077,19 @@ emmc_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
+@@ -573,10 +1089,19 @@ emmc_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
  		*(uint32_t *)data = emmc_writable ? 1 : 0;
  		return 0;
  	case DKIOCGETMAXBLOCKCOUNTREAD:
@@ -626,7 +638,7 @@ index ffd011a..a25e2ea 100644
  		return 0;
  	case DKIOCGETMAXSEGMENTCOUNTREAD:
  	case DKIOCGETMAXSEGMENTCOUNTWRITE:
-@@ -702,7 +1215,7 @@ emmc_log_start(void)
+@@ -702,7 +1227,7 @@ emmc_log_start(void)
  		return;
  	}
  	emmc_log_enabled = true;
