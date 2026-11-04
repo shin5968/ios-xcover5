@@ -1277,10 +1277,10 @@ index d11fe26..6f5de61 100644
  	    arg0, in_scalars, in_struct, out_scalars, out_struct, ret);
  	return ret;
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-index 193845f..bf02a9d 100644
+index 193845f..190ef2d 100644
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -22,6 +22,143 @@ public:
+@@ -22,6 +22,300 @@ public:
  
  OSDefineMetaClassAndStructors(SweetPlatformExpert, IODTPlatformExpert);
  
@@ -1322,6 +1322,156 @@ index 193845f..bf02a9d 100644
 +static uint32_t xcover5_gpu_val[sizeof(xcover5_gpu_regs) / sizeof(xcover5_gpu_regs[0])];
 +static int xcover5_gpu_state;   /* 0 off, 1 power read, 2 G3D off, 3 GPU read */
 +
++/*
++ * GPU step 2 (xc5gpu=3), after Luminous418/hakios-a32's bring-up of the same
++ * Mali-G52 (kernel/bsd/dev/hakios.mali.c, steps 4-6): soft reset, L2/tiler/
++ * shader cores powered, then one WRITE_VALUE job on JS1 in identity mode
++ * (AS0 unmapped: a GPU address is physical) and the same job through AArch64
++ * 4K page tables (AS_TRANSCFG mode 6, 35-bit input). Boot 44 found the G3D
++ * domain on and the registers readable (GPU_ID 0x72120000, one shader core,
++ * MMU_FEATURES 0x2830, COHERENCY_FEATURES 0): S-Boot leaves power and clock
++ * on, so nothing outside the GPU is written.
++ */
++extern "C" uint64_t kvtophys(vm_offset_t va);
++extern "C" void FlushPoC_DcacheRegion(vm_offset_t va, size_t length);
++static vm_offset_t xcover5_mali;
++static uint32_t xcover5_gpu_step;
++static uint32_t xcover5_gpu_jobres[2][5];  /* rawstat, js status, AS fault, header, word */
++
++static inline uint32_t
++xc5m_rd(uint32_t at)
++{
++	return *(volatile uint32_t *)(xcover5_mali + at);
++}
++
++static inline void
++xc5m_wr(uint32_t at, uint32_t value)
++{
++	*(volatile uint32_t *)(xcover5_mali + at) = value;
++	__asm__ volatile ("dsb sy" ::: "memory");
++}
++
++static bool
++xc5m_wait(uint32_t at, uint32_t mask, uint32_t want, uint32_t ms)
++{
++	for (uint32_t us = 0; us < ms * 1000; us += 10) {
++		if ((xc5m_rd(at) & mask) == want) {
++			return true;
++		}
++		IODelay(10);
++	}
++	return (xc5m_rd(at) & mask) == want;
++}
++
++#define XC5M_JS1        0x1880
++#define XC5M_AS0        0x2400
++#define XC5M_TRANSCFG   (6u | (20u << 6) | (1u << 24))   /* AArch64 4K, 55 - 35 bits, walks not cached */
++#define XC5M_JOB_GPU    0x00100000ull
++
++static void
++xc5m_as0(uint64_t transtab, uint32_t transcfg)
++{
++	xc5m_wr(XC5M_AS0 + 0x00, (uint32_t)transtab);
++	xc5m_wr(XC5M_AS0 + 0x04, (uint32_t)(transtab >> 32));
++	xc5m_wr(XC5M_AS0 + 0x30, transcfg);
++	xc5m_wr(XC5M_AS0 + 0x34, 0);
++	xc5m_wr(XC5M_AS0 + 0x08, 0x88888888u);
++	xc5m_wr(XC5M_AS0 + 0x0c, 0x88888888u);
++	xc5m_wr(XC5M_AS0 + 0x18, 1);           /* UPDATE */
++	(void)xc5m_wait(XC5M_AS0 + 0x28, 1, 0, 50);
++}
++
++/* WRITE_VALUE 0xc0ffee01 to page + 0x800; gpu is the page's GPU address. */
++static bool
++xc5m_write_job(vm_offset_t page, uint64_t gpu, uint32_t shaders, unsigned which)
++{
++	volatile uint32_t *job = (volatile uint32_t *)page;
++	volatile uint32_t *target = (volatile uint32_t *)(page + 0x800);
++	bzero((void *)page, PAGE_SIZE);
++	job[4] = (2u << 1) | 1u | (1u << 16);   /* WRITE_VALUE, 64-bit pointers, index 1 */
++	job[8] = (uint32_t)(gpu + 0x800);
++	job[9] = (uint32_t)((gpu + 0x800) >> 32);
++	job[10] = 6;                            /* 32-bit immediate */
++	job[12] = 0xc0ffee01u;
++	FlushPoC_DcacheRegion(page, PAGE_SIZE);
++	xc5m_wr(0x1008, 0);                    /* JOB_INT_MASK */
++	xc5m_wr(0x1004, 0xffffffffu);          /* JOB_INT_CLEAR */
++	xc5m_wr(XC5M_JS1 + 0x40, (uint32_t)gpu);
++	xc5m_wr(XC5M_JS1 + 0x44, (uint32_t)(gpu >> 32));
++	xc5m_wr(XC5M_JS1 + 0x50, shaders);
++	xc5m_wr(XC5M_JS1 + 0x54, 0);
++	xc5m_wr(XC5M_JS1 + 0x58, (3u << 8) | (3u << 12) | (8u << 16));
++	xc5m_wr(XC5M_JS1 + 0x60, 1);           /* START */
++	(void)xc5m_wait(0x1000, (1u << 1) | (1u << 17), 1u << 1, 100);
++	FlushPoC_DcacheRegion(page, PAGE_SIZE);
++	uint32_t *r = xcover5_gpu_jobres[which];
++	r[0] = xc5m_rd(0x1000);
++	r[1] = xc5m_rd(XC5M_JS1 + 0x24);
++	r[2] = xc5m_rd(XC5M_AS0 + 0x1c);
++	r[3] = job[0];
++	r[4] = *target;
++	xc5m_wr(0x1004, 0xffffffffu);
++	IOLog("XC5 GPU: job %u: irq=%x js=%x fault=%x hdr=%x word=%x%s\n", which + 1, r[0], r[1],
++	    r[2], r[3], r[4], r[4] == 0xc0ffee01u ? " -- the GPU ran it" : " -- not written");
++	return r[4] == 0xc0ffee01u;
++}
++
++static void
++xcover5_gpu_first_jobs(vm_offset_t mali)
++{
++	xcover5_mali = mali;
++	uint32_t shaders = xc5m_rd(0x100), tiler = xc5m_rd(0x110), l2 = xc5m_rd(0x120);
++	xc5m_wr(0x028, 0);                     /* GPU_INT_MASK */
++	xc5m_wr(0x024, 0xffffffffu);           /* GPU_INT_CLEAR */
++	xc5m_wr(0x030, 1);                     /* GPU_CMD: soft reset */
++	if (!xc5m_wait(0x020, 1u << 8, 1u << 8, 100)) {
++		IOLog("XC5 GPU: soft reset did not complete (raw %x)\n", xc5m_rd(0x020));
++		return;
++	}
++	xcover5_gpu_step = 1;
++	xc5m_wr(0x024, 0xffffffffu);
++	xc5m_wr(0x1a0, l2);                    /* L2_PWRON */
++	xc5m_wr(0x190, tiler);                 /* TILER_PWRON */
++	xc5m_wr(0x180, shaders);               /* SHADER_PWRON */
++	if (!xc5m_wait(0x160, l2, l2, 50) || !xc5m_wait(0x150, tiler, tiler, 50) ||
++	    !xc5m_wait(0x140, shaders, shaders, 50)) {
++		IOLog("XC5 GPU: cores not ready: l2 %x tiler %x shaders %x\n", xc5m_rd(0x160),
++		    xc5m_rd(0x150), xc5m_rd(0x140));
++		return;
++	}
++	xcover5_gpu_step = 2;
++	IOLog("XC5 GPU: cores powered: shaders %x tiler %x l2 %x\n", shaders, tiler, l2);
++	vm_offset_t page = (vm_offset_t)IOMallocAligned(PAGE_SIZE, PAGE_SIZE);
++	uint64_t *pt[3];
++	for (int i = 0; i < 3; i++) {
++		pt[i] = (uint64_t *)IOMallocAligned(PAGE_SIZE, PAGE_SIZE);
++	}
++	if (page == 0 || pt[0] == NULL || pt[1] == NULL || pt[2] == NULL) {
++		return;
++	}
++	xc5m_as0(0, 2);                         /* identity */
++	if (!xc5m_write_job(page, kvtophys(page), shaders, 0)) {
++		return;
++	}
++	xcover5_gpu_step = 3;
++	for (int i = 0; i < 3; i++) {
++		bzero(pt[i], PAGE_SIZE);
++	}
++	uint64_t gpu = XC5M_JOB_GPU;
++	pt[0][(gpu >> 30) & 31] = kvtophys((vm_offset_t)pt[1]) | 3;
++	pt[1][(gpu >> 21) & 511] = kvtophys((vm_offset_t)pt[2]) | 3;
++	pt[2][(gpu >> 12) & 511] = (kvtophys(page) & 0x0000fffffffff000ull) |
++	    (1ull << 10) | (3ull << 8) | (1ull << 6) | 3;   /* AF, inner shareable, RW, page */
++	for (int i = 0; i < 3; i++) {
++		FlushPoC_DcacheRegion((vm_offset_t)pt[i], PAGE_SIZE);
++	}
++	xc5m_as0(kvtophys((vm_offset_t)pt[0]), XC5M_TRANSCFG);
++	if (xc5m_write_job(page, gpu, shaders, 1)) {
++		xcover5_gpu_step = 4;
++		IOLog("XC5 GPU: step 2 done: jobs run in identity mode and through page tables\n");
++	}
++}
++
 +static void
 +xcover5_gpu_probe(void)
 +{
@@ -1359,6 +1509,9 @@ index 193845f..bf02a9d 100644
 +	}
 +	xcover5_gpu_state = 3;
 +	IOLog("XC5 GPU: id=%x (product %x) read\n", xcover5_gpu_val[0], xcover5_gpu_val[0] >> 16);
++	if (mode >= 3) {
++		xcover5_gpu_first_jobs(mali);
++	}
 +}
 +
 +static void
@@ -1373,6 +1526,10 @@ index 193845f..bf02a9d 100644
 +	    v[3], v[4], v[5], v[6], v[7], v[8]);
 +	IOLog("XC5 gpu shader=%x tiler=%x l2=%x ready %x/%x/%x coh=%x tls=%x afbc=%x\n",
 +	    v[9], v[10], v[11], v[12], v[13], v[14], v[15], v[16], v[17]);
++	const uint32_t (*j)[5] = xcover5_gpu_jobres;
++	IOLog("XC5 gpu step=%u job1 irq=%x js=%x flt=%x hdr=%x w=%x job2 irq=%x js=%x flt=%x "
++	    "hdr=%x w=%x\n", xcover5_gpu_step, j[0][0], j[0][1], j[0][2], j[0][3], j[0][4],
++	    j[1][0], j[1][1], j[1][2], j[1][3], j[1][4]);
 +}
 +
 +static void
@@ -1424,7 +1581,7 @@ index 193845f..bf02a9d 100644
  bool
  SweetPlatformExpert::start(IOService *provider)
  {
-@@ -36,6 +173,16 @@ SweetPlatformExpert::start(IOService *provider)
+@@ -36,6 +330,16 @@ SweetPlatformExpert::start(IOService *provider)
  	registerService();
  #if defined(A5XELTE)
  	IOLog("A5XELTE: platform expert registered\n");
