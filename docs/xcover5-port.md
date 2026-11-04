@@ -149,6 +149,9 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   heartbeat `dma=0`. 부팅 41 (같은 커널, `xc5noexec=0`): **홈 화면/위젯 화면 정상** → locationd 등 거부가 잠금 해제를
   막음. `xc5noexec`는 기본 꺼짐으로 변경. DMA: `on=0 err=3 last=60`(ETIMEDOUT) — 모든 디스크립터에 DIC를 켜서
   IDSTS.RI가 오지 않음 → 마지막 디스크립터만 인터럽트(CI run 41834474116). 오류 시 레지스터를 heartbeat에 출력.
+- 부팅 42 (CI run 41834474116): 여전히 `err=3 last=60`, `rint=402c ids=0 tbb=1000` → 전송은 끝나고 IDSTS만 0.
+  완료 판정을 DTO+CMD done+TBBCNT=전체+디스크립터 OWN 반환으로 변경(CI run 41836897933).
+  이 부팅은 잠금 해제가 안 됐지만 같은 이미지로 다시 부팅하니 됨 → 잠금 해제 실패는 간헐적(원인 미확인).
 
 ## S8 포트와 다른 점
 
