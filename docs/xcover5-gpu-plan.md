@@ -55,6 +55,23 @@ A32 문서에서 바로 쓸 교훈(같은 G52):
 - Mesa 문서 기준 G52는 OpenGL ES 3.1 **적합성 인증**(conformant)을 받았고, PanVK(Vulkan)은 Bifrost에서 "지원"이지만
   인증은 G610뿐이다.
 
+### 이식 판정
+
+같은 계열인 점이 결정적이다. herolte는 이 저장소와 같은 A5XELTE/SWEET 계열 커널(같은 `AGENTS.md`, `SweetSurface`,
+`SweetFramebuffer`)이고 iOS도 같은 iPhone X 16.7.16이다. A32는 같은 Mali-G52지만 HakiOS 계열 커널(MiniIOSurface 등)이다.
+
+| 부분 | 가져올 곳 | 판정 |
+| --- | --- | --- |
+| EAGL 브리지(`gpu/eagl`, `gpu/hakios-gl`) | herolte | **그대로**. iOS 16.7.16 OpenGLES.framework 457개 진입점 확인됨 |
+| backboardd 주입(`herolte_gl.c`), drop zone(`herolte_drop.c`) | herolte | **경로와 파티션 이름만 바꿈**(UFS→eMMC, BOARD_CONFIG 이름) |
+| Mesa iOS 빌드(`build-mesa.sh`, `patch-mesa.py`, `mesa-ios.yml`) | herolte + y2sios 패치 4개 | **거의 그대로**. Bifrost 컴파일러는 같은 panfrost 빌드에 포함 |
+| libdrm 대체(`herodrm.c`) | herolte | **조금 고침**: GetParam의 v7 항목(TLS, AFBC) |
+| IOKit GPU 서비스(`HeroGPU.cpp`) | herolte(우리 SweetSurface와 맞음) | **조금 고침**: 이름, 레지스터 매핑 |
+| Mali 코어 제어(MMU, 작업, 리셋, 코어 전원) | **A32 `hakios.mali.c`** | **거의 그대로**: Bifrost AArch64 4K 페이지 테이블(`AS_TRANSCFG` 모드 6, MEMATTR, PTE 비트), identity 모드 시험 작업 |
+| G3D 전원/클럭 | 없음(A32는 MediaTek, herolte는 Exynos 8890) | **새로 작성**: Exynos 850 PMU/CMU, `need_smc` |
+| Metal(`RedwoodMetal.bundle`, AIR→NIR) | y2sios(MIT) | GLES가 된 뒤 별도 검토 |
+| MaliMetal(GPL-2.0), metal2vulkan | - | 지금은 쓰지 않음(미성숙, PanVK 미인증) |
+
 ## 3. XCover5 하드웨어 (순정 DT `research/bootdtb_0.dts`)
 
 - GPU: `mali@11500000`, 크기 0x5000, `compatible = "arm,mali"`. **Mali-G52**(Bifrost, Job Manager 방식).
