@@ -1,5 +1,5 @@
 diff --git a/bsd/dev/a5xelte_emmc.c b/bsd/dev/a5xelte_emmc.c
-index ffd011a..eef4f6e 100644
+index ffd011a..e05824c 100644
 --- a/bsd/dev/a5xelte_emmc.c
 +++ b/bsd/dev/a5xelte_emmc.c
 @@ -22,6 +22,7 @@
@@ -41,7 +41,7 @@ index ffd011a..eef4f6e 100644
  	if ((emmc_rd(EMMC_CLKSEL) >> 16) & 7u) {
  		command |= CMD_HOLD;
  	}
-@@ -301,6 +312,412 @@ out:
+@@ -301,6 +312,422 @@ out:
  	return error;
  }
  
@@ -262,8 +262,12 @@ index ffd011a..eef4f6e 100644
 +static uint32_t emmc_desc[EMMC_MULTI_MAX * 512u / EMMC_DMA_SEG][EMMC_DESC_WORDS]
 +    __attribute__((aligned(128)));
 +static int emmc_dma = -1;
-+static unsigned emmc_dma_checks, emmc_dma_errors;
++static unsigned emmc_dma_checks;
 +uint64_t xcover5_emmc_dma_reads;
++/* Heartbeat: DMA on, errors, PIO checks left, last error. */
++int xcover5_emmc_dma_on;
++unsigned emmc_dma_errors, xcover5_emmc_dma_checks_left;
++int xcover5_emmc_dma_last_error;
 +
 +/* The device does not snoop: clean and invalidate to the point of coherency. */
 +static void
@@ -303,6 +307,9 @@ index ffd011a..eef4f6e 100644
 +
 +	if (nblk < 2 || nblk > EMMC_MULTI_MAX || buf_pa == 0 || desc_pa == 0 ||
 +	    !(emmc_rd(EMMC_HCON) & HCON_ADDR64)) {
++		/* Boot 40: dma=0 for the whole boot; say why. */
++		printf("XC5 eMMC: no DMA n=%u hcon=%x buf=0x%llx desc=0x%llx\n", nblk,
++		    emmc_rd(EMMC_HCON), buf_pa, desc_pa);
 +		return ENXIO;
 +	}
 +	if ((uint64_t)lba < emmc_first_lba ||
@@ -413,6 +420,8 @@ index ffd011a..eef4f6e 100644
 +		printf("XC5 eMMC: DMA reads %s, hcon=%x\n", emmc_dma ? "on" : "off",
 +		    emmc_rd(EMMC_HCON));
 +	}
++	xcover5_emmc_dma_on = emmc_dma;
++	xcover5_emmc_dma_checks_left = emmc_dma_checks;
 +	if (emmc_dma && nblk > 1) {
 +		int error = emmc_dma_read(lba, nblk);
 +		if (!error) {
@@ -438,6 +447,7 @@ index ffd011a..eef4f6e 100644
 +			memcpy(dst, emmc_multi_buf, nblk * 512u);
 +			return 0;
 +		}
++		xcover5_emmc_dma_last_error = error;
 +		if (++emmc_dma_errors >= 3) {
 +			printf("XC5 eMMC: 3 DMA errors, DMA off\n");
 +			emmc_dma = 0;
@@ -454,7 +464,7 @@ index ffd011a..eef4f6e 100644
  static uint32_t
  emmc_le32(const uint8_t *p)
  {
-@@ -326,6 +743,20 @@ emmc_crc32(uint32_t crc, const uint8_t *data, size_t len)
+@@ -326,6 +753,20 @@ emmc_crc32(uint32_t crc, const uint8_t *data, size_t len)
  	return crc;
  }
  
@@ -475,7 +485,7 @@ index ffd011a..eef4f6e 100644
  static int
  emmc_find_root_partition(void)
  {
-@@ -381,16 +812,16 @@ emmc_find_root_partition(void)
+@@ -381,16 +822,16 @@ emmc_find_root_partition(void)
  			const uint8_t *p = entry + j * 128;
  			bool match = true;
  			bool system_match = true;
@@ -495,7 +505,7 @@ index ffd011a..eef4f6e 100644
  				    p[57 + k * 2] != 0) {
  					system_match = false;
  					break;
-@@ -418,12 +849,29 @@ emmc_find_root_partition(void)
+@@ -418,12 +859,29 @@ emmc_find_root_partition(void)
  		return EIO;
  	}
  	if (emmc_log_first_lba == emmc_first_lba && emmc_log_nsectors &&
@@ -527,7 +537,7 @@ index ffd011a..eef4f6e 100644
  		return ENXIO;
  	}
  	int enable_write = 0;
-@@ -446,7 +894,7 @@ emmc_map_host(void)
+@@ -446,7 +904,7 @@ emmc_map_host(void)
  	}
  	if (SecureDTLookupEntry(NULL, "/a5xelte-emmc", &node) != kSuccess ||
  	    SecureDTGetProperty(node, "reg", (void const **)&reg, &size) != kSuccess ||
@@ -536,7 +546,7 @@ index ffd011a..eef4f6e 100644
  		printf("A5XELTE eMMC: missing or unexpected ADT register window\n");
  		return ENXIO;
  	}
-@@ -464,6 +912,15 @@ emmc_map_host(void)
+@@ -464,6 +922,15 @@ emmc_map_host(void)
  void
  a5xelte_emmc_probe(void)
  {
@@ -552,7 +562,7 @@ index ffd011a..eef4f6e 100644
  	if (!emmc_map_host()) {
  		(void)emmc_find_root_partition();
  	}
-@@ -518,6 +975,30 @@ emmc_strategy(buf_t bp)
+@@ -518,6 +985,30 @@ emmc_strategy(buf_t bp)
  		uint32_t skip = pos & 511u;
  		uint32_t take = MIN(count - n, 512u - skip);
  		uint32_t lba = (uint32_t)(emmc_first_lba + pos / 512u);
@@ -583,7 +593,7 @@ index ffd011a..eef4f6e 100644
  		if (buf_flags(bp) & B_READ) {
  			error = emmc_read_sector(lba, emmc_bounce);
  			if (!error) {
-@@ -573,10 +1054,19 @@ emmc_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
+@@ -573,10 +1064,19 @@ emmc_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
  		*(uint32_t *)data = emmc_writable ? 1 : 0;
  		return 0;
  	case DKIOCGETMAXBLOCKCOUNTREAD:
@@ -603,7 +613,7 @@ index ffd011a..eef4f6e 100644
  		return 0;
  	case DKIOCGETMAXSEGMENTCOUNTREAD:
  	case DKIOCGETMAXSEGMENTCOUNTWRITE:
-@@ -702,7 +1192,7 @@ emmc_log_start(void)
+@@ -702,7 +1202,7 @@ emmc_log_start(void)
  		return;
  	}
  	emmc_log_enabled = true;
@@ -1242,10 +1252,10 @@ index d11fe26..6f5de61 100644
  	    arg0, in_scalars, in_struct, out_scalars, out_struct, ret);
  	return ret;
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-index 193845f..6c309bb 100644
+index 193845f..5c9b90f 100644
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -22,6 +22,62 @@ public:
+@@ -22,6 +22,66 @@ public:
  
  OSDefineMetaClassAndStructors(SweetPlatformExpert, IODTPlatformExpert);
  
@@ -1256,6 +1266,8 @@ index 193845f..6c309bb 100644
 +extern "C" {
 +uint32_t xcover5_klog_size(void);
 +extern uint64_t xcover5_emmc_reads, xcover5_emmc_writes, xcover5_emmc_dma_reads;
++extern int xcover5_emmc_dma_on, xcover5_emmc_dma_last_error;
++extern unsigned emmc_dma_errors, xcover5_emmc_dma_checks_left;
 +extern uint64_t xcover5_fb_swaps, xcover5_fb_presents, xcover5_fb_vsyncs;
 +extern int xcover5_fb_off;
 +void a5xelte_gic_diagnostics(unsigned int logical, const char *stage);
@@ -1293,6 +1305,8 @@ index 193845f..6c309bb 100644
 +		    xcover5_emmc_dma_reads, xcover5_emmc_writes, xcover5_fb_swaps, xcover5_fb_presents,
 +		    xcover5_fb_vsyncs, xcover5_fb_off);
 +		xcover5_cpu_report();
++		IOLog("XC5 dma on=%d err=%u last=%d checks=%u\n", xcover5_emmc_dma_on,
++		    emmc_dma_errors, xcover5_emmc_dma_last_error, xcover5_emmc_dma_checks_left);
 +		IOLog("XC5 aks sel7=%u sel8=%u sel26=%u sel27=%u sel17=%u throttle=%d\n",
 +		    xcover5_aks_calls[7], xcover5_aks_calls[8], xcover5_aks_calls[26],
 +		    xcover5_aks_calls[27], xcover5_aks_calls[17], lowpri_throttle_enabled);
@@ -1308,7 +1322,7 @@ index 193845f..6c309bb 100644
  bool
  SweetPlatformExpert::start(IOService *provider)
  {
-@@ -36,6 +92,16 @@ SweetPlatformExpert::start(IOService *provider)
+@@ -36,6 +96,16 @@ SweetPlatformExpert::start(IOService *provider)
  	registerService();
  #if defined(A5XELTE)
  	IOLog("A5XELTE: platform expert registered\n");
