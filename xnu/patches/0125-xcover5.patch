@@ -1,5 +1,5 @@
 diff --git a/bsd/dev/a5xelte_emmc.c b/bsd/dev/a5xelte_emmc.c
-index ffd011a..54ced88 100644
+index ffd011a..eef4f6e 100644
 --- a/bsd/dev/a5xelte_emmc.c
 +++ b/bsd/dev/a5xelte_emmc.c
 @@ -22,6 +22,7 @@
@@ -41,7 +41,7 @@ index ffd011a..54ced88 100644
  	if ((emmc_rd(EMMC_CLKSEL) >> 16) & 7u) {
  		command |= CMD_HOLD;
  	}
-@@ -301,6 +312,200 @@ out:
+@@ -301,6 +312,412 @@ out:
  	return error;
  }
  
@@ -237,12 +237,224 @@ index ffd011a..54ced88 100644
 +	emmc_wr(EMMC_INTMASK, ints);
 +	return error;
 +}
++
++#define EMMC_BMOD       0x080u
++#define EMMC_PLDMND     0x084u
++#define EMMC_DBADDRL    0x088u
++#define EMMC_DBADDRU    0x08cu
++#define EMMC_IDSTS      0x090u
++#define EMMC_IDINTEN    0x094u
++#define CTRL_DMA_RESET  (1u << 2)
++#define BMOD_SWR        (1u << 0)
++#define BMOD_FB         (1u << 1)
++#define BMOD_DE         (1u << 7)
++#define IDSTS_RI        (1u << 1)
++#define IDSTS_ERRORS    ((1u << 2) | (1u << 4) | (1u << 5) | (1u << 9)) /* FBE DU CES AIS */
++#define DES0_OWN        (1u << 31)
++#define DES0_CH         (1u << 4)
++#define DES0_FS         (1u << 3)
++#define DES0_LD         (1u << 2)
++#define DES0_DIC        (1u << 1)
++#define HCON_ADDR64     (1u << 27)
++#define EMMC_DMA_SEG    4096u
++#define EMMC_DESC_WORDS 32u
++extern uint64_t kvtophys(vm_offset_t va);
++static uint32_t emmc_desc[EMMC_MULTI_MAX * 512u / EMMC_DMA_SEG][EMMC_DESC_WORDS]
++    __attribute__((aligned(128)));
++static int emmc_dma = -1;
++static unsigned emmc_dma_checks, emmc_dma_errors;
++uint64_t xcover5_emmc_dma_reads;
++
++/* The device does not snoop: clean and invalidate to the point of coherency. */
++static void
++emmc_dcache_flush(const void *p, size_t len)
++{
++	uintptr_t a = (uintptr_t)p & ~(uintptr_t)63, end = (uintptr_t)p + len;
++	__asm__ volatile ("dsb sy" ::: "memory");
++	for (; a < end; a += 64) {
++		__asm__ volatile ("dc civac, %0" :: "r"(a) : "memory");
++	}
++	__asm__ volatile ("dsb sy" ::: "memory");
++}
++
++static int
++emmc_wait_clear(uint32_t off, uint32_t bits)
++{
++	for (unsigned i = 0; i < 1000000; i++) {
++		if (!(emmc_rd(off) & bits)) {
++			return 0;
++		}
++	}
++	return ETIMEDOUT;
++}
++
++/* nblk (> 1) sectors at lba into emmc_multi_buf by IDMAC. */
++static int
++emmc_dma_read(uint32_t lba, uint32_t nblk)
++{
++	uint32_t ctrl = emmc_rd(EMMC_CTRL);
++	uint32_t ints = emmc_rd(EMMC_INTMASK);
++	uint32_t bytes = nblk * 512u;
++	uint32_t nseg = (bytes + EMMC_DMA_SEG - 1) / EMMC_DMA_SEG;
++	uint64_t buf_pa = kvtophys((vm_offset_t)emmc_multi_buf);
++	uint64_t desc_pa = kvtophys((vm_offset_t)emmc_desc);
++	uint32_t pending = 0, idsts = 0;
++	int error = 0;
++
++	if (nblk < 2 || nblk > EMMC_MULTI_MAX || buf_pa == 0 || desc_pa == 0 ||
++	    !(emmc_rd(EMMC_HCON) & HCON_ADDR64)) {
++		return ENXIO;
++	}
++	if ((uint64_t)lba < emmc_first_lba ||
++	    (uint64_t)lba + nblk > emmc_first_lba + emmc_nsectors) {
++		return EINVAL;
++	}
++	if (emmc_wait_idle()) {
++		return EBUSY;
++	}
++	bzero(emmc_desc, nseg * sizeof(emmc_desc[0]));
++	for (uint32_t i = 0; i < nseg; i++) {
++		uint32_t *d = emmc_desc[i];
++		uint64_t a = buf_pa + (uint64_t)i * EMMC_DMA_SEG;
++		uint64_t next = i + 1 < nseg ? desc_pa + (uint64_t)(i + 1) * sizeof(emmc_desc[0]) : 0;
++		d[0] = DES0_OWN | DES0_CH | DES0_DIC | (i == 0 ? DES0_FS : 0) |
++		    (i + 1 == nseg ? DES0_LD : 0);
++		d[2] = MIN(EMMC_DMA_SEG, bytes - i * EMMC_DMA_SEG);
++		d[4] = (uint32_t)a;
++		d[5] = (uint32_t)(a >> 32);
++		d[6] = (uint32_t)next;
++		d[7] = (uint32_t)(next >> 32);
++	}
++	emmc_dcache_flush(emmc_desc, nseg * sizeof(emmc_desc[0]));
++	emmc_dcache_flush(emmc_multi_buf, bytes);
++
++	emmc_wr(EMMC_INTMASK, 0);
++	emmc_wr(EMMC_CTRL, (ctrl & ~(CTRL_INT_ENABLE | CTRL_DMA_ENABLE | CTRL_USE_IDMAC)) |
++	    CTRL_FIFO_RESET | CTRL_DMA_RESET);
++	if (emmc_wait_clear(EMMC_CTRL, CTRL_FIFO_RESET | CTRL_DMA_RESET)) {
++		error = ETIMEDOUT;
++		goto out;
++	}
++	emmc_wr(EMMC_BMOD, BMOD_SWR);
++	if (emmc_wait_clear(EMMC_BMOD, BMOD_SWR)) {
++		error = ETIMEDOUT;
++		goto out;
++	}
++	emmc_wr(EMMC_IDSTS, 0xffffffffu);
++	emmc_wr(EMMC_IDINTEN, 0);
++	emmc_wr(EMMC_DBADDRL, (uint32_t)desc_pa);
++	emmc_wr(EMMC_DBADDRU, (uint32_t)(desc_pa >> 32));
++	emmc_wr(EMMC_CTRL, emmc_rd(EMMC_CTRL) | CTRL_USE_IDMAC | CTRL_DMA_ENABLE);
++	emmc_wr(EMMC_BMOD, BMOD_DE | BMOD_FB);
++
++	emmc_wr(EMMC_TMOUT, 0x573177ffu);
++	emmc_wr(EMMC_BLKSIZ, 512);
++	emmc_wr(EMMC_BYTCNT, bytes);
++	emmc_wr(EMMC_RINTSTS, 0xffffffffu);
++	emmc_wr(EMMC_CMDARG, lba);
++	uint32_t command = CMD_START | CMD_WAIT_DATA | CMD_DATA | CMD_RESP_CRC | CMD_RESP |
++	    CMD_SEND_STOP | 18u;
++	if ((emmc_rd(EMMC_CLKSEL) >> 16) & 7u) {
++		command |= CMD_HOLD;
++	}
++	emmc_wr(EMMC_CMD, command);
++	emmc_wr(EMMC_PLDMND, 1);
++	xcover5_emmc_reads += nblk;
++
++	uint64_t limit = 4000000ull + 400000ull * nblk;
++	for (uint64_t i = 0;; i++) {
++		pending = emmc_rd(EMMC_RINTSTS);
++		idsts = emmc_rd(EMMC_IDSTS);
++		if ((pending & INT_ERRORS & ~INT_HTO) || (idsts & IDSTS_ERRORS)) {
++			error = EIO;
++			goto out;
++		}
++		if ((pending & INT_DATA_OVER) && (pending & INT_CMD_DONE) && (idsts & IDSTS_RI)) {
++			break;
++		}
++		if (i == limit) {
++			error = ETIMEDOUT;
++			goto out;
++		}
++	}
++	for (unsigned i = 0; i < 1000000; i++) {
++		if (emmc_rd(EMMC_RINTSTS) & INT_ACD) {
++			break;
++		}
++	}
++	error = emmc_wait_idle();
++out:
++	if (error) {
++		printf("XC5 eMMC: DMA read error %d lba=%u n=%u rint=%x idsts=%x bmod=%x ctrl=%x\n",
++		    error, lba, nblk, pending, idsts, emmc_rd(EMMC_BMOD), emmc_rd(EMMC_CTRL));
++	}
++	emmc_wr(EMMC_BMOD, 0);
++	emmc_wr(EMMC_CTRL, (emmc_rd(EMMC_CTRL) & ~(CTRL_USE_IDMAC | CTRL_DMA_ENABLE)) |
++	    CTRL_FIFO_RESET | CTRL_DMA_RESET);
++	(void)emmc_wait_clear(EMMC_CTRL, CTRL_FIFO_RESET | CTRL_DMA_RESET);
++	emmc_wr(EMMC_IDSTS, 0xffffffffu);
++	if (error) {
++		emmc_stop_transmission();
++	}
++	emmc_dcache_flush(emmc_multi_buf, bytes);
++	emmc_wr(EMMC_RINTSTS, 0xffffffffu);
++	emmc_wr(EMMC_INTMASK, ints);
++	return error;
++}
++
++/* nblk sectors at lba into dst: DMA when on, PIO otherwise. */
++static int
++emmc_read_blocks(uint32_t lba, uint32_t nblk, caddr_t dst)
++{
++	if (emmc_dma < 0) {
++		emmc_dma = 1;
++		(void)PE_parse_boot_argn("xc5dma", &emmc_dma, sizeof(emmc_dma));
++		emmc_dma_checks = 64;
++		printf("XC5 eMMC: DMA reads %s, hcon=%x\n", emmc_dma ? "on" : "off",
++		    emmc_rd(EMMC_HCON));
++	}
++	if (emmc_dma && nblk > 1) {
++		int error = emmc_dma_read(lba, nblk);
++		if (!error) {
++			memcpy(dst, emmc_multi_buf, nblk * 512u);
++			xcover5_emmc_dma_reads += nblk;
++			if (emmc_dma_checks == 0) {
++				return 0;
++			}
++			/* Read it again by PIO and compare. */
++			emmc_dma_checks--;
++			error = emmc_xfer_blocks(lba, nblk, false);
++			if (error) {
++				return error;
++			}
++			if (memcmp(dst, emmc_multi_buf, nblk * 512u) == 0) {
++				if (emmc_dma_checks == 0) {
++					printf("XC5 eMMC: 64 DMA reads matched PIO, checks off\n");
++				}
++				return 0;
++			}
++			printf("XC5 eMMC: DMA read differs from PIO at lba=%u n=%u, DMA off\n", lba, nblk);
++			emmc_dma = 0;
++			memcpy(dst, emmc_multi_buf, nblk * 512u);
++			return 0;
++		}
++		if (++emmc_dma_errors >= 3) {
++			printf("XC5 eMMC: 3 DMA errors, DMA off\n");
++			emmc_dma = 0;
++		}
++	}
++	int error = emmc_xfer_blocks(lba, nblk, false);
++	if (!error) {
++		memcpy(dst, emmc_multi_buf, nblk * 512u);
++	}
++	return error;
++}
 +#endif
 +
  static uint32_t
  emmc_le32(const uint8_t *p)
  {
-@@ -326,6 +531,20 @@ emmc_crc32(uint32_t crc, const uint8_t *data, size_t len)
+@@ -326,6 +743,20 @@ emmc_crc32(uint32_t crc, const uint8_t *data, size_t len)
  	return crc;
  }
  
@@ -263,7 +475,7 @@ index ffd011a..54ced88 100644
  static int
  emmc_find_root_partition(void)
  {
-@@ -381,16 +600,16 @@ emmc_find_root_partition(void)
+@@ -381,16 +812,16 @@ emmc_find_root_partition(void)
  			const uint8_t *p = entry + j * 128;
  			bool match = true;
  			bool system_match = true;
@@ -283,7 +495,7 @@ index ffd011a..54ced88 100644
  				    p[57 + k * 2] != 0) {
  					system_match = false;
  					break;
-@@ -418,12 +637,29 @@ emmc_find_root_partition(void)
+@@ -418,12 +849,29 @@ emmc_find_root_partition(void)
  		return EIO;
  	}
  	if (emmc_log_first_lba == emmc_first_lba && emmc_log_nsectors &&
@@ -315,7 +527,7 @@ index ffd011a..54ced88 100644
  		return ENXIO;
  	}
  	int enable_write = 0;
-@@ -446,7 +682,7 @@ emmc_map_host(void)
+@@ -446,7 +894,7 @@ emmc_map_host(void)
  	}
  	if (SecureDTLookupEntry(NULL, "/a5xelte-emmc", &node) != kSuccess ||
  	    SecureDTGetProperty(node, "reg", (void const **)&reg, &size) != kSuccess ||
@@ -324,7 +536,7 @@ index ffd011a..54ced88 100644
  		printf("A5XELTE eMMC: missing or unexpected ADT register window\n");
  		return ENXIO;
  	}
-@@ -464,6 +700,15 @@ emmc_map_host(void)
+@@ -464,6 +912,15 @@ emmc_map_host(void)
  void
  a5xelte_emmc_probe(void)
  {
@@ -340,7 +552,7 @@ index ffd011a..54ced88 100644
  	if (!emmc_map_host()) {
  		(void)emmc_find_root_partition();
  	}
-@@ -518,6 +763,33 @@ emmc_strategy(buf_t bp)
+@@ -518,6 +975,30 @@ emmc_strategy(buf_t bp)
  		uint32_t skip = pos & 511u;
  		uint32_t take = MIN(count - n, 512u - skip);
  		uint32_t lba = (uint32_t)(emmc_first_lba + pos / 512u);
@@ -352,10 +564,7 @@ index ffd011a..54ced88 100644
 +		if (emmc_multi && skip == 0 && count - n >= 512u) {
 +			uint32_t nb = MIN((count - n) / 512u, EMMC_MULTI_MAX);
 +			if (buf_flags(bp) & B_READ) {
-+				error = emmc_xfer_blocks(lba, nb, false);
-+				if (!error) {
-+					memcpy(vaddr + n, emmc_multi_buf, nb * 512u);
-+				}
++				error = emmc_read_blocks(lba, nb, vaddr + n);
 +			} else {
 +				memcpy(emmc_multi_buf, vaddr + n, nb * 512u);
 +				error = emmc_xfer_blocks(lba, nb, true);
@@ -374,7 +583,7 @@ index ffd011a..54ced88 100644
  		if (buf_flags(bp) & B_READ) {
  			error = emmc_read_sector(lba, emmc_bounce);
  			if (!error) {
-@@ -573,10 +845,19 @@ emmc_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
+@@ -573,10 +1054,19 @@ emmc_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
  		*(uint32_t *)data = emmc_writable ? 1 : 0;
  		return 0;
  	case DKIOCGETMAXBLOCKCOUNTREAD:
@@ -394,7 +603,7 @@ index ffd011a..54ced88 100644
  		return 0;
  	case DKIOCGETMAXSEGMENTCOUNTREAD:
  	case DKIOCGETMAXSEGMENTCOUNTWRITE:
-@@ -702,7 +983,7 @@ emmc_log_start(void)
+@@ -702,7 +1192,7 @@ emmc_log_start(void)
  		return;
  	}
  	emmc_log_enabled = true;
@@ -1033,7 +1242,7 @@ index d11fe26..6f5de61 100644
  	    arg0, in_scalars, in_struct, out_scalars, out_struct, ret);
  	return ret;
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-index 193845f..f81ca95 100644
+index 193845f..6c309bb 100644
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
 @@ -22,6 +22,62 @@ public:
@@ -1046,7 +1255,7 @@ index 193845f..f81ca95 100644
 +#include <kern/clock.h>
 +extern "C" {
 +uint32_t xcover5_klog_size(void);
-+extern uint64_t xcover5_emmc_reads, xcover5_emmc_writes;
++extern uint64_t xcover5_emmc_reads, xcover5_emmc_writes, xcover5_emmc_dma_reads;
 +extern uint64_t xcover5_fb_swaps, xcover5_fb_presents, xcover5_fb_vsyncs;
 +extern int xcover5_fb_off;
 +void a5xelte_gic_diagnostics(unsigned int logical, const char *stage);
@@ -1078,10 +1287,10 @@ index 193845f..f81ca95 100644
 +	xcover5_timer_state("after 200ms busy");
 +	for (unsigned n = 1;; n++) {
 +		IOSleep(5000);
-+		IOLog("XC5 heartbeat %u t=%llu klog=%u emmc rd=%llu wr=%llu "
++		IOLog("XC5 heartbeat %u t=%llu klog=%u emmc rd=%llu dma=%llu wr=%llu "
 +		    "fb swap=%llu present=%llu vsync=%llu off=%d\n", n,
 +		    mach_absolute_time(), xcover5_klog_size(), xcover5_emmc_reads,
-+		    xcover5_emmc_writes, xcover5_fb_swaps, xcover5_fb_presents,
++		    xcover5_emmc_dma_reads, xcover5_emmc_writes, xcover5_fb_swaps, xcover5_fb_presents,
 +		    xcover5_fb_vsyncs, xcover5_fb_off);
 +		xcover5_cpu_report();
 +		IOLog("XC5 aks sel7=%u sel8=%u sel26=%u sel27=%u sel17=%u throttle=%d\n",
