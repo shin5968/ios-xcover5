@@ -1390,7 +1390,7 @@ index f2489bd..7d90710 100644
  	}
  #endif
 diff --git a/osfmk/vm/vm_kern.c b/osfmk/vm/vm_kern.c
-index 54edb01..bead22e 100644
+index 54edb01..e37236f 100644
 --- a/osfmk/vm/vm_kern.c
 +++ b/osfmk/vm/vm_kern.c
 @@ -3527,6 +3527,12 @@ kmem_add_extra_claims(void)
@@ -1401,7 +1401,7 @@ index 54edb01..bead22e 100644
 +	kprintf("XC5 kmem: largest free 0x%llx of map 0x%llx-0x%llx, mem 0x%llx\n",
 +	    (uint64_t)largest_free_size, (uint64_t)kernel_map->min_offset,
 +	    (uint64_t)kernel_map->max_offset, (uint64_t)sane_size);
-+	largest_free_size -= trunc_page(largest_free_size / 16);
++	largest_free_size -= trunc_page(largest_free_size / 2);
 +#endif
  
  	/*

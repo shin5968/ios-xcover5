@@ -1246,8 +1246,10 @@ edit('bsd/dev/a5xelte_emmc.c', [
 # Boot 33: with 1496 MiB of RAM, kmem_range_init panicked placing
 # kmem_ptr_range_meta. The claims add up to exactly the largest free hole
 # of kernel_map, but are laid out from a fuzzed start, so the last one can
-# run out. Leave 1/16 of the hole unclaimed (the data range shrinks; the
-# kernel VA is over 100 GiB) and log the sizes.
+# run out. Boot 36 with 1/16 left free: largest hole 0xb97dfc000 (46 GiB)
+# of 112 GiB, now the compressor claim failed: claims that skip ahead into
+# the big hole leave smaller holes behind them unused. Size the ranges
+# from half of the hole (the data range shrinks to about 20 GiB) and log.
 edit('osfmk/vm/vm_kern.c', [
     ('\tvm_map_sizes(kernel_map, NULL, NULL, &largest_free_size);\n'
      '\tlargest_free_size = trunc_page(largest_free_size);\n',
@@ -1257,7 +1259,7 @@ edit('osfmk/vm/vm_kern.c', [
      '\tkprintf("XC5 kmem: largest free 0x%llx of map 0x%llx-0x%llx, mem 0x%llx\\n",\n'
      '\t    (uint64_t)largest_free_size, (uint64_t)kernel_map->min_offset,\n'
      '\t    (uint64_t)kernel_map->max_offset, (uint64_t)sane_size);\n'
-     '\tlargest_free_size -= trunc_page(largest_free_size / 16);\n'
+     '\tlargest_free_size -= trunc_page(largest_free_size / 2);\n'
      '#endif\n', 1),
 ])
 
