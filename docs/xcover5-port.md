@@ -154,6 +154,10 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   이 부팅은 잠금 해제가 안 됐지만 같은 이미지로 다시 부팅하니 됨 → 잠금 해제 실패는 간헐적(원인 미확인).
 - 부팅 43 (CI run 41836897933, 영상 20261104_223221): **eMMC DMA 동작.** `XC5 dma on=1 err=0 last=0 checks=0`
   (PIO 비교 64회 모두 일치), heartbeat 26에서 `rd=4116858 dma=4115440`(읽기 거의 전부 DMA). 홈 화면 정상.
+- 부팅 44 (GPU 0단계 `xc5gpu=2`, CI run 41841584580, 영상 20261104_230341): `pd-g3d config=1 status=1 (on)`,
+  **GPU_ID 0x72120000(Mali-G52)**, L2_FEATURES 0x7100206, TILER_FEATURES 0x809, MEM_FEATURES 1, MMU_FEATURES 0x2830
+  (VA 48, PA 40비트), AS_PRESENT 0xff, JS_PRESENT 7, 셰이더 1 / 타일러 1 / L2 1, ready 0/0/0, COHERENCY_FEATURES 0.
+  → S-Boot가 G3D 전원과 클럭을 켜 둠(1단계 불필요). 코어는 꺼진 상태. 다음: 2단계(`xc5gpu=3`, CI run 41844382570).
 
 ## S8 포트와 다른 점
 
