@@ -32,6 +32,29 @@ GPU 축소로 "훨씬 부드러움", CPU 유휴 7-22 %. 해결해야 했던 문�
 해제), P3 색 공간(ADT `artwork-display-gamut = "sRGB"`), 다른 프로세스가 CPU로 그린 IOSurface의 캐시 정리
 (Mali가 IO 일관성이 없음), 부트로더가 DECON 화소 클럭을 26 MHz로 남겨 실제 20 Hz였던 것.
 
+### 다른 Mali 사례 (2026-11-04 조사, 각 저장소의 자기 보고)
+
+| 저장소 | 기기 / GPU | 경로 | 보고된 결과 |
+| --- | --- | --- | --- |
+| `Luminous418/hakios-a32` (MIT) | Galaxy A32 4G, **Mali-G52 MC2** (Bifrost) | 커널 `hakios.mali.c` + IOKit `hakios.mali.cpp`(panfrost DRM 인터페이스 그대로), Mesa 25.0.7 panfrost, `libhakios.gl`(GLES) | CoreAnimation이 GPU로: 21,729 job chain 0 실패, 21-31 fps(소프트웨어 10-14), 5분 사용에 respring 없음. Metal(`RedwoodMetal.bundle`, AIR→NIR)로도 홈 화면 ~26 fps |
+| `stormtroopxyz/y2sios` (MIT) | Galaxy S20+, Mali-G77 | `libredwoodair`(AIR→NIR) + `RedwoodMetal.bundle` + Mesa | GPU 동작, Metal은 보류(함수 상수 문제) |
+| `txorav/m20lte-y2sios` | Galaxy M20, Exynos 7904 | y2sios 이식 | GPU 동작 보고 |
+| `Nik300/viva-gpu` | Mali-G57 | Mesa panfrost + AIR→NIR Metal 드라이버 | 진행 중 |
+| `Dracen-W/MaliMetal` (GPL-2.0) | Mali-G52 (MT6768) | Metal 프런트엔드 + metal2vulkan | 진행 중 |
+| `Ken-u/MaliMetal` | Mali-G610 (RK3588) | PanVK + metal2vulkan + backboardd 플러그인 | 진행 중 |
+| `steelbrain/metal2vulkan` | (GPU 무관) | Metal 셰이더 → Vulkan, Vulkan 위의 Metal 장치 API | 라이브러리 |
+| `Scion-Project/hackios-xnu-kernel` | Galaxy S9, Mali-G72 | Mesa panfrost, "Metal through panfrost" | 진행 중 |
+
+A32 문서에서 바로 쓸 교훈(같은 G52):
+- 전원 순서(그쪽은 MediaTek): mux → 전원 도메인 → 클럭 게이트 → soft reset → L2/타일러/셰이더 → identity 모드 작업 →
+  페이지 테이블 작업. 6단계 로그 방식을 그대로 따른다.
+- Mesa 25 panfrost를 iOS에서 쓸 때 필요한 수정(y2sios에서 옴): `pan_kmod_bo_mmap`이 BO 전체를 매핑하고
+  `bo_offset`을 더할 것(안 하면 job이 0x40 어긋나 `DATA_INVALID_FAULT`), BO 캐시의 매핑을 해제하지 말 것
+  (`panfrost-keepmap`), BO 캐시 유지(`retain`, 64 MB), 타일러 힙 지연 생성 32 MB(`lazy-heap`).
+- GLES 경로의 한계: 배경화면(wallpaper)은 Metal이 그리는 것이라 GLES 경로에서는 빠짐.
+- Mesa 문서 기준 G52는 OpenGL ES 3.1 **적합성 인증**(conformant)을 받았고, PanVK(Vulkan)은 Bifrost에서 "지원"이지만
+  인증은 G610뿐이다.
+
 ## 3. XCover5 하드웨어 (순정 DT `research/bootdtb_0.dts`)
 
 - GPU: `mali@11500000`, 크기 0x5000, `compatible = "arm,mali"`. **Mali-G52**(Bifrost, Job Manager 방식).
