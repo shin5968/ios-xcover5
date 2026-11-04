@@ -137,6 +137,13 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
 - 부팅 35 (2026-11-04, `xc5-ios-smp8-console.tar`: cpus=8, 1 GiB, CI run 41811040652, 영상 20261104_193551):
   클러스터 1(MPIDR 0x10000-0x10300)을 키 0x001-0x301로 기동. heartbeat에 cpu0-cpu7 모두 타이머/IPI 수가 늘고
   작업을 실행(locationd, ReportCrash, vmd 등). **8코어로 홈 화면 도달, 시계 4:02→4:04 갱신.** (UI가 한국어로 표시됨.)
+- 4 GiB 전체: RAM이 두 뱅크(0x80000000, 0x880000000)로 나뉘고 하위 뱅크에 모뎀/GNSS/EL3/fb 예약 영역이 있으며
+  XNU는 연속 영역 하나만 받음 → 연속 최대는 MFC 위 1496 MiB.
+- 부팅 36-38 (1496 MiB): `kmem_range_init` 패닉. kmem claim을 1/16, 1/2로 줄이고 가장 큰 구멍(0xfffffff068000000,
+  46 GiB)부터 배치해도 매번 다른 claim(compressor, data, ptr_range_meta)에서 실패. 절반 크기 커널은 1 GiB에서도 실패.
+  → 공간 부족이 아님. 원래 배치로 되돌리고 패닉에 claim 크기/힌트/kr/전체 목록을 출력(CI run 41823429418).
+- 같은 커널: locationd/WirelessRadioManagerd exec 거부(`xc5noexec=0`으로 해제), eMMC 명령당 256 KiB,
+  이미지에 `sweetfb_hz=24`. BearSSL은 bearssl.org 502로 `xnu/patches/vendor/`에 사본을 넣어 CI에서 사용.
 
 ## S8 포트와 다른 점
 
