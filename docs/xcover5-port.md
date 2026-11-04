@@ -152,6 +152,8 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
 - 부팅 42 (CI run 41834474116): 여전히 `err=3 last=60`, `rint=402c ids=0 tbb=1000` → 전송은 끝나고 IDSTS만 0.
   완료 판정을 DTO+CMD done+TBBCNT=전체+디스크립터 OWN 반환으로 변경(CI run 41836897933).
   이 부팅은 잠금 해제가 안 됐지만 같은 이미지로 다시 부팅하니 됨 → 잠금 해제 실패는 간헐적(원인 미확인).
+- 부팅 43 (CI run 41836897933, 영상 20261104_223221): **eMMC DMA 동작.** `XC5 dma on=1 err=0 last=0 checks=0`
+  (PIO 비교 64회 모두 일치), heartbeat 26에서 `rd=4116858 dma=4115440`(읽기 거의 전부 DMA). 홈 화면 정상.
 
 ## S8 포트와 다른 점
 
