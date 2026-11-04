@@ -130,6 +130,10 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
 - 부팅 33 (`*-1g5`, 1496 MiB): 92726 페이지 초기화 후 패닉 `kmem_range_init: vm_map_locate_space failing for claim
   kmem_ptr_range_meta @vm_kern.c:3645` → 4K 페이지 A5XELTE 커널의 커널 가상 주소 공간이 이 RAM 크기에 비해 작음.
   다음 시험: 1 GiB(`0x8a2800000:0x40000000`) 이미지 `xc5-ios-smp4-1g*`.
+- 부팅 34 (2026-11-04, `xc5-ios-smp4-1g-console.tar`: cpus=4, dualq, 1 GiB, CI run 41653549707 커널, 영상
+  20261104_185032): **4코어로 잠금화면 → 밀어서 홈 화면(Photos/App Store/Settings) → 제어 센터까지 동작**
+  (배터리 100% 충전 표시). 4코어 문제는 세 가지가 겹친 것: 보조 코어 PAN, clutch 스케줄러의 기아,
+  512 MiB RAM에서 페이지 스래싱(eMMC 잠금 대기). locationd/WirelessRadioManager 크래시 반복은 그대로(GPS/모뎀 없음).
 
 ## S8 포트와 다른 점
 
