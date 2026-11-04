@@ -127,6 +127,9 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   backboardd tid 304가 `lck_mtx_lock_contended ← emmc_strategy`(eMMC 잠금 대기). emmc rd가 heartbeat 36→56(100 s)
   동안 7.33M→11.70M 섹터(약 22 MB/s 연속 읽기, cpus=1 부팅 24는 heartbeat 70까지 총 5.9M) → 512 MiB RAM에서 페이지
   스래싱으로 추정. 시험: `XC5_DRAM=0x8a2800000:0x5d800000`(MFC 영역 위 1496 MiB) 이미지 `*-1g5`.
+- 부팅 33 (`*-1g5`, 1496 MiB): 92726 페이지 초기화 후 패닉 `kmem_range_init: vm_map_locate_space failing for claim
+  kmem_ptr_range_meta @vm_kern.c:3645` → 4K 페이지 A5XELTE 커널의 커널 가상 주소 공간이 이 RAM 크기에 비해 작음.
+  다음 시험: 1 GiB(`0x8a2800000:0x40000000`) 이미지 `xc5-ios-smp4-1g*`.
 
 ## S8 포트와 다른 점
 
