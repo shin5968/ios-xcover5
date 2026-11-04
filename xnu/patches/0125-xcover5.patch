@@ -1390,10 +1390,10 @@ index f2489bd..7d90710 100644
  	}
  #endif
 diff --git a/osfmk/vm/vm_kern.c b/osfmk/vm/vm_kern.c
-index 54edb01..a76aa8c 100644
+index 54edb01..dd87aca 100644
 --- a/osfmk/vm/vm_kern.c
 +++ b/osfmk/vm/vm_kern.c
-@@ -3527,6 +3527,12 @@ kmem_add_extra_claims(void)
+@@ -3527,6 +3527,11 @@ kmem_add_extra_claims(void)
  
  	vm_map_sizes(kernel_map, NULL, NULL, &largest_free_size);
  	largest_free_size = trunc_page(largest_free_size);
@@ -1401,39 +1401,38 @@ index 54edb01..a76aa8c 100644
 +	kprintf("XC5 kmem: largest free 0x%llx of map 0x%llx-0x%llx, mem 0x%llx\n",
 +	    (uint64_t)largest_free_size, (uint64_t)kernel_map->min_offset,
 +	    (uint64_t)kernel_map->max_offset, (uint64_t)sane_size);
-+	largest_free_size -= trunc_page(largest_free_size / 2);
 +#endif
  
  	/*
  	 * kasan and configs w/o *TRR need to have just one ptr range due to
-@@ -3620,6 +3626,27 @@ kmem_scramble_ranges(void)
- 	 * do not admit this address to be part of any zone submap.
- 	 */
- 	start = kmem_fuzz_start();
+@@ -3639,11 +3644,27 @@ kmem_scramble_ranges(void)
+ 		vm_map_offset_t end = 0;
+ 		struct kmem_range_startup_spec sp = kmem_claims[i];
+ 		struct mach_vm_range *sp_range = sp.kc_range;
 +#if defined(ARM64_BOARD_CONFIG_A5XELTE)
-+	{
-+		vm_map_offset_t prev = kernel_map->min_offset, best = start;
-+		vm_map_size_t best_size = 0;
-+		for (vm_map_entry_t e = vm_map_first_entry(kernel_map);
-+		    e != vm_map_to_entry(kernel_map); e = e->vme_next) {
-+			if (e->vme_start > prev && e->vme_start - prev > best_size) {
-+				best_size = e->vme_start - prev;
-+				best = prev;
++		vm_map_offset_t xc5_hint = start;
++		kern_return_t xc5_kr = vm_map_locate_space(kernel_map, sp.kc_size, 0,
++		    VM_MAP_KERNEL_FLAGS_ANYWHERE(), &start, NULL);
++		if (xc5_kr != KERN_SUCCESS) {
++			for (uint32_t j = 0; j < kmem_claim_count; j++) {
++				kprintf("XC5 claim %u %s size 0x%llx range 0x%llx\n", j,
++				    kmem_claims[j].kc_name, (uint64_t)kmem_claims[j].kc_size,
++				    (uint64_t)kmem_claims[j].kc_range->min_address);
 +			}
-+			prev = MAX(prev, e->vme_end);
++			panic("kmem_range_init: claim %u/%u %s size 0x%llx from 0x%llx kr %d",
++			    i, kmem_claim_count, sp.kc_name, (uint64_t)sp.kc_size,
++			    (uint64_t)xc5_hint, xc5_kr);
 +		}
-+		if (kernel_map->max_offset > prev && kernel_map->max_offset - prev > best_size) {
-+			best_size = kernel_map->max_offset - prev;
-+			best = prev;
-+		}
-+		kprintf("XC5 kmem: fuzz start 0x%llx, claims from 0x%llx (hole 0x%llx)\n",
-+		    (uint64_t)start, (uint64_t)best, (uint64_t)best_size);
-+		start = round_page(best);
-+	}
++#else
+ 		if (vm_map_locate_space(kernel_map, sp.kc_size, 0,
+ 		    VM_MAP_KERNEL_FLAGS_ANYWHERE(), &start, NULL) != KERN_SUCCESS) {
+ 			panic("kmem_range_init: vm_map_locate_space failing for claim %s",
+ 			    sp.kc_name);
+ 		}
 +#endif
  
- 	/*
- 	 * Add claims for ptr and data kmem_ranges
+ 		end = start + sp.kc_size;
+ 		/*
 diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
 index 1966bdd..e981b1f 100644
 --- a/pexpert/arm/pe_serial.c

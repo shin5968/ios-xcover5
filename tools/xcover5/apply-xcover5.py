@@ -1246,10 +1246,11 @@ edit('bsd/dev/a5xelte_emmc.c', [
 # Boot 33: with 1496 MiB of RAM, kmem_range_init panicked placing
 # kmem_ptr_range_meta. The claims add up to exactly the largest free hole
 # of kernel_map, but are laid out from a fuzzed start, so the last one can
-# run out. Boot 36 with 1/16 left free: largest hole 0xb97dfc000 (46 GiB)
-# of 112 GiB, now the compressor claim failed: claims that skip ahead into
-# the big hole leave smaller holes behind them unused. Size the ranges
-# from half of the hole (the data range shrinks to about 20 GiB) and log.
+# run out. Boots 36-38: leaving 1/16, then half of the hole free, and then
+# laying the claims out from the largest hole (0xfffffff068000000, 46 GiB)
+# all still failed, on varying claims, and the half-free kernel failed with
+# 1 GiB too. So it is not a lack of space. Behaviour is back to stock; the
+# panic now names the claim size, start, error and every claim.
 edit('osfmk/vm/vm_kern.c', [
     ('\tvm_map_sizes(kernel_map, NULL, NULL, &largest_free_size);\n'
      '\tlargest_free_size = trunc_page(largest_free_size);\n',
@@ -1259,33 +1260,32 @@ edit('osfmk/vm/vm_kern.c', [
      '\tkprintf("XC5 kmem: largest free 0x%llx of map 0x%llx-0x%llx, mem 0x%llx\\n",\n'
      '\t    (uint64_t)largest_free_size, (uint64_t)kernel_map->min_offset,\n'
      '\t    (uint64_t)kernel_map->max_offset, (uint64_t)sane_size);\n'
-     '\tlargest_free_size -= trunc_page(largest_free_size / 2);\n'
      '#endif\n', 1),
-    # Boot 37 with half left free: kmem_data_range still did not fit. The
-    # claims are placed one after another from the fuzzed start, so they
-    # only use holes after it; start them at the largest hole instead.
-    ('\tstart = kmem_fuzz_start();\n',
-     '\tstart = kmem_fuzz_start();\n'
+    ('\t\tif (vm_map_locate_space(kernel_map, sp.kc_size, 0,\n'
+     '\t\t    VM_MAP_KERNEL_FLAGS_ANYWHERE(), &start, NULL) != KERN_SUCCESS) {\n'
+     '\t\t\tpanic("kmem_range_init: vm_map_locate_space failing for claim %s",\n'
+     '\t\t\t    sp.kc_name);\n'
+     '\t\t}\n',
      '#if defined(ARM64_BOARD_CONFIG_A5XELTE)\n'
-     '\t{\n'
-     '\t\tvm_map_offset_t prev = kernel_map->min_offset, best = start;\n'
-     '\t\tvm_map_size_t best_size = 0;\n'
-     '\t\tfor (vm_map_entry_t e = vm_map_first_entry(kernel_map);\n'
-     '\t\t    e != vm_map_to_entry(kernel_map); e = e->vme_next) {\n'
-     '\t\t\tif (e->vme_start > prev && e->vme_start - prev > best_size) {\n'
-     '\t\t\t\tbest_size = e->vme_start - prev;\n'
-     '\t\t\t\tbest = prev;\n'
+     '\t\tvm_map_offset_t xc5_hint = start;\n'
+     '\t\tkern_return_t xc5_kr = vm_map_locate_space(kernel_map, sp.kc_size, 0,\n'
+     '\t\t    VM_MAP_KERNEL_FLAGS_ANYWHERE(), &start, NULL);\n'
+     '\t\tif (xc5_kr != KERN_SUCCESS) {\n'
+     '\t\t\tfor (uint32_t j = 0; j < kmem_claim_count; j++) {\n'
+     '\t\t\t\tkprintf("XC5 claim %u %s size 0x%llx range 0x%llx\\n", j,\n'
+     '\t\t\t\t    kmem_claims[j].kc_name, (uint64_t)kmem_claims[j].kc_size,\n'
+     '\t\t\t\t    (uint64_t)kmem_claims[j].kc_range->min_address);\n'
      '\t\t\t}\n'
-     '\t\t\tprev = MAX(prev, e->vme_end);\n'
+     '\t\t\tpanic("kmem_range_init: claim %u/%u %s size 0x%llx from 0x%llx kr %d",\n'
+     '\t\t\t    i, kmem_claim_count, sp.kc_name, (uint64_t)sp.kc_size,\n'
+     '\t\t\t    (uint64_t)xc5_hint, xc5_kr);\n'
      '\t\t}\n'
-     '\t\tif (kernel_map->max_offset > prev && kernel_map->max_offset - prev > best_size) {\n'
-     '\t\t\tbest_size = kernel_map->max_offset - prev;\n'
-     '\t\t\tbest = prev;\n'
+     '#else\n'
+     '\t\tif (vm_map_locate_space(kernel_map, sp.kc_size, 0,\n'
+     '\t\t    VM_MAP_KERNEL_FLAGS_ANYWHERE(), &start, NULL) != KERN_SUCCESS) {\n'
+     '\t\t\tpanic("kmem_range_init: vm_map_locate_space failing for claim %s",\n'
+     '\t\t\t    sp.kc_name);\n'
      '\t\t}\n'
-     '\t\tkprintf("XC5 kmem: fuzz start 0x%llx, claims from 0x%llx (hole 0x%llx)\\n",\n'
-     '\t\t    (uint64_t)start, (uint64_t)best, (uint64_t)best_size);\n'
-     '\t\tstart = round_page(best);\n'
-     '\t}\n'
      '#endif\n', 1),
 ])
 
