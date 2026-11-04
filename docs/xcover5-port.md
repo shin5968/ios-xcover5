@@ -134,6 +134,9 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   20261104_185032): **4코어로 잠금화면 → 밀어서 홈 화면(Photos/App Store/Settings) → 제어 센터까지 동작**
   (배터리 100% 충전 표시). 4코어 문제는 세 가지가 겹친 것: 보조 코어 PAN, clutch 스케줄러의 기아,
   512 MiB RAM에서 페이지 스래싱(eMMC 잠금 대기). locationd/WirelessRadioManager 크래시 반복은 그대로(GPS/모뎀 없음).
+- 부팅 35 (2026-11-04, `xc5-ios-smp8-console.tar`: cpus=8, 1 GiB, CI run 41811040652, 영상 20261104_193551):
+  클러스터 1(MPIDR 0x10000-0x10300)을 키 0x001-0x301로 기동. heartbeat에 cpu0-cpu7 모두 타이머/IPI 수가 늘고
+  작업을 실행(locationd, ReportCrash, vmd 등). **8코어로 홈 화면 도달, 시계 4:02→4:04 갱신.** (UI가 한국어로 표시됨.)
 
 ## S8 포트와 다른 점
 
