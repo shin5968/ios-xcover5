@@ -4,6 +4,16 @@ set -euo pipefail
 case "${MACHINE_CONFIG:-}" in SWEET|A5XELTE) ;; *) exit 0 ;; esac
 [[ -f libkern/crypto/corecrypto_aes.c ]] || exit 1
 bearssl_sha=7bea48e5e850ab4cafbe68d3765cdaba13a86d6f
+# bearssl.org answered 502 to every CI fetch on 2026-11-04. vendor/ holds the
+# subset this script stages (with the inner.h edit), taken from the build
+# tree of CI run 41817697369; use it when present.
+vendored="$(dirname "${BASH_SOURCE[0]}")/vendor/sweet_bearssl-${bearssl_sha:0:8}.tar.gz"
+if [[ -f "$vendored" ]]; then
+	[[ ! -e libkern/crypto/sweet_bearssl ]] || exit 1
+	tar -xzf "$vendored" -C libkern/crypto
+	echo "Staged vendored BearSSL subset ($bearssl_sha) for SWEET"
+	exit 0
+fi
 bearssl_tmp=$(mktemp -d)
 trap 'rm -rf "$bearssl_tmp"' EXIT
 git init -q "$bearssl_tmp"
