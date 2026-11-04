@@ -681,10 +681,10 @@ index ba647a8..979c83f 100644
  	int enabled = A5_TOUCH_DEFAULT; /* A5 touch: off on the S8 */
  	int log_contacts = 0;
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
-index deccec2..d53cf40 100644
+index deccec2..e3ac28a 100644
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
-@@ -7414,6 +7414,22 @@ process_signature(proc_t p, struct image_params *imgp)
+@@ -7414,6 +7414,25 @@ process_signature(proc_t p, struct image_params *imgp)
  #if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_A5XELTE)
  			/* A short line keeps the persistent console ring useful. */
  			printf("exec %s\n", p->p_name);
@@ -698,6 +698,9 @@ index deccec2..d53cf40 100644
 +				for (unsigned i = 0; block && i < sizeof(xc5_noexec) / sizeof(xc5_noexec[0]); i++) {
 +					if (strncmp(p->p_name, xc5_noexec[i], sizeof(p->p_name)) == 0) {
 +						printf("exec %s refused (xc5noexec)\n", p->p_name);
++						/* done: asserts a reason for every failure here (boot 39). */
++						signature_failure_reason = os_reason_create(OS_REASON_EXEC,
++						    EXEC_EXIT_REASON_WRONG_PLATFORM);
 +						error = EPERM;
 +						goto done;
 +					}
