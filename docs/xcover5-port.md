@@ -123,6 +123,10 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   SpringBoard tid 1657/1693/1695(base 4) age 74→114 s, backboardd tid 1030 age 125 s → 단순 포화가 아니라 clutch
   스케줄러가 특정 스레드 그룹을 건너뜀(추정). 수정: A5XELTE에서 CONFIG_SCHED_CLUTCH를 끄고 dualq 스케줄러 사용
   (CI run 41653549707).
+- 부팅 32 (cpus=4 console, dualq, 영상 20261104_183455): 굶는 스레드 없음(run age 수 ms~18 s). 그래도 fb swap 16 정지.
+  backboardd tid 304가 `lck_mtx_lock_contended ← emmc_strategy`(eMMC 잠금 대기). emmc rd가 heartbeat 36→56(100 s)
+  동안 7.33M→11.70M 섹터(약 22 MB/s 연속 읽기, cpus=1 부팅 24는 heartbeat 70까지 총 5.9M) → 512 MiB RAM에서 페이지
+  스래싱으로 추정. 시험: `XC5_DRAM=0x8a2800000:0x5d800000`(MFC 영역 위 1496 MiB) 이미지 `*-1g5`.
 
 ## S8 포트와 다른 점
 
