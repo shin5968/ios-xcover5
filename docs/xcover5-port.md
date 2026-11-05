@@ -173,6 +173,10 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   type`, `Runtime corruption detected on iOSRoot`, 이어서 rapportd를 쓰레기로 읽어 `non-platform binary` 패닉.
   원인 미확정. 의심: drop zone이 16 MB를 쓰면서 처음 쓰인 512섹터 쓰기 명령(전에는 128). 쓰기는 128로 되돌리고
   DMA 읽기는 처음 64번 뒤에도 256번에 1번 PIO로 비교(CI run 42007309883). USERDATA 재플래시 필요.
+- 부팅 50 (USERDATA 재플래시 후, `xc5-ios-gpu4-console.tar` 19:08): XC5GPU selftest=1(125 us). SpringBoard까지 뜬 뒤
+  driverkitd/remoted sig 11, `unexpected exec of non-platform binary: /usr/sbin/bluetoothd` 패닉 → 쓰기를 128섹터로
+  되돌려도 루트 파일이 틀리게 읽힘. DMA 읽기를 1순위 의심(완료 판정이 버스 쓰기 완료보다 먼저일 수 있음).
+  DMA는 기본 끔(`xc5dma=1`로 켬), CI run 42014278955.
 
 ## S8 포트와 다른 점
 
