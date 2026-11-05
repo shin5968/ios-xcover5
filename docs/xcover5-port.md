@@ -158,6 +158,12 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   **GPU_ID 0x72120000(Mali-G52)**, L2_FEATURES 0x7100206, TILER_FEATURES 0x809, MEM_FEATURES 1, MMU_FEATURES 0x2830
   (VA 48, PA 40비트), AS_PRESENT 0xff, JS_PRESENT 7, 셰이더 1 / 타일러 1 / L2 1, ready 0/0/0, COHERENCY_FEATURES 0.
   → S-Boot가 G3D 전원과 클럭을 켜 둠(1단계 불필요). 코어는 꺼진 상태. 다음: 2단계(`xc5gpu=3`, CI run 41844382570).
+- 부팅 45: Mali 레지스터를 한 페이지만 매핑해 AS0(0x2400) 쓰기에서 data abort → 0x5000 전체 매핑.
+- 부팅 46 (`xc5gpu=3`, CI run 41846555789): **GPU 첫 작업 성공.** 코어 전원(shader/tiler/L2 1/1/1), WRITE_VALUE를
+  identity 모드와 AArch64 4K 페이지 테이블 경유로 각각 실행, `irq=2 js=0 fault=0 word=c0ffee01`, `step=4`.
+- 부팅 47 (`xc5gpu=4`, XC5GPU 서비스, CI run 41849540688): `state=1`(서비스 등록), 자체 시험은 `js_status 0x58`
+  (DATA_INVALID_FAULT, MMU 결함 없음) → GPU가 0으로 된 작업 헤더를 읽음. kernel_task 매핑이 캐시 가능일 수 있어
+  쓰기 후 PoC까지 캐시 정리, 실패 시 2초 대기하지 않게 수정(CI run 42003030139).
 
 ## S8 포트와 다른 점
 
