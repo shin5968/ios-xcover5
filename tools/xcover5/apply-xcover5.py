@@ -1626,6 +1626,16 @@ edit('bsd/kern/kern_exec.c', [
      '\t/* Save space for envv[] NULL terminator */\n', 1),
 ])
 
+# Boots 52-53: Mesa's MapBO of a write-combined buffer panicked in
+# phystokv_range on PA 0xab167000 right after CreateBO returned PA
+# 0x8ab167000: pmap_sync_page_attributes_phys() shifts the 32-bit page
+# number before widening it, so physical addresses above 4 GiB (all of
+# XNU's RAM here) lose their top bits. Apple's RAM sits below 4 GiB.
+edit('osfmk/arm/pmap/pmap.c', [
+    ('\tflush_dcache((vm_offset_t) (pp << PAGE_SHIFT), PAGE_SIZE, TRUE);\n',
+     '\tflush_dcache((vm_offset_t) ptoa(pp), PAGE_SIZE, TRUE);\n', 1),
+])
+
 # dyld's amfi_check_dyld_policy_self(): an "AMFI" MAC policy answering only
 # for the backboardd that xc5gl gave a library (xc5_drop.c), after herolte's
 # 0246. Every other process still gets ENOPOLICY, as with no policy.
