@@ -17,7 +17,9 @@
  * Also here: xc5_gl_env(), called from exec_extract_strings(), which puts
  * a library from the drop zone into backboardd (boot-arg xc5gl):
  *   1  /private/var/xc5/lib/libxc5test.dylib   (Mesa's triangle test)
- *   2  /private/var/xc5/lib/libxc5eagl.dylib   (CoreAnimation over GLES)
+ *   2  /private/var/xc5/lib/libxc5eagl.dylib   (CoreAnimation over GLES, HakiOS)
+ *   3  /private/var/xc5/lib/libxc5eagl-b.dylib (CoreAnimation over GLES, Bergamota)
+ * with HERO_LOG_STDERR=1, so the bridges' log reaches the console.
  * Only the first two launches of a boot get it, so a broken library costs
  * two backboardd restarts and no more.
  */
@@ -340,11 +342,23 @@ xc5_gl_env(const char *path, int pid, const char **extra, int max)
 		mode = 0;
 		(void)PE_parse_boot_argn("xc5gl", &mode, sizeof(mode));
 	}
-	if (mode <= 0 || path == NULL || strcmp(path, XGL_TARGET) != 0 || max < 1) {
+	if (mode <= 0 || path == NULL || strcmp(path, XGL_TARGET) != 0 || max < 2) {
 		return 0;
 	}
-	const char *lib = mode == 1 ? "/private/var/xc5/lib/libxc5test.dylib" :
-	    "/private/var/xc5/lib/libxc5eagl.dylib";
+	static const char *const libs[] = {
+		"/private/var/xc5/lib/libxc5test.dylib",        /* 1: Mesa's triangle test */
+		"/private/var/xc5/lib/libxc5eagl.dylib",        /* 2: HakiOS's EAGL bridge */
+		"/private/var/xc5/lib/libxc5eagl-b.dylib",      /* 3: Bergamota's EAGL shim */
+	};
+	static const char *const envs[] = {
+		"DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5test.dylib",
+		"DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5eagl.dylib",
+		"DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5eagl-b.dylib",
+	};
+	if (mode > 3) {
+		return 0;
+	}
+	const char *lib = libs[mode - 1];
 	int launch = ++launches;
 	xcover5_drop_state[3] = (uint32_t)launch;
 	if (launch > XGL_MAX_LAUNCHES) {
@@ -357,11 +371,12 @@ xc5_gl_env(const char *path, int pid, const char **extra, int max)
 		return 0;
 	}
 	vnode_put(vp);
-	extra[0] = mode == 1 ? "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5test.dylib" :
-	    "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5eagl.dylib";
+	extra[0] = envs[mode - 1];
+	/* The bridges' stderr (and Mesa's) goes to the kernel log (gpu/eagl/src/hero_log.c). */
+	extra[1] = "HERO_LOG_STDERR=1";
 	xgl_pid = pid;
 	printf("XC5 GL: backboardd launch %d (pid %d): %s inserted\n", launch, pid, lib);
 	xcover5_drop_state[4]++;
-	return 1;
+	return 2;
 }
 #endif /* XCOVER5 */

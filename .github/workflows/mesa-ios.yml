@@ -11,7 +11,7 @@ on:
   push:
     branches: [xcover5]
     paths:
-      - "gpu/mesa/**"
+      - "gpu/**"
       - ".github/workflows/mesa-ios.yml"
 
 jobs:
@@ -31,6 +31,7 @@ jobs:
         run: |
           set -o pipefail
           bash gpu/mesa/build-mesa.sh "$RUNNER_TEMP/mesa-work" out 2>&1 | tee build.log
+          MESA_INC="$RUNNER_TEMP/mesa-work/mesa/include" bash gpu/eagl/build-eagl.sh out 2>&1 | tee -a build.log
           shasum -a 256 out/osmesa-test out/lib/* | tee out/SHA256SUMS
       - name: Report build errors as annotations
         if: failure()
