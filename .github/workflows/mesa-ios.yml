@@ -1,0 +1,45 @@
+name: mesa-ios
+
+# Mesa's Panfrost (Bifrost compiler for the Mali-G52) inside OSMesa for the
+# XCover5's iOS userland, over the XC5GPU libdrm stand-in (gpu/mesa). After
+# wardevsa/ios-a5xelte's mesa-ios workflow. The artifact holds the dylibs
+# and osmesa-test; tools/xcover5/mkdrop.py packs them into cache.img for
+# the kernel's CACHE drop zone. Nothing of Apple's is in it.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [xcover5]
+    paths:
+      - "gpu/mesa/**"
+      - ".github/workflows/mesa-ios.yml"
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deps
+        run: |
+          brew install meson ninja bison pkg-config || true
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q mako pyyaml packaging setuptools meson
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+      - name: Build
+        run: |
+          set -o pipefail
+          bash gpu/mesa/build-mesa.sh "$RUNNER_TEMP/mesa-work" out 2>&1 | tee build.log
+          shasum -a 256 out/osmesa-test out/lib/* | tee out/SHA256SUMS
+      - name: Report build errors as annotations
+        if: failure()
+        run: |
+          test -f build.log || exit 0
+          grep -nE '(:[0-9]+:[0-9]+: (fatal )?error:|^ld: |Undefined symbols|clang: error|ERROR:|AssertionError|^FAILED:|meson.build:[0-9]+:[0-9]+:)' build.log | head -20 | while IFS= read -r l; do echo "::error title=build::${l:0:800}"; done
+          tail -40 build.log
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: mesa-ios
+          path: out/
