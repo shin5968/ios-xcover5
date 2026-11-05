@@ -188,6 +188,11 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   (쓰기 결합 매핑)에서 `phystokv_range: illegal PA 0xab167000` → 상위 비트가 잘림. XNU 버그:
   `pmap_sync_page_attributes_phys()`가 32비트 페이지 번호를 넓히기 전에 시프트(`pp << PAGE_SHIFT`). 애플 기기는
   RAM이 4 GiB 아래라 드러나지 않음. `ptoa(pp)`로 수정(CI run 42022755476).
+- 부팅 54 (CI run 42022755476, 영상 20261105_210524): **Mali-G52에서 Mesa OpenGL 동작.** backboardd 안의 osmesa-test가
+  `first frame in 191.7 ms (shader compiles included), GL error 0x0`, `pixels: center 0xff0000ff (red), corner 0xffbf4020
+  (blue), 8192 red, 57344 blue of 65536 -> OK`, `300 frames 256x256 with glFinish: 2161.6 ms, 7.21 ms/frame (139 fps)`.
+  `gpusvc clients=1 bos=14 jobs=1205 failed=0`. 잠금화면 정상, 손상 없음. GPU 4단계 완료. 다음: 5단계(EAGL 브리지로
+  CoreAnimation을 GLES/Mali로).
 
 ## S8 포트와 다른 점
 
