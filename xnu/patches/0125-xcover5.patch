@@ -978,10 +978,10 @@ index ba647a8..979c83f 100644
  	int log_contacts = 0;
 diff --git a/bsd/dev/xc5_drop.c b/bsd/dev/xc5_drop.c
 new file mode 100644
-index 0000000..8450a27
+index 0000000..5264cac
 --- /dev/null
 +++ b/bsd/dev/xc5_drop.c
-@@ -0,0 +1,332 @@
+@@ -0,0 +1,343 @@
 +/*
 + * XCover5 drop zone: files for the iOS root from the CACHE partition, so the
 + * Mesa libraries reach the phone without reflashing the 12 GB root image.
@@ -1029,6 +1029,9 @@ index 0000000..8450a27
 +int xcover5_emmc_read_cache(uint64_t sector, uint32_t count, void *dst);
 +void xc5_drop_start(void);
 +int xc5_gl_env(const char *path, const char **extra, int max);
++/* For the heartbeat: files written, failed, state (1 no package, 2 already
++ * installed, 3 written, 4 root never rw), backboardd launches, insertions. */
++uint32_t xcover5_drop_state[5];
 +
 +#define XDROP_HEADER    4096u
 +#define XDROP_CHUNK     (1u << 20)              /* read 1 MiB at a time */
@@ -1202,12 +1205,14 @@ index 0000000..8450a27
 +	memcpy(&h, r.buf, sizeof(h));
 +	if (memcmp(h.magic, "XC5DROP1", 8) != 0 || h.version != 1 || h.bytes > XDROP_MAX) {
 +		printf("XC5 DROP: no drop package in CACHE\n");
++		xcover5_drop_state[2] = 1;
 +		goto out;
 +	}
 +	vfs_context_t ctx = vfs_context_kernel();
 +	(void)xdrop_mkdir(XDROP_DIR, ctx);
 +	if (xdrop_installed_id(ctx) == h.id) {
 +		printf("XC5 DROP: package %llu already installed\n", h.id);
++		xcover5_drop_state[2] = 2;
 +		goto out;
 +	}
 +	r.limit = h.bytes;
@@ -1251,6 +1256,9 @@ index 0000000..8450a27
 +		(void)xdrop_write(XDROP_ID_PATH, 0644, &h.id, sizeof(h.id), ctx);
 +	}
 +	printf("XC5 DROP: package %llu: %u entries written, %u failed\n", h.id, files, failed);
++	xcover5_drop_state[0] = files;
++	xcover5_drop_state[1] = failed;
++	xcover5_drop_state[2] = 3;
 +out:
 +	kfree_data(r.buf, XDROP_CHUNK);
 +}
@@ -1268,6 +1276,7 @@ index 0000000..8450a27
 +		(void)tsleep(&chan, PZERO, "xc5drop", hz);
 +	}
 +	printf("XC5 DROP: root never read-write, nothing written\n");
++	xcover5_drop_state[2] = 4;
 +}
 +
 +void
@@ -1298,6 +1307,7 @@ index 0000000..8450a27
 +	const char *lib = mode == 1 ? "/private/var/xc5/lib/libxc5test.dylib" :
 +	    "/private/var/xc5/lib/libxc5eagl.dylib";
 +	int launch = ++launches;
++	xcover5_drop_state[3] = (uint32_t)launch;
 +	if (launch > XGL_MAX_LAUNCHES) {
 +		printf("XC5 GL: backboardd launch %d: stock\n", launch);
 +		return 0;
@@ -1311,6 +1321,7 @@ index 0000000..8450a27
 +	extra[0] = mode == 1 ? "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5test.dylib" :
 +	    "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5eagl.dylib";
 +	printf("XC5 GL: backboardd launch %d: %s inserted\n", launch, lib);
++	xcover5_drop_state[4]++;
 +	return 1;
 +}
 +#endif /* XCOVER5 */
@@ -1715,10 +1726,10 @@ index d11fe26..6f5de61 100644
  	    arg0, in_scalars, in_struct, out_scalars, out_struct, ret);
  	return ret;
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-index 193845f..bb9867a 100644
+index 193845f..624b256 100644
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -22,6 +22,306 @@ public:
+@@ -22,6 +22,316 @@ public:
  
  OSDefineMetaClassAndStructors(SweetPlatformExpert, IODTPlatformExpert);
  
@@ -1743,6 +1754,9 @@ index 193845f..bb9867a 100644
 +void thread_deallocate(thread_t);
 +vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 +extern uint32_t xcover5_gpusvc[8];
++extern char xcover5_gpusvc_lines[4][120];
++extern uint32_t xcover5_gpusvc_line;
++extern uint32_t xcover5_drop_state[5];
 +}
 +
 +/*
@@ -1970,6 +1984,13 @@ index 193845f..bb9867a 100644
 +	IOLog("XC5 gpusvc state=%u clients=%u bos=%u jobs=%u failed=%u selftest=%u (%u us)\n",
 +	    xcover5_gpusvc[0], xcover5_gpusvc[1], xcover5_gpusvc[2], xcover5_gpusvc[3],
 +	    xcover5_gpusvc[4], xcover5_gpusvc[5], xcover5_gpusvc[6]);
++	const uint32_t *ds = xcover5_drop_state;
++	IOLog("XC5 drop state=%u written=%u failed=%u bbd launches=%u inserted=%u\n",
++	    ds[2], ds[0], ds[1], ds[3], ds[4]);
++	for (uint32_t i = xcover5_gpusvc_line > 4 ? xcover5_gpusvc_line - 4 : 0;
++	    i < xcover5_gpusvc_line; i++) {
++		IOLog("XC5 mesa: %s\n", xcover5_gpusvc_lines[i % 4]);
++	}
 +	const uint32_t (*j)[5] = xcover5_gpu_jobres;
 +	IOLog("XC5 gpu step=%u job1 irq=%x js=%x flt=%x hdr=%x w=%x job2 irq=%x js=%x flt=%x "
 +	    "hdr=%x w=%x\n", xcover5_gpu_step, j[0][0], j[0][1], j[0][2], j[0][3], j[0][4],
@@ -2025,7 +2046,7 @@ index 193845f..bb9867a 100644
  bool
  SweetPlatformExpert::start(IOService *provider)
  {
-@@ -36,6 +336,16 @@ SweetPlatformExpert::start(IOService *provider)
+@@ -36,6 +346,16 @@ SweetPlatformExpert::start(IOService *provider)
  	registerService();
  #if defined(A5XELTE)
  	IOLog("A5XELTE: platform expert registered\n");
@@ -2044,10 +2065,10 @@ index 193845f..bb9867a 100644
  #endif
 diff --git a/iokit/Kernel/arm/XC5GPU.cpp b/iokit/Kernel/arm/XC5GPU.cpp
 new file mode 100644
-index 0000000..ad8c3fa
+index 0000000..d65bac7
 --- /dev/null
 +++ b/iokit/Kernel/arm/XC5GPU.cpp
-@@ -0,0 +1,832 @@
+@@ -0,0 +1,838 @@
 +/*
 + * XC5GPU: the Galaxy XCover5's Mali-G52 MP1 (Exynos 850) for user space, the
 + * kernel half of a Panfrost-style driver (Mesa's panfrost in an iOS process).
@@ -2109,6 +2130,9 @@ index 0000000..ad8c3fa
 +void thread_deallocate(thread_t);
 +/* For the heartbeat (SweetPlatformExpert.cpp): state, selftest, counters. */
 +uint32_t xcover5_gpusvc[8];
++/* The last four client Log lines (Mesa's test results), and a counter. */
++char xcover5_gpusvc_lines[4][120];
++uint32_t xcover5_gpusvc_line;
 +}
 +
 +/* ---- the GPU ---- */
@@ -2804,6 +2828,9 @@ index 0000000..ad8c3fa
 +			memcpy(line, args->structureInput, n);
 +			line[n] = 0;
 +			IOLog("XC5GPU client: %s\n", line);
++			/* The last few, for the heartbeat (the console scrolls them away). */
++			strlcpy(xcover5_gpusvc_lines[xcover5_gpusvc_line++ % 4], line,
++			    sizeof(xcover5_gpusvc_lines[0]));
 +		}
 +		break;
 +	case kSelSyncBO:

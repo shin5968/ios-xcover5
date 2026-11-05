@@ -59,6 +59,9 @@ kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
 void thread_deallocate(thread_t);
 /* For the heartbeat (SweetPlatformExpert.cpp): state, selftest, counters. */
 uint32_t xcover5_gpusvc[8];
+/* The last four client Log lines (Mesa's test results), and a counter. */
+char xcover5_gpusvc_lines[4][120];
+uint32_t xcover5_gpusvc_line;
 }
 
 /* ---- the GPU ---- */
@@ -754,6 +757,9 @@ XC5GPUUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *a
 			memcpy(line, args->structureInput, n);
 			line[n] = 0;
 			IOLog("XC5GPU client: %s\n", line);
+			/* The last few, for the heartbeat (the console scrolls them away). */
+			strlcpy(xcover5_gpusvc_lines[xcover5_gpusvc_line++ % 4], line,
+			    sizeof(xcover5_gpusvc_lines[0]));
 		}
 		break;
 	case kSelSyncBO:

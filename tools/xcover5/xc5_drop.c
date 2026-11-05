@@ -45,6 +45,9 @@ extern void thread_deallocate(thread_t);
 int xcover5_emmc_read_cache(uint64_t sector, uint32_t count, void *dst);
 void xc5_drop_start(void);
 int xc5_gl_env(const char *path, const char **extra, int max);
+/* For the heartbeat: files written, failed, state (1 no package, 2 already
+ * installed, 3 written, 4 root never rw), backboardd launches, insertions. */
+uint32_t xcover5_drop_state[5];
 
 #define XDROP_HEADER    4096u
 #define XDROP_CHUNK     (1u << 20)              /* read 1 MiB at a time */
@@ -218,12 +221,14 @@ xdrop_apply(void)
 	memcpy(&h, r.buf, sizeof(h));
 	if (memcmp(h.magic, "XC5DROP1", 8) != 0 || h.version != 1 || h.bytes > XDROP_MAX) {
 		printf("XC5 DROP: no drop package in CACHE\n");
+		xcover5_drop_state[2] = 1;
 		goto out;
 	}
 	vfs_context_t ctx = vfs_context_kernel();
 	(void)xdrop_mkdir(XDROP_DIR, ctx);
 	if (xdrop_installed_id(ctx) == h.id) {
 		printf("XC5 DROP: package %llu already installed\n", h.id);
+		xcover5_drop_state[2] = 2;
 		goto out;
 	}
 	r.limit = h.bytes;
@@ -267,6 +272,9 @@ xdrop_apply(void)
 		(void)xdrop_write(XDROP_ID_PATH, 0644, &h.id, sizeof(h.id), ctx);
 	}
 	printf("XC5 DROP: package %llu: %u entries written, %u failed\n", h.id, files, failed);
+	xcover5_drop_state[0] = files;
+	xcover5_drop_state[1] = failed;
+	xcover5_drop_state[2] = 3;
 out:
 	kfree_data(r.buf, XDROP_CHUNK);
 }
@@ -284,6 +292,7 @@ xdrop_thread(__unused void *arg, __unused wait_result_t wr)
 		(void)tsleep(&chan, PZERO, "xc5drop", hz);
 	}
 	printf("XC5 DROP: root never read-write, nothing written\n");
+	xcover5_drop_state[2] = 4;
 }
 
 void
@@ -314,6 +323,7 @@ xc5_gl_env(const char *path, const char **extra, int max)
 	const char *lib = mode == 1 ? "/private/var/xc5/lib/libxc5test.dylib" :
 	    "/private/var/xc5/lib/libxc5eagl.dylib";
 	int launch = ++launches;
+	xcover5_drop_state[3] = (uint32_t)launch;
 	if (launch > XGL_MAX_LAUNCHES) {
 		printf("XC5 GL: backboardd launch %d: stock\n", launch);
 		return 0;
@@ -327,6 +337,7 @@ xc5_gl_env(const char *path, const char **extra, int max)
 	extra[0] = mode == 1 ? "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5test.dylib" :
 	    "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5eagl.dylib";
 	printf("XC5 GL: backboardd launch %d: %s inserted\n", launch, lib);
+	xcover5_drop_state[4]++;
 	return 1;
 }
 #endif /* XCOVER5 */
