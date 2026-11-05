@@ -181,6 +181,9 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   패닉 없음(PosterBoard sig 5 한 번). `drop state=3 written=5 failed=0`, `bbd launches=1 inserted=1`. 그러나
   `gpusvc clients=0`: dyld가 DYLD_INSERT_LIBRARIES를 무시(AMFI 정책 응답 없음 → 제한된 프로세스로 취급).
   herolte 0246처럼 "AMFI" MAC 정책이 삽입받은 backboardd pid에만 dyld 플래그를 응답(CI run 42019100873).
+- 부팅 52 (CI run 42019100873): **Mesa가 backboardd 안에서 실행됨** — `XC5GPU client: osmesa-test: start`,
+  `backboardd sel 5/0/1`, `texture features 0xf7fe007e: ASTC hidden`. 첫 CreateBO에서
+  `phystokv_range: illegal PA 0xc0e0f000`(XNU RAM 밖) 패닉. CreateBO 단계별 출력 추가(CI run 42021135234).
 
 ## S8 포트와 다른 점
 
