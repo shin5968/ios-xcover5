@@ -164,6 +164,9 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
 - 부팅 47 (`xc5gpu=4`, XC5GPU 서비스, CI run 41849540688): `state=1`(서비스 등록), 자체 시험은 `js_status 0x58`
   (DATA_INVALID_FAULT, MMU 결함 없음) → GPU가 0으로 된 작업 헤더를 읽음. kernel_task 매핑이 캐시 가능일 수 있어
   쓰기 후 PoC까지 캐시 정리, 실패 시 2초 대기하지 않게 수정(CI run 42003030139).
+- 부팅 48 (CI run 42003030139, 영상 20261105_183953): **XC5GPU 서비스 자체 시험 성공** —
+  `gpusvc state=1 bos=1 jobs=1 failed=0 selftest=1 (115 us)`. 사용자 경로(버퍼 생성, GPU 매핑, Submit)로 WRITE_VALUE 실행.
+  GPU 3단계 완료. 다음: 4단계(Mesa panfrost iOS 빌드, herodrm을 XC5GPU에 연결, 파일 전달 경로).
 
 ## S8 포트와 다른 점
 
