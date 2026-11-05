@@ -184,6 +184,10 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
 - 부팅 52 (CI run 42019100873): **Mesa가 backboardd 안에서 실행됨** — `XC5GPU client: osmesa-test: start`,
   `backboardd sel 5/0/1`, `texture features 0xf7fe007e: ASTC hidden`. 첫 CreateBO에서
   `phystokv_range: illegal PA 0xc0e0f000`(XNU RAM 밖) 패닉. CreateBO 단계별 출력 추가(CI run 42021135234).
+- 부팅 53: CreateBO 32 MiB(타일러 힙) → GPU VA 0x1010000, 4 KiB → PA 0x8ab167000, GPU VA 0x3010000 모두 성공. 이어진 MapBO
+  (쓰기 결합 매핑)에서 `phystokv_range: illegal PA 0xab167000` → 상위 비트가 잘림. XNU 버그:
+  `pmap_sync_page_attributes_phys()`가 32비트 페이지 번호를 넓히기 전에 시프트(`pp << PAGE_SHIFT`). 애플 기기는
+  RAM이 4 GiB 아래라 드러나지 않음. `ptoa(pp)`로 수정(CI run 42022755476).
 
 ## S8 포트와 다른 점
 
