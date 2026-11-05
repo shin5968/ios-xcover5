@@ -177,6 +177,10 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   driverkitd/remoted sig 11, `unexpected exec of non-platform binary: /usr/sbin/bluetoothd` 패닉 → 쓰기를 128섹터로
   되돌려도 루트 파일이 틀리게 읽힘. DMA 읽기를 1순위 의심(완료 판정이 버스 쓰기 완료보다 먼저일 수 있음).
   DMA는 기본 끔(`xc5dma=1`로 켬), CI run 42014278955.
+- 부팅 51 (USERDATA 재플래시, DMA 끔, `xc5-ios-gpu4-console.tar` 20:00, 영상 20261105_202313): **손상 없음** — 잠금화면,
+  패닉 없음(PosterBoard sig 5 한 번). `drop state=3 written=5 failed=0`, `bbd launches=1 inserted=1`. 그러나
+  `gpusvc clients=0`: dyld가 DYLD_INSERT_LIBRARIES를 무시(AMFI 정책 응답 없음 → 제한된 프로세스로 취급).
+  herolte 0246처럼 "AMFI" MAC 정책이 삽입받은 backboardd pid에만 dyld 플래그를 응답(CI run 42019100873).
 
 ## S8 포트와 다른 점
 
