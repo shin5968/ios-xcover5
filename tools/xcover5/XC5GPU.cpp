@@ -496,6 +496,9 @@ bo_map_pages(struct gpu_bo *bo, IOMemoryDescriptor *md, uint64_t size)
 		IOByteCount len = 0;
 		pa[i] = md->getPhysicalSegment((IOByteCount)i * 0x1000, &len, kIOMemoryMapperNone);
 		ok = pa[i] != 0 && (pa[i] & 0xfff) == 0;
+		if (!ok) {
+			printf("XC5GPU: page %u of %u: bad PA %#llx\n", i, bo->pages, pa[i]);
+		}
 	}
 	bo->va = ok ? va_alloc(size) : 0;
 	ok = bo->va != 0 && gpu_map(bo->va, pa, bo->pages);
@@ -516,17 +519,35 @@ bo_create(struct gpu_bo *bo, uint64_t size)
 	if (size == 0 || size > MAX_BO_BYTES) {
 		return false;
 	}
+	/* Boot 52 panicked in phystokv_range (PA 0xc0e0f000, outside XNU's RAM)
+	 * during Mesa's first CreateBO: say each step, on screen, until known. */
+	static uint32_t traced;
+	bool trace = traced++ < 8;
+	if (trace) {
+		printf("XC5GPU: CreateBO %llu bytes: allocating\n", size);
+	}
 	bo->mem = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
 	    kIODirectionInOut | kIOMemoryKernelUserShared, size, page_size);
 	if (bo->mem == NULL) {
 		return false;
 	}
+	if (trace) {
+		IOByteCount len = 0;
+		printf("XC5GPU: CreateBO: kva %p pa0 %#llx; zeroing\n", bo->mem->getBytesNoCopy(),
+		    (uint64_t)bo->mem->getPhysicalSegment(0, &len, kIOMemoryMapperNone));
+	}
 	uintptr_t k = (uintptr_t)bo->mem->getBytesNoCopy();
 	bzero((void *)k, size);
 	cache_clean(k, size);
+	if (trace) {
+		printf("XC5GPU: CreateBO: zeroed and cleaned; mapping\n");
+	}
 	if (!bo_map_pages(bo, bo->mem, size)) {
 		OSSafeReleaseNULL(bo->mem);
 		return false;
+	}
+	if (trace) {
+		printf("XC5GPU: CreateBO: GPU VA %#llx\n", bo->va);
 	}
 	xcover5_gpusvc[2]++;
 	return true;
