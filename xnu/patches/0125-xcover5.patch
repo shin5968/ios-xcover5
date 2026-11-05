@@ -11,7 +11,7 @@ index 851addd..170a4c9 100644
  bsd/dev/a5xelte_touch.c			standard
  bsd/dev/sweet_sample.c			standard
 diff --git a/bsd/dev/a5xelte_emmc.c b/bsd/dev/a5xelte_emmc.c
-index ffd011a..4ea755b 100644
+index ffd011a..a64966b 100644
 --- a/bsd/dev/a5xelte_emmc.c
 +++ b/bsd/dev/a5xelte_emmc.c
 @@ -22,6 +22,7 @@
@@ -53,7 +53,7 @@ index ffd011a..4ea755b 100644
  	if ((emmc_rd(EMMC_CLKSEL) >> 16) & 7u) {
  		command |= CMD_HOLD;
  	}
-@@ -301,6 +312,449 @@ out:
+@@ -301,6 +312,452 @@ out:
  	return error;
  }
  
@@ -276,7 +276,7 @@ index ffd011a..4ea755b 100644
 +static uint32_t emmc_desc[EMMC_MULTI_MAX * 512u / EMMC_DMA_SEG][EMMC_DESC_WORDS]
 +    __attribute__((aligned(128)));
 +static int emmc_dma = -1;
-+static unsigned emmc_dma_checks;
++static unsigned emmc_dma_checks, emmc_dma_sample;
 +uint64_t xcover5_emmc_dma_reads;
 +/* Heartbeat: DMA on, errors, PIO checks left, last error. */
 +int xcover5_emmc_dma_on;
@@ -466,18 +466,21 @@ index ffd011a..4ea755b 100644
 +		if (!error) {
 +			memcpy(dst, emmc_multi_buf, nblk * 512u);
 +			xcover5_emmc_dma_reads += nblk;
-+			if (emmc_dma_checks == 0) {
++			/* The first 64 reads, then 1 in 256 for as long as DMA is on. */
++			if (emmc_dma_checks == 0 && (++emmc_dma_sample & 255u) != 0) {
 +				return 0;
 +			}
 +			/* Read it again by PIO and compare. */
-+			emmc_dma_checks--;
++			if (emmc_dma_checks) {
++				emmc_dma_checks--;
++			}
 +			error = emmc_xfer_blocks(lba, nblk, false);
 +			if (error) {
 +				return error;
 +			}
 +			if (memcmp(dst, emmc_multi_buf, nblk * 512u) == 0) {
-+				if (emmc_dma_checks == 0) {
-+					printf("XC5 eMMC: 64 DMA reads matched PIO, checks off\n");
++				if (emmc_dma_checks == 0 && emmc_dma_sample == 0) {
++					printf("XC5 eMMC: 64 DMA reads matched PIO, now 1 in 256\n");
 +				}
 +				return 0;
 +			}
@@ -503,7 +506,7 @@ index ffd011a..4ea755b 100644
  static uint32_t
  emmc_le32(const uint8_t *p)
  {
-@@ -326,6 +780,20 @@ emmc_crc32(uint32_t crc, const uint8_t *data, size_t len)
+@@ -326,6 +783,20 @@ emmc_crc32(uint32_t crc, const uint8_t *data, size_t len)
  	return crc;
  }
  
@@ -524,7 +527,7 @@ index ffd011a..4ea755b 100644
  static int
  emmc_find_root_partition(void)
  {
-@@ -381,16 +849,16 @@ emmc_find_root_partition(void)
+@@ -381,16 +852,16 @@ emmc_find_root_partition(void)
  			const uint8_t *p = entry + j * 128;
  			bool match = true;
  			bool system_match = true;
@@ -544,7 +547,7 @@ index ffd011a..4ea755b 100644
  				    p[57 + k * 2] != 0) {
  					system_match = false;
  					break;
-@@ -418,12 +886,29 @@ emmc_find_root_partition(void)
+@@ -418,12 +889,29 @@ emmc_find_root_partition(void)
  		return EIO;
  	}
  	if (emmc_log_first_lba == emmc_first_lba && emmc_log_nsectors &&
@@ -576,7 +579,7 @@ index ffd011a..4ea755b 100644
  		return ENXIO;
  	}
  	int enable_write = 0;
-@@ -446,7 +931,7 @@ emmc_map_host(void)
+@@ -446,7 +934,7 @@ emmc_map_host(void)
  	}
  	if (SecureDTLookupEntry(NULL, "/a5xelte-emmc", &node) != kSuccess ||
  	    SecureDTGetProperty(node, "reg", (void const **)&reg, &size) != kSuccess ||
@@ -585,7 +588,7 @@ index ffd011a..4ea755b 100644
  		printf("A5XELTE eMMC: missing or unexpected ADT register window\n");
  		return ENXIO;
  	}
-@@ -464,6 +949,15 @@ emmc_map_host(void)
+@@ -464,6 +952,15 @@ emmc_map_host(void)
  void
  a5xelte_emmc_probe(void)
  {
@@ -601,7 +604,7 @@ index ffd011a..4ea755b 100644
  	if (!emmc_map_host()) {
  		(void)emmc_find_root_partition();
  	}
-@@ -481,6 +975,31 @@ emmc_close(__unused dev_t dev, __unused int flags, __unused int devtype, __unuse
+@@ -481,6 +978,31 @@ emmc_close(__unused dev_t dev, __unused int flags, __unused int devtype, __unuse
  	return 0;
  }
  
@@ -633,7 +636,7 @@ index ffd011a..4ea755b 100644
  static uint32_t emmc_secsize = 512;
  static uint8_t emmc_bounce[512];
  
-@@ -518,6 +1037,30 @@ emmc_strategy(buf_t bp)
+@@ -518,6 +1040,33 @@ emmc_strategy(buf_t bp)
  		uint32_t skip = pos & 511u;
  		uint32_t take = MIN(count - n, 512u - skip);
  		uint32_t lba = (uint32_t)(emmc_first_lba + pos / 512u);
@@ -643,7 +646,10 @@ index ffd011a..4ea755b 100644
 +			(void)PE_parse_boot_argn("emmcmulti", &emmc_multi, sizeof(emmc_multi));
 +		}
 +		if (emmc_multi && skip == 0 && count - n >= 512u) {
-+			uint32_t nb = MIN((count - n) / 512u, EMMC_MULTI_MAX);
++			/* Boot 49: HFS catalog corruption after the first large writes
++			 * with 512-sector commands; writes go back to the 128 used before. */
++			uint32_t nb = MIN((count - n) / 512u,
++			    (buf_flags(bp) & B_READ) ? EMMC_MULTI_MAX : 128u);
 +			if (buf_flags(bp) & B_READ) {
 +				error = emmc_read_blocks(lba, nb, vaddr + n);
 +			} else {
@@ -664,7 +670,7 @@ index ffd011a..4ea755b 100644
  		if (buf_flags(bp) & B_READ) {
  			error = emmc_read_sector(lba, emmc_bounce);
  			if (!error) {
-@@ -573,10 +1116,19 @@ emmc_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
+@@ -573,10 +1122,19 @@ emmc_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
  		*(uint32_t *)data = emmc_writable ? 1 : 0;
  		return 0;
  	case DKIOCGETMAXBLOCKCOUNTREAD:
@@ -684,7 +690,7 @@ index ffd011a..4ea755b 100644
  		return 0;
  	case DKIOCGETMAXSEGMENTCOUNTREAD:
  	case DKIOCGETMAXSEGMENTCOUNTWRITE:
-@@ -702,7 +1254,7 @@ emmc_log_start(void)
+@@ -702,7 +1260,7 @@ emmc_log_start(void)
  		return;
  	}
  	emmc_log_enabled = true;
