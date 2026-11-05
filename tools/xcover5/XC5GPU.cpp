@@ -359,7 +359,19 @@ gpu_submit(unsigned js, uint64_t jc, uint64_t *us)
 		wr(slot + JS_AFFINITY_NEXT_HI, 0);
 		wr(slot + JS_CONFIG_NEXT, JS_CONFIG);
 		wr(slot + JS_COMMAND_NEXT, 1);
-		bool finished = wait_bits(JOB_INT_RAWSTAT, done | failed, done, 2000);
+		/* Stop on done or failed (boot 47 waited the full 2 s on a failure). */
+		bool finished = false;
+		for (uint32_t ms = 0; ms < 2000 && !finished; ms++) {
+			for (int i = 0; i < 20 && !finished; i++) {
+				finished = (rd(JOB_INT_RAWSTAT) & (done | failed)) != 0;
+				if (!finished) {
+					IODelay(10);
+				}
+			}
+			if (!finished) {
+				IOSleep(1);
+			}
+		}
 		uint32_t raw = rd(JOB_INT_RAWSTAT), mmu = rd(MMU_INT_RAWSTAT);
 		status = finished && !(raw & failed) && !mmu ? 0 : (rd(slot + JS_STATUS) ? rd(slot + JS_STATUS) : ~0u);
 		if (status != 0) {
@@ -799,9 +811,16 @@ selftest(__unused void *arg, __unused wait_result_t wr)
 	job[12] = 0xc0ffee01u;
 	volatile uint32_t *output = job + 0x800 / 4;
 	*output = 0;
-	__asm__ volatile ("dsb sy" ::: "memory");
+	/*
+	 * Boot 47: DATA_INVALID_FAULT (js_status 0x58, no MMU fault): the GPU read
+	 * a zero header, so these writes had not reached memory. A kernel_task
+	 * mapping of this buffer can come back cacheable whatever was asked for;
+	 * clean it to the point of coherency like hakios-a32 does.
+	 */
+	cache_clean((uintptr_t)job, 0x1000);
 	uint64_t us = 0;
 	uint32_t status = gpu_submit(1, bo.va, &us);
+	cache_clean((uintptr_t)job, 0x1000);
 	bool ok = status == 0 && *output == 0xc0ffee01u;
 	xcover5_gpusvc[5] = ok ? 1 : 2;
 	xcover5_gpusvc[6] = (uint32_t)us;
