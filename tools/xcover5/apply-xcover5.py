@@ -439,6 +439,7 @@ edit('iokit/Kernel/arm/SweetPlatformExpert.cpp', [
      'extern char xcover5_gpusvc_lines[4][120];\n'
      'extern uint32_t xcover5_gpusvc_line;\n'
      'extern uint32_t xcover5_drop_state[5];\n'
+     'extern uint32_t xcover5_gl_exit[4];\n'
      '}\n'
      '\n'
      '/*\n'
@@ -669,6 +670,10 @@ edit('iokit/Kernel/arm/SweetPlatformExpert.cpp', [
      '\tconst uint32_t *ds = xcover5_drop_state;\n'
      '\tIOLog("XC5 drop state=%u written=%u failed=%u bbd launches=%u inserted=%u\\n",\n'
      '\t    ds[2], ds[0], ds[1], ds[3], ds[4]);\n'
+     '\tif (xcover5_gl_exit[0] != 0) {\n'
+     '\t\tIOLog("XC5 GL exit pid=%u status=0x%x ns=%u code=0x%x\\n", xcover5_gl_exit[0],\n'
+     '\t\t    xcover5_gl_exit[1], xcover5_gl_exit[2], xcover5_gl_exit[3]);\n'
+     '\t}\n'
      '\tfor (uint32_t i = xcover5_gpusvc_line > 4 ? xcover5_gpusvc_line - 4 : 0;\n'
      '\t    i < xcover5_gpusvc_line; i++) {\n'
      '\t\tIOLog("XC5 mesa: %s\\n", xcover5_gpusvc_lines[i % 4]);\n'
@@ -1624,6 +1629,26 @@ edit('bsd/kern/kern_exec.c', [
      '#endif\n'
      '\n'
      '\t/* Save space for envv[] NULL terminator */\n', 1),
+])
+# Boot 55: both backboardds with the EAGL bridge went away without a CRASH
+# line and their log had scrolled off: report the exit and replay the log.
+edit('bsd/kern/kern_exit.c', [
+    ('\tif (p->p_crash_behavior != 0 || p == initproc) {\n'
+     '\t\tproc_handle_critical_exit(p, rv);\n'
+     '\t}\n',
+     '\tif (p->p_crash_behavior != 0 || p == initproc) {\n'
+     '\t\tproc_handle_critical_exit(p, rv);\n'
+     '\t}\n'
+     '#if defined(ARM64_BOARD_CONFIG_A5XELTE)\n'
+     '\t{\n'
+     '\t\textern void xc5_gl_exit(int pid, int rv, uint32_t ns, uint64_t code) __attribute__((weak));\n'
+     '\t\tif (xc5_gl_exit) {\n'
+     '\t\t\txc5_gl_exit(proc_getpid(p), rv,\n'
+     '\t\t\t    PROC_HAS_EXITREASON(p) ? p->p_exit_reason->osr_namespace : 0,\n'
+     '\t\t\t    PROC_HAS_EXITREASON(p) ? p->p_exit_reason->osr_code : 0);\n'
+     '\t\t}\n'
+     '\t}\n'
+     '#endif\n', 1),
 ])
 
 # Boots 52-53: Mesa's MapBO of a write-combined buffer panicked in

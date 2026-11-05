@@ -62,6 +62,16 @@ uint32_t xcover5_gpusvc[8];
 /* The last four client Log lines (Mesa's test results), and a counter. */
 char xcover5_gpusvc_lines[4][120];
 uint32_t xcover5_gpusvc_line;
+/*
+ * All client Log lines for xc5_drop.c's report when the GL backboardd exits: the
+ * first XC5_GLLOG_FIRST of the boot, and a ring of the last XC5_GLLOG_RING. The
+ * console scrolls them away long before anyone can film them.
+ */
+#define XC5_GLLOG_FIRST 24
+#define XC5_GLLOG_RING  40
+char xcover5_gllog_first[XC5_GLLOG_FIRST][100];
+char xcover5_gllog_ring[XC5_GLLOG_RING][100];
+uint32_t xcover5_gllog_n;
 }
 
 /* ---- the GPU ---- */
@@ -781,6 +791,12 @@ XC5GPUUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *a
 			/* The last few, for the heartbeat (the console scrolls them away). */
 			strlcpy(xcover5_gpusvc_lines[xcover5_gpusvc_line++ % 4], line,
 			    sizeof(xcover5_gpusvc_lines[0]));
+			{
+				uint32_t k = xcover5_gllog_n++;
+				char *slot = k < XC5_GLLOG_FIRST ? xcover5_gllog_first[k] :
+				    xcover5_gllog_ring[(k - XC5_GLLOG_FIRST) % XC5_GLLOG_RING];
+				strlcpy(slot, line, sizeof(xcover5_gllog_ring[0]));
+			}
 		}
 		break;
 	case kSelSyncBO:

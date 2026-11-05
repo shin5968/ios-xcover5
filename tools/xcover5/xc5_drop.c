@@ -47,6 +47,8 @@ extern void thread_deallocate(thread_t);
 int xcover5_emmc_read_cache(uint64_t sector, uint32_t count, void *dst);
 void xc5_drop_start(void);
 int xc5_gl_env(const char *path, int pid, const char **extra, int max);
+void xc5_gl_exit(int pid, int rv, uint32_t ns, uint64_t code);
+extern void IOSleep(unsigned int milliseconds);
 /* For the heartbeat: files written, failed, state (1 no package, 2 already
  * installed, 3 written, 4 root never rw), backboardd launches, insertions. */
 uint32_t xcover5_drop_state[5];
@@ -378,5 +380,54 @@ xc5_gl_env(const char *path, int pid, const char **extra, int max)
 	printf("XC5 GL: backboardd launch %d (pid %d): %s inserted\n", launch, pid, lib);
 	xcover5_drop_state[4]++;
 	return 2;
+}
+
+/*
+ * proc_prepareexit() of every process: when a backboardd we inserted a library
+ * into exits, say how, then replay the GPU clients' log (XC5GPU.cpp) slowly
+ * enough to film: 16 lines, then 5 s, and so on. Only for the inserted
+ * launches (two per boot), on the exiting thread.
+ */
+extern char xcover5_gllog_first[24][100];
+extern char xcover5_gllog_ring[40][100];
+extern uint32_t xcover5_gllog_n;
+uint32_t xcover5_gl_exit[4];    /* heartbeat: pid, wait status, reason namespace, reason code */
+
+static void
+xgl_say(const char *line, int *shown)
+{
+	printf("XC5 GLLOG %s\n", line);
+	if (++*shown % 16 == 0) {
+		IOSleep(5000);
+	}
+}
+
+void
+xc5_gl_exit(int pid, int rv, uint32_t ns, uint64_t code)
+{
+	if (xgl_pid < 0 || pid != xgl_pid) {
+		return;
+	}
+	xgl_pid = -1;
+	xcover5_gl_exit[0] = (uint32_t)pid;
+	xcover5_gl_exit[1] = (uint32_t)rv;
+	xcover5_gl_exit[2] = ns;
+	xcover5_gl_exit[3] = (uint32_t)code;
+	printf("XC5 GL: backboardd pid %d exits: status 0x%x (sig %d, exit %d) reason ns %u code 0x%llx; %u log lines\n",
+	    pid, rv, rv & 0x7f, (rv >> 8) & 0xff, ns, code, xcover5_gllog_n);
+	IOSleep(3000);
+	int shown = 0;
+	uint32_t n = xcover5_gllog_n;
+	for (uint32_t i = 0; i < n && i < 24; i++) {
+		xgl_say(xcover5_gllog_first[i], &shown);
+	}
+	if (n > 24 + 40) {
+		printf("XC5 GLLOG ... %u lines skipped ...\n", n - 24 - 40);
+	}
+	for (uint32_t i = n > 24 + 40 ? n - 40 : 24; i < n; i++) {
+		xgl_say(xcover5_gllog_ring[(i - 24) % 40], &shown);
+	}
+	printf("XC5 GLLOG end (pid %d)\n", pid);
+	IOSleep(5000);
 }
 #endif /* XCOVER5 */
