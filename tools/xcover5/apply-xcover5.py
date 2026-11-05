@@ -1519,6 +1519,98 @@ edit('iokit/KernelConfigTables.cpp', [
      '    "     \'IOClass\'         = SweetBattery;"\n', 1),
 ])
 
+# GPU step 4: the CACHE drop zone (bsd/dev/xc5_drop.c, tools/xcover5/
+# mkdrop.py) for Mesa's libraries, and boot-arg xc5gl, which inserts a
+# library from it into backboardd. CACHE reads go through the multi-block
+# path, which so far accepted only the root partition.
+(tree / 'bsd/dev/xc5_drop.c').write_text(
+    (Path(__file__).resolve().parent / 'xc5_drop.c').read_text())
+print('wrote bsd/dev/xc5_drop.c')
+edit('bsd/conf/files', [
+    ('bsd/dev/a5xelte_emmc.c\t\t\tstandard\n',
+     'bsd/dev/a5xelte_emmc.c\t\t\tstandard\nbsd/dev/xc5_drop.c\t\t\tstandard\n', 1),
+])
+edit('bsd/dev/a5xelte_emmc.c', [
+    ('\tif ((uint64_t)lba < emmc_first_lba ||\n'
+     '\t    (uint64_t)lba + nblk > emmc_first_lba + emmc_nsectors) {\n'
+     '\t\treturn EINVAL;\n'
+     '\t}\n'
+     '\tif (write && !emmc_writable) {\n',
+     '\tbool in_cache = !write && emmc_log_nsectors != 0 && (uint64_t)lba >= emmc_log_first_lba &&\n'
+     '\t    (uint64_t)lba + nblk <= emmc_log_first_lba + emmc_log_nsectors;\n'
+     '\tif (!in_cache && ((uint64_t)lba < emmc_first_lba ||\n'
+     '\t    (uint64_t)lba + nblk > emmc_first_lba + emmc_nsectors)) {\n'
+     '\t\treturn EINVAL;\n'
+     '\t}\n'
+     '\tif (write && !emmc_writable) {\n', 1),
+    ('static uint32_t emmc_secsize = 512;\n',
+     '#if defined(XCOVER5)\n'
+     '/* count sectors of CACHE (A5_LOG_PARTITION) from `sector` into dst (xc5_drop.c). */\n'
+     'int xcover5_emmc_read_cache(uint64_t sector, uint32_t count, void *dst);\n'
+     'int\n'
+     'xcover5_emmc_read_cache(uint64_t sector, uint32_t count, void *dst)\n'
+     '{\n'
+     '\tif (!emmc_ready || emmc_log_nsectors == 0 || count == 0 ||\n'
+     '\t    sector + count > emmc_log_nsectors) {\n'
+     '\t\treturn EINVAL;\n'
+     '\t}\n'
+     '\tint error = 0;\n'
+     '\tlck_mtx_lock(&a5xelte_emmc_lock);\n'
+     '\tfor (uint32_t done = 0; done < count && !error;) {\n'
+     '\t\tuint32_t n = MIN(count - done, EMMC_MULTI_MAX);\n'
+     '\t\terror = emmc_xfer_blocks((uint32_t)(emmc_log_first_lba + sector + done), n, false);\n'
+     '\t\tif (!error) {\n'
+     '\t\t\tmemcpy((uint8_t *)dst + (size_t)done * 512u, emmc_multi_buf, (size_t)n * 512u);\n'
+     '\t\t}\n'
+     '\t\tdone += n;\n'
+     '\t}\n'
+     '\tlck_mtx_unlock(&a5xelte_emmc_lock);\n'
+     '\treturn error;\n'
+     '}\n'
+     '#endif\n'
+     '\n'
+     'static uint32_t emmc_secsize = 512;\n', 1),
+])
+edit('bsd/kern/bsd_init.c', [
+    ('\tbsd_init_kprintf("bsd_do_post - done");\n\n\tload_init_program(p);\n',
+     '\tbsd_init_kprintf("bsd_do_post - done");\n\n'
+     '#if defined(ARM64_BOARD_CONFIG_A5XELTE)\n'
+     '\t{\n'
+     '\t\t/* XCover5: CACHE drop zone, written once launchd remounts / rw. */\n'
+     '\t\textern void xc5_drop_start(void) __attribute__((weak));\n'
+     '\t\tif (xc5_drop_start) {\n'
+     '\t\t\txc5_drop_start();\n'
+     '\t\t}\n'
+     '\t}\n'
+     '#endif\n'
+     '\tload_init_program(p);\n', 1),
+])
+edit('bsd/kern/kern_exec.c', [
+    ('\t/* Save space for envv[] NULL terminator */\n',
+     '#if defined(ARM64_BOARD_CONFIG_A5XELTE)\n'
+     '\t/* XCover5: a drop-zone library for backboardd (boot-arg xc5gl, xc5_drop.c). */\n'
+     '\t{\n'
+     '\t\textern int xc5_gl_env(const char *path, const char **extra, int max) __attribute__((weak));\n'
+     '\t\tconst char *extra[2];\n'
+     '\t\tint n = xc5_gl_env ? xc5_gl_env(imgp->ip_strings + strlen(EXECUTABLE_KEY), extra, 2) : 0;\n'
+     '\t\tfor (int i = 0; i < n; i++) {\n'
+     '\t\t\terror = exec_add_user_string(imgp, CAST_USER_ADDR_T(extra[i]), UIO_SYSSPACE, TRUE);\n'
+     '\t\t\tif (error) {\n'
+     '\t\t\t\tgoto bad;\n'
+     '\t\t\t}\n'
+     '\t\t\tif (imgp->ip_argspace < new_ptr_size) {\n'
+     '\t\t\t\terror = E2BIG;\n'
+     '\t\t\t\tgoto bad;\n'
+     '\t\t\t}\n'
+     '\t\t\timgp->ip_argspace -= new_ptr_size;\n'
+     '\t\t\timgp->ip_envc++;\n'
+     '\t\t}\n'
+     '\t}\n'
+     '#endif\n'
+     '\n'
+     '\t/* Save space for envv[] NULL terminator */\n', 1),
+])
+
 edit('osfmk/vm/vm_kern.c', [
     ('\tvm_map_sizes(kernel_map, NULL, NULL, &largest_free_size);\n'
      '\tlargest_free_size = trunc_page(largest_free_size);\n',

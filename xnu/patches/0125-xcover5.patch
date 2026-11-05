@@ -1,5 +1,17 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 851addd..170a4c9 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -106,6 +106,7 @@ bsd/dev/random/randomdev.c		standard
+ bsd/dev/memdev.c			standard
+ bsd/dev/sweet_ufs.c			standard
+ bsd/dev/a5xelte_emmc.c			standard
++bsd/dev/xc5_drop.c			standard
+ bsd/dev/a5xelte_keys.c			standard
+ bsd/dev/a5xelte_touch.c			standard
+ bsd/dev/sweet_sample.c			standard
 diff --git a/bsd/dev/a5xelte_emmc.c b/bsd/dev/a5xelte_emmc.c
-index ffd011a..eee85af 100644
+index ffd011a..4ea755b 100644
 --- a/bsd/dev/a5xelte_emmc.c
 +++ b/bsd/dev/a5xelte_emmc.c
 @@ -22,6 +22,7 @@
@@ -41,7 +53,7 @@ index ffd011a..eee85af 100644
  	if ((emmc_rd(EMMC_CLKSEL) >> 16) & 7u) {
  		command |= CMD_HOLD;
  	}
-@@ -301,6 +312,447 @@ out:
+@@ -301,6 +312,449 @@ out:
  	return error;
  }
  
@@ -112,8 +124,10 @@ index ffd011a..eee85af 100644
 +	    !(emmc_rd(EMMC_PWREN) & 1u) || !(emmc_rd(EMMC_CLKENA) & 1u)) {
 +		return ENXIO;
 +	}
-+	if ((uint64_t)lba < emmc_first_lba ||
-+	    (uint64_t)lba + nblk > emmc_first_lba + emmc_nsectors) {
++	bool in_cache = !write && emmc_log_nsectors != 0 && (uint64_t)lba >= emmc_log_first_lba &&
++	    (uint64_t)lba + nblk <= emmc_log_first_lba + emmc_log_nsectors;
++	if (!in_cache && ((uint64_t)lba < emmc_first_lba ||
++	    (uint64_t)lba + nblk > emmc_first_lba + emmc_nsectors)) {
 +		return EINVAL;
 +	}
 +	if (write && !emmc_writable) {
@@ -489,7 +503,7 @@ index ffd011a..eee85af 100644
  static uint32_t
  emmc_le32(const uint8_t *p)
  {
-@@ -326,6 +778,20 @@ emmc_crc32(uint32_t crc, const uint8_t *data, size_t len)
+@@ -326,6 +780,20 @@ emmc_crc32(uint32_t crc, const uint8_t *data, size_t len)
  	return crc;
  }
  
@@ -510,7 +524,7 @@ index ffd011a..eee85af 100644
  static int
  emmc_find_root_partition(void)
  {
-@@ -381,16 +847,16 @@ emmc_find_root_partition(void)
+@@ -381,16 +849,16 @@ emmc_find_root_partition(void)
  			const uint8_t *p = entry + j * 128;
  			bool match = true;
  			bool system_match = true;
@@ -530,7 +544,7 @@ index ffd011a..eee85af 100644
  				    p[57 + k * 2] != 0) {
  					system_match = false;
  					break;
-@@ -418,12 +884,29 @@ emmc_find_root_partition(void)
+@@ -418,12 +886,29 @@ emmc_find_root_partition(void)
  		return EIO;
  	}
  	if (emmc_log_first_lba == emmc_first_lba && emmc_log_nsectors &&
@@ -562,7 +576,7 @@ index ffd011a..eee85af 100644
  		return ENXIO;
  	}
  	int enable_write = 0;
-@@ -446,7 +929,7 @@ emmc_map_host(void)
+@@ -446,7 +931,7 @@ emmc_map_host(void)
  	}
  	if (SecureDTLookupEntry(NULL, "/a5xelte-emmc", &node) != kSuccess ||
  	    SecureDTGetProperty(node, "reg", (void const **)&reg, &size) != kSuccess ||
@@ -571,7 +585,7 @@ index ffd011a..eee85af 100644
  		printf("A5XELTE eMMC: missing or unexpected ADT register window\n");
  		return ENXIO;
  	}
-@@ -464,6 +947,15 @@ emmc_map_host(void)
+@@ -464,6 +949,15 @@ emmc_map_host(void)
  void
  a5xelte_emmc_probe(void)
  {
@@ -587,7 +601,39 @@ index ffd011a..eee85af 100644
  	if (!emmc_map_host()) {
  		(void)emmc_find_root_partition();
  	}
-@@ -518,6 +1010,30 @@ emmc_strategy(buf_t bp)
+@@ -481,6 +975,31 @@ emmc_close(__unused dev_t dev, __unused int flags, __unused int devtype, __unuse
+ 	return 0;
+ }
+ 
++#if defined(XCOVER5)
++/* count sectors of CACHE (A5_LOG_PARTITION) from `sector` into dst (xc5_drop.c). */
++int xcover5_emmc_read_cache(uint64_t sector, uint32_t count, void *dst);
++int
++xcover5_emmc_read_cache(uint64_t sector, uint32_t count, void *dst)
++{
++	if (!emmc_ready || emmc_log_nsectors == 0 || count == 0 ||
++	    sector + count > emmc_log_nsectors) {
++		return EINVAL;
++	}
++	int error = 0;
++	lck_mtx_lock(&a5xelte_emmc_lock);
++	for (uint32_t done = 0; done < count && !error;) {
++		uint32_t n = MIN(count - done, EMMC_MULTI_MAX);
++		error = emmc_xfer_blocks((uint32_t)(emmc_log_first_lba + sector + done), n, false);
++		if (!error) {
++			memcpy((uint8_t *)dst + (size_t)done * 512u, emmc_multi_buf, (size_t)n * 512u);
++		}
++		done += n;
++	}
++	lck_mtx_unlock(&a5xelte_emmc_lock);
++	return error;
++}
++#endif
++
+ static uint32_t emmc_secsize = 512;
+ static uint8_t emmc_bounce[512];
+ 
+@@ -518,6 +1037,30 @@ emmc_strategy(buf_t bp)
  		uint32_t skip = pos & 511u;
  		uint32_t take = MIN(count - n, 512u - skip);
  		uint32_t lba = (uint32_t)(emmc_first_lba + pos / 512u);
@@ -618,7 +664,7 @@ index ffd011a..eee85af 100644
  		if (buf_flags(bp) & B_READ) {
  			error = emmc_read_sector(lba, emmc_bounce);
  			if (!error) {
-@@ -573,10 +1089,19 @@ emmc_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
+@@ -573,10 +1116,19 @@ emmc_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
  		*(uint32_t *)data = emmc_writable ? 1 : 0;
  		return 0;
  	case DKIOCGETMAXBLOCKCOUNTREAD:
@@ -638,7 +684,7 @@ index ffd011a..eee85af 100644
  		return 0;
  	case DKIOCGETMAXSEGMENTCOUNTREAD:
  	case DKIOCGETMAXSEGMENTCOUNTWRITE:
-@@ -702,7 +1227,7 @@ emmc_log_start(void)
+@@ -702,7 +1254,7 @@ emmc_log_start(void)
  		return;
  	}
  	emmc_log_enabled = true;
@@ -924,11 +970,397 @@ index ba647a8..979c83f 100644
  #endif
  	int enabled = A5_TOUCH_DEFAULT; /* A5 touch: off on the S8 */
  	int log_contacts = 0;
+diff --git a/bsd/dev/xc5_drop.c b/bsd/dev/xc5_drop.c
+new file mode 100644
+index 0000000..8450a27
+--- /dev/null
++++ b/bsd/dev/xc5_drop.c
+@@ -0,0 +1,332 @@
++/*
++ * XCover5 drop zone: files for the iOS root from the CACHE partition, so the
++ * Mesa libraries reach the phone without reflashing the 12 GB root image.
++ * Copied into the xnu tree as bsd/dev/xc5_drop.c by apply-xcover5.py.
++ *
++ * After wardevsa/ios-a5xelte's herolte_drop.c (patches 0240/0241, the same
++ * kernel family). tools/xcover5/mkdrop.py makes cache.img, flashed by Odin
++ * into CACHE (p34, PIT file name cache.img; Android is not used):
++ *   bytes 0..4095: "XC5DROP1" | u32 version 1 | u32 entry count | u64 bytes | u64 id
++ *   from 4096, back to back, 8-byte aligned:
++ *     u32 path length | u32 mode (0 = directory) | u64 size | path | data
++ * Paths must start with /private/var/xc5/. Once launchd has remounted the
++ * root read-write, a thread writes every entry as root:wheel, unless that
++ * package id is already installed (/private/var/xc5/.drop-id). Boot-arg
++ * xc5drop=0 skips it.
++ *
++ * Also here: xc5_gl_env(), called from exec_extract_strings(), which puts
++ * a library from the drop zone into backboardd (boot-arg xc5gl):
++ *   1  /private/var/xc5/lib/libxc5test.dylib   (Mesa's triangle test)
++ *   2  /private/var/xc5/lib/libxc5eagl.dylib   (CoreAnimation over GLES)
++ * Only the first two launches of a boot get it, so a broken library costs
++ * two backboardd restarts and no more.
++ */
++#include <pexpert/arm64/board_config.h>
++
++#if defined(XCOVER5)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/errno.h>
++#include <sys/fcntl.h>
++#include <sys/stat.h>
++#include <sys/proc.h>
++#include <sys/mount.h>
++#include <sys/vnode_internal.h>
++#include <sys/namei.h>
++#include <string.h>
++#include <kern/kalloc.h>
++#include <kern/thread.h>
++#include <pexpert/pexpert.h>
++
++extern vnode_t rootvnode;
++extern int hz;
++extern kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
++extern void thread_deallocate(thread_t);
++int xcover5_emmc_read_cache(uint64_t sector, uint32_t count, void *dst);
++void xc5_drop_start(void);
++int xc5_gl_env(const char *path, const char **extra, int max);
++
++#define XDROP_HEADER    4096u
++#define XDROP_CHUNK     (1u << 20)              /* read 1 MiB at a time */
++#define XDROP_MAX       (192ull << 20)          /* CACHE is 200 MiB */
++#define XDROP_PREFIX    "/private/var/xc5/"
++#define XDROP_DIR       "/private/var/xc5"
++#define XDROP_ID_PATH   "/private/var/xc5/.drop-id"
++#define XDROP_MAX_PATH  255u
++
++struct xdrop_header {
++	char     magic[8];
++	uint32_t version, count;
++	uint64_t bytes, id;
++};
++
++struct xdrop_entry {
++	uint32_t path_len, mode;
++	uint64_t size;
++};
++
++/* Sequential reader over the payload (CACHE byte 4096 on). */
++struct xdrop_reader {
++	uint8_t  *buf;
++	uint64_t  pos;          /* payload offset of buf[0] */
++	uint32_t  have;
++	uint64_t  limit;        /* payload bytes */
++};
++
++static int
++xdrop_fill(struct xdrop_reader *r, uint64_t off)
++{
++	uint64_t first = off & ~511ull;         /* payload byte, sector aligned */
++	uint64_t left = r->limit - first;
++	uint32_t n = (uint32_t)MIN((uint64_t)XDROP_CHUNK, (left + 511) & ~511ull) / 512u;
++	int error = xcover5_emmc_read_cache((XDROP_HEADER + first) / 512u, n, r->buf);
++	r->pos = first;
++	r->have = error ? 0 : n * 512u;
++	return error;
++}
++
++/* Pointer to len bytes at payload offset off (len <= XDROP_CHUNK / 2). */
++static const uint8_t *
++xdrop_at(struct xdrop_reader *r, uint64_t off, uint32_t len)
++{
++	if (off + len > r->limit) {
++		return NULL;
++	}
++	if (off < r->pos || off + len > r->pos + r->have) {
++		if (xdrop_fill(r, off) || off + len > r->pos + r->have) {
++			return NULL;
++		}
++	}
++	return r->buf + (off - r->pos);
++}
++
++static bool
++xdrop_has_dotdot(const char *path)
++{
++	for (const char *p = path; *p; p++) {
++		if (p[0] == '.' && p[1] == '.' && (p == path || p[-1] == '/') &&
++		    (p[2] == '/' || p[2] == '\0')) {
++			return true;
++		}
++	}
++	return false;
++}
++
++static int
++xdrop_mkdir(const char *path, vfs_context_t ctx)
++{
++	struct nameidata nd;
++	NDINIT(&nd, CREATE, OP_MKDIR, LOCKPARENT | AUDITVNPATH1, UIO_SYSSPACE,
++	    CAST_USER_ADDR_T(path), ctx);
++	int error = namei(&nd);
++	if (error) {
++		return error;
++	}
++	vnode_t dvp = nd.ni_dvp, vp = nd.ni_vp;
++	if (vp == NULLVP) {
++		struct vnode_attr va;
++		VATTR_INIT(&va);
++		VATTR_SET(&va, va_type, VDIR);
++		VATTR_SET(&va, va_mode, 0755);
++		error = vn_mkdir(dvp, &vp, &nd, &va, ctx);
++	}
++	nameidone(&nd);
++	if (vp != NULLVP) {
++		vnode_put(vp);
++	}
++	vnode_put(dvp);
++	return error;
++}
++
++static int
++xdrop_write(const char *path, int mode, const void *data, size_t size, vfs_context_t ctx)
++{
++	vnode_t vp = NULLVP;
++	int resid = 0;
++	int error = vnode_open(path, FWRITE | O_CREAT | O_TRUNC, mode & ALLPERMS, 0, &vp, ctx);
++	if (error) {
++		return error;
++	}
++	error = vn_rdwr(UIO_WRITE, vp, (caddr_t)(uintptr_t)data, (int)size, 0, UIO_SYSSPACE, IO_UNIT,
++	    vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
++	vnode_close(vp, FWRITE, ctx);
++	return error ? error : (resid ? EIO : 0);
++}
++
++static int
++xdrop_file(struct xdrop_reader *r, const char *path, int mode, uint64_t data, uint64_t size,
++    vfs_context_t ctx)
++{
++	vnode_t vp = NULLVP;
++	int error = vnode_open(path, FWRITE | O_CREAT | O_TRUNC, mode & ALLPERMS, 0, &vp, ctx);
++	if (error) {
++		return error;
++	}
++	for (uint64_t done = 0; done < size && !error;) {
++		uint32_t n = (uint32_t)MIN(size - done, (uint64_t)(XDROP_CHUNK / 2));
++		const uint8_t *p = xdrop_at(r, data + done, n);
++		int resid = 0;
++		if (p == NULL) {
++			error = EIO;
++			break;
++		}
++		error = vn_rdwr(UIO_WRITE, vp, (caddr_t)(uintptr_t)p, (int)n, (off_t)done, UIO_SYSSPACE,
++		    IO_UNIT, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
++		if (!error && resid) {
++			error = EIO;
++		}
++		done += n;
++	}
++	if (!error) {
++		struct vnode_attr va;
++		VATTR_INIT(&va);
++		VATTR_SET(&va, va_mode, mode & ALLPERMS);
++		error = vnode_setattr(vp, &va, ctx);
++	}
++	vnode_close(vp, FWRITE, ctx);
++	return error;
++}
++
++static uint64_t
++xdrop_installed_id(vfs_context_t ctx)
++{
++	vnode_t vp = NULLVP;
++	uint64_t id = 0;
++	int resid = 0;
++	if (vnode_open(XDROP_ID_PATH, FREAD, 0, 0, &vp, ctx) == 0) {
++		if (vn_rdwr(UIO_READ, vp, (caddr_t)&id, sizeof(id), 0, UIO_SYSSPACE, 0,
++		    vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx)) != 0 || resid != 0) {
++			id = 0;
++		}
++		vnode_close(vp, FREAD, ctx);
++	}
++	return id;
++}
++
++static void
++xdrop_apply(void)
++{
++	struct xdrop_reader r = { .buf = kalloc_data(XDROP_CHUNK, Z_WAITOK) };
++	if (r.buf == NULL) {
++		return;
++	}
++	struct xdrop_header h;
++	if (xcover5_emmc_read_cache(0, XDROP_HEADER / 512u, r.buf) != 0) {
++		printf("XC5 DROP: CACHE not readable\n");
++		goto out;
++	}
++	memcpy(&h, r.buf, sizeof(h));
++	if (memcmp(h.magic, "XC5DROP1", 8) != 0 || h.version != 1 || h.bytes > XDROP_MAX) {
++		printf("XC5 DROP: no drop package in CACHE\n");
++		goto out;
++	}
++	vfs_context_t ctx = vfs_context_kernel();
++	(void)xdrop_mkdir(XDROP_DIR, ctx);
++	if (xdrop_installed_id(ctx) == h.id) {
++		printf("XC5 DROP: package %llu already installed\n", h.id);
++		goto out;
++	}
++	r.limit = h.bytes;
++	uint64_t off = 0;
++	unsigned files = 0, failed = 0;
++	char path[XDROP_MAX_PATH + 1];
++	for (uint32_t i = 0; i < h.count; i++) {
++		const uint8_t *p = xdrop_at(&r, off, sizeof(struct xdrop_entry));
++		struct xdrop_entry e;
++		if (p == NULL) {
++			failed++;
++			break;
++		}
++		memcpy(&e, p, sizeof(e));
++		if (e.path_len == 0 || e.path_len > XDROP_MAX_PATH ||
++		    (p = xdrop_at(&r, off + sizeof(e), e.path_len)) == NULL) {
++			failed++;
++			break;
++		}
++		memcpy(path, p, e.path_len);
++		path[e.path_len] = '\0';
++		uint64_t data = off + ((sizeof(e) + e.path_len + 7) & ~7ull);
++		off = data + ((e.size + 7) & ~7ull);
++		int error;
++		if (strncmp(path, XDROP_PREFIX, strlen(XDROP_PREFIX)) != 0 || xdrop_has_dotdot(path)) {
++			error = EPERM;
++		} else if (e.mode == 0) {
++			error = xdrop_mkdir(path, ctx);
++			error = error == EEXIST ? 0 : error;
++		} else {
++			error = xdrop_file(&r, path, (int)e.mode, data, e.size, ctx);
++		}
++		if (error) {
++			failed++;
++			printf("XC5 DROP: %s: error %d\n", path, error);
++		} else {
++			files++;
++		}
++	}
++	if (failed == 0) {
++		(void)xdrop_write(XDROP_ID_PATH, 0644, &h.id, sizeof(h.id), ctx);
++	}
++	printf("XC5 DROP: package %llu: %u entries written, %u failed\n", h.id, files, failed);
++out:
++	kfree_data(r.buf, XDROP_CHUNK);
++}
++
++/* Wait (up to 3 minutes) for launchd's read-write remount of the root. */
++static void
++xdrop_thread(__unused void *arg, __unused wait_result_t wr)
++{
++	static int chan;
++	for (int s = 0; s < 180; s++) {
++		if (rootvnode != NULLVP && !vfs_isrdonly(vnode_mount(rootvnode))) {
++			xdrop_apply();
++			return;
++		}
++		(void)tsleep(&chan, PZERO, "xc5drop", hz);
++	}
++	printf("XC5 DROP: root never read-write, nothing written\n");
++}
++
++void
++xc5_drop_start(void)
++{
++	int on = 1;
++	thread_t thread;
++	(void)PE_parse_boot_argn("xc5drop", &on, sizeof(on));
++	if (on && kernel_thread_start(xdrop_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	}
++}
++
++#define XGL_TARGET      "/usr/libexec/backboardd"
++#define XGL_MAX_LAUNCHES 2
++
++int
++xc5_gl_env(const char *path, const char **extra, int max)
++{
++	static int mode = -1, launches;
++	if (mode < 0) {
++		mode = 0;
++		(void)PE_parse_boot_argn("xc5gl", &mode, sizeof(mode));
++	}
++	if (mode <= 0 || path == NULL || strcmp(path, XGL_TARGET) != 0 || max < 1) {
++		return 0;
++	}
++	const char *lib = mode == 1 ? "/private/var/xc5/lib/libxc5test.dylib" :
++	    "/private/var/xc5/lib/libxc5eagl.dylib";
++	int launch = ++launches;
++	if (launch > XGL_MAX_LAUNCHES) {
++		printf("XC5 GL: backboardd launch %d: stock\n", launch);
++		return 0;
++	}
++	vnode_t vp = NULLVP;
++	if (vnode_lookup(lib, 0, &vp, vfs_context_kernel()) != 0) {
++		printf("XC5 GL: backboardd launch %d: no %s, stock\n", launch, lib);
++		return 0;
++	}
++	vnode_put(vp);
++	extra[0] = mode == 1 ? "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5test.dylib" :
++	    "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5eagl.dylib";
++	printf("XC5 GL: backboardd launch %d: %s inserted\n", launch, lib);
++	return 1;
++}
++#endif /* XCOVER5 */
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index d26e1ee..701cbbd 100644
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -1103,6 +1103,15 @@ bsdinit_task(void)
+ 
+ 	bsd_init_kprintf("bsd_do_post - done");
+ 
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	{
++		/* XCover5: CACHE drop zone, written once launchd remounts / rw. */
++		extern void xc5_drop_start(void) __attribute__((weak));
++		if (xc5_drop_start) {
++			xc5_drop_start();
++		}
++	}
++#endif
+ 	load_init_program(p);
+ 	lock_trace = 1;
+ }
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
-index deccec2..5436842 100644
+index deccec2..30b3513 100644
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
-@@ -7414,6 +7414,25 @@ process_signature(proc_t p, struct image_params *imgp)
+@@ -5741,6 +5741,27 @@ exec_extract_strings(struct image_params *imgp)
+ 		imgp->ip_envc++;
+ 	}
+ 
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	/* XCover5: a drop-zone library for backboardd (boot-arg xc5gl, xc5_drop.c). */
++	{
++		extern int xc5_gl_env(const char *path, const char **extra, int max) __attribute__((weak));
++		const char *extra[2];
++		int n = xc5_gl_env ? xc5_gl_env(imgp->ip_strings + strlen(EXECUTABLE_KEY), extra, 2) : 0;
++		for (int i = 0; i < n; i++) {
++			error = exec_add_user_string(imgp, CAST_USER_ADDR_T(extra[i]), UIO_SYSSPACE, TRUE);
++			if (error) {
++				goto bad;
++			}
++			if (imgp->ip_argspace < new_ptr_size) {
++				error = E2BIG;
++				goto bad;
++			}
++			imgp->ip_argspace -= new_ptr_size;
++			imgp->ip_envc++;
++		}
++	}
++#endif
++
+ 	/* Save space for envv[] NULL terminator */
+ 	if (imgp->ip_argspace < new_ptr_size) {
+ 		error = E2BIG;
+@@ -7414,6 +7435,25 @@ process_signature(proc_t p, struct image_params *imgp)
  #if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_A5XELTE)
  			/* A short line keeps the persistent console ring useful. */
  			printf("exec %s\n", p->p_name);
