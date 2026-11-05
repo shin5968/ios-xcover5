@@ -53,6 +53,15 @@ def pack(items):
     return blob, entries, ident
 
 
+def sparse(raw):
+    """Android sparse image: S-Boot refused a raw cache.img ("Complete(Write)
+    operation failed" after cache.img). One RAW chunk of 4 KiB blocks."""
+    blocks = len(raw) // 4096
+    header = struct.pack('<IHHHHIIII', 0xed26ff3a, 1, 0, 28, 12, 4096, blocks, 1, 0)
+    chunk = struct.pack('<HHII', 0xcac1, 0, blocks, 12 + len(raw))
+    return header + chunk + raw
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('out')
@@ -68,6 +77,7 @@ def main():
     if not items:
         ap.error('nothing to pack')
     blob, entries, ident = pack(items)
+    blob = sparse(blob)
     with tarfile.open(args.out, 'w', format=tarfile.USTAR_FORMAT) as t:
         info = tarfile.TarInfo('cache.img')
         info.size = len(blob)
