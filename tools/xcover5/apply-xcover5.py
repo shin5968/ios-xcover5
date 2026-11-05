@@ -1603,9 +1603,11 @@ edit('bsd/kern/kern_exec.c', [
      '#if defined(ARM64_BOARD_CONFIG_A5XELTE)\n'
      '\t/* XCover5: a drop-zone library for backboardd (boot-arg xc5gl, xc5_drop.c). */\n'
      '\t{\n'
-     '\t\textern int xc5_gl_env(const char *path, const char **extra, int max) __attribute__((weak));\n'
+     '\t\textern int xc5_gl_env(const char *path, int pid, const char **extra, int max) __attribute__((weak));\n'
      '\t\tconst char *extra[2];\n'
-     '\t\tint n = xc5_gl_env ? xc5_gl_env(imgp->ip_strings + strlen(EXECUTABLE_KEY), extra, 2) : 0;\n'
+     '\t\t/* posix_spawn runs this on the parent\'s thread: the new process is the context\'s. */\n'
+     '\t\tint n = xc5_gl_env ? xc5_gl_env(imgp->ip_strings + strlen(EXECUTABLE_KEY),\n'
+     '\t\t    proc_getpid(vfs_context_proc(imgp->ip_vfs_context)), extra, 2) : 0;\n'
      '\t\tfor (int i = 0; i < n; i++) {\n'
      '\t\t\terror = exec_add_user_string(imgp, CAST_USER_ADDR_T(extra[i]), UIO_SYSSPACE, TRUE);\n'
      '\t\t\tif (error) {\n'
@@ -1622,6 +1624,61 @@ edit('bsd/kern/kern_exec.c', [
      '#endif\n'
      '\n'
      '\t/* Save space for envv[] NULL terminator */\n', 1),
+])
+
+# dyld's amfi_check_dyld_policy_self(): an "AMFI" MAC policy answering only
+# for the backboardd that xc5gl gave a library (xc5_drop.c), after herolte's
+# 0246. Every other process still gets ENOPOLICY, as with no policy.
+edit('bsd/kern/sweet_amfi.c', [
+    ('static mac_policy_handle_t sweet_amfi_mac_handle;\n',
+     'static mac_policy_handle_t sweet_amfi_mac_handle;\n'
+     '\n'
+     '#if defined(ARM64_BOARD_CONFIG_A5XELTE)  /* XCOVER5 tree */\n'
+     '#include <sys/errno.h>\n'
+     'extern uint64_t xc5_gl_dyld_flags(void);\n'
+     '\n'
+     'static int\n'
+     'xc5_amfi_dyld_syscall(__unused struct proc *p, int call, user_addr_t arg)\n'
+     '{\n'
+     '\tstruct {\n'
+     '\t\tuint64_t input_flags;\n'
+     '\t\tuint64_t output;        /* user pointer to a u64 */\n'
+     '\t} args;\n'
+     '\tuint64_t flags;\n'
+     '\n'
+     '\tif (call != 90 || (flags = xc5_gl_dyld_flags()) == 0) {\n'
+     '\t\treturn ENOPOLICY;\n'
+     '\t}\n'
+     '\tif (copyin(arg, &args, sizeof(args)) != 0) {\n'
+     '\t\treturn EFAULT;\n'
+     '\t}\n'
+     '\tprintf("XC5 AMFI: dyld policy for pid %d: input 0x%llx -> 0x%llx\\n",\n'
+     '\t    proc_selfpid(), args.input_flags, flags);\n'
+     '\treturn copyout(&flags, (user_addr_t)args.output, sizeof(flags));\n'
+     '}\n'
+     '\n'
+     'static const struct mac_policy_ops xc5_amfi_dyld_mac_ops = {\n'
+     '\t.mpo_policy_syscall = xc5_amfi_dyld_syscall,\n'
+     '};\n'
+     '\n'
+     'static struct mac_policy_conf xc5_amfi_dyld_mac_conf = {\n'
+     '\t.mpc_name = "AMFI",\n'
+     '\t.mpc_fullname = "XCover5 dyld policy for xc5gl",\n'
+     '\t.mpc_ops = &xc5_amfi_dyld_mac_ops,\n'
+     '};\n'
+     '\n'
+     'static mac_policy_handle_t xc5_amfi_dyld_mac_handle;\n'
+     '#endif\n', 1),
+    ('\tprintf(PORT_NAME " Sandbox: permissive policy %s (%d)\\n",\n'
+     '\t    error ? "NOT registered" : "registered", error);\n'
+     '}\n',
+     '\tprintf(PORT_NAME " Sandbox: permissive policy %s (%d)\\n",\n'
+     '\t    error ? "NOT registered" : "registered", error);\n'
+     '#if defined(ARM64_BOARD_CONFIG_A5XELTE)\n'
+     '\terror = mac_policy_register(&xc5_amfi_dyld_mac_conf, &xc5_amfi_dyld_mac_handle, NULL);\n'
+     '\tprintf("XC5 AMFI: dyld policy %s (%d)\\n", error ? "NOT registered" : "registered", error);\n'
+     '#endif\n'
+     '}\n', 1),
 ])
 
 edit('osfmk/vm/vm_kern.c', [

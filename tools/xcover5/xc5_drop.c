@@ -44,7 +44,7 @@ extern kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
 extern void thread_deallocate(thread_t);
 int xcover5_emmc_read_cache(uint64_t sector, uint32_t count, void *dst);
 void xc5_drop_start(void);
-int xc5_gl_env(const char *path, const char **extra, int max);
+int xc5_gl_env(const char *path, int pid, const char **extra, int max);
 /* For the heartbeat: files written, failed, state (1 no package, 2 already
  * installed, 3 written, 4 root never rw), backboardd launches, insertions. */
 uint32_t xcover5_drop_state[5];
@@ -309,8 +309,31 @@ xc5_drop_start(void)
 #define XGL_TARGET      "/usr/libexec/backboardd"
 #define XGL_MAX_LAUNCHES 2
 
+/*
+ * Boot 51: library inserted into the environment, yet XC5GPU never had a
+ * client: dyld honours DYLD_* only if AMFI allows it (amfi_check_dyld_policy_
+ * self, __mac_syscall("AMFI", 90)), and with no "AMFI" policy it treats the
+ * process as restricted. sweet_amfi.c's "AMFI" policy answers through this:
+ * the backboardd that got the library may insert it (herolte 0246).
+ */
+#define AMFI_DYLD_OUTPUT_ALLOW_AT_PATH                  (1ull << 0)
+#define AMFI_DYLD_OUTPUT_ALLOW_PATH_VARS                (1ull << 1)
+#define AMFI_DYLD_OUTPUT_ALLOW_FAILED_LIBRARY_INSERTION (1ull << 5)
+static int xgl_pid = -1;
+uint64_t xc5_gl_dyld_flags(void);
+
+uint64_t
+xc5_gl_dyld_flags(void)
+{
+	if (xgl_pid < 0 || proc_selfpid() != xgl_pid) {
+		return 0;
+	}
+	return AMFI_DYLD_OUTPUT_ALLOW_AT_PATH | AMFI_DYLD_OUTPUT_ALLOW_PATH_VARS |
+	       AMFI_DYLD_OUTPUT_ALLOW_FAILED_LIBRARY_INSERTION;
+}
+
 int
-xc5_gl_env(const char *path, const char **extra, int max)
+xc5_gl_env(const char *path, int pid, const char **extra, int max)
 {
 	static int mode = -1, launches;
 	if (mode < 0) {
@@ -336,7 +359,8 @@ xc5_gl_env(const char *path, const char **extra, int max)
 	vnode_put(vp);
 	extra[0] = mode == 1 ? "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5test.dylib" :
 	    "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5eagl.dylib";
-	printf("XC5 GL: backboardd launch %d: %s inserted\n", launch, lib);
+	xgl_pid = pid;
+	printf("XC5 GL: backboardd launch %d (pid %d): %s inserted\n", launch, pid, lib);
 	xcover5_drop_state[4]++;
 	return 1;
 }

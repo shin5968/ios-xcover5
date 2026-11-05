@@ -983,10 +983,10 @@ index ba647a8..979c83f 100644
  	int log_contacts = 0;
 diff --git a/bsd/dev/xc5_drop.c b/bsd/dev/xc5_drop.c
 new file mode 100644
-index 0000000..5264cac
+index 0000000..43bcbe1
 --- /dev/null
 +++ b/bsd/dev/xc5_drop.c
-@@ -0,0 +1,343 @@
+@@ -0,0 +1,367 @@
 +/*
 + * XCover5 drop zone: files for the iOS root from the CACHE partition, so the
 + * Mesa libraries reach the phone without reflashing the 12 GB root image.
@@ -1033,7 +1033,7 @@ index 0000000..5264cac
 +extern void thread_deallocate(thread_t);
 +int xcover5_emmc_read_cache(uint64_t sector, uint32_t count, void *dst);
 +void xc5_drop_start(void);
-+int xc5_gl_env(const char *path, const char **extra, int max);
++int xc5_gl_env(const char *path, int pid, const char **extra, int max);
 +/* For the heartbeat: files written, failed, state (1 no package, 2 already
 + * installed, 3 written, 4 root never rw), backboardd launches, insertions. */
 +uint32_t xcover5_drop_state[5];
@@ -1298,8 +1298,31 @@ index 0000000..5264cac
 +#define XGL_TARGET      "/usr/libexec/backboardd"
 +#define XGL_MAX_LAUNCHES 2
 +
++/*
++ * Boot 51: library inserted into the environment, yet XC5GPU never had a
++ * client: dyld honours DYLD_* only if AMFI allows it (amfi_check_dyld_policy_
++ * self, __mac_syscall("AMFI", 90)), and with no "AMFI" policy it treats the
++ * process as restricted. sweet_amfi.c's "AMFI" policy answers through this:
++ * the backboardd that got the library may insert it (herolte 0246).
++ */
++#define AMFI_DYLD_OUTPUT_ALLOW_AT_PATH                  (1ull << 0)
++#define AMFI_DYLD_OUTPUT_ALLOW_PATH_VARS                (1ull << 1)
++#define AMFI_DYLD_OUTPUT_ALLOW_FAILED_LIBRARY_INSERTION (1ull << 5)
++static int xgl_pid = -1;
++uint64_t xc5_gl_dyld_flags(void);
++
++uint64_t
++xc5_gl_dyld_flags(void)
++{
++	if (xgl_pid < 0 || proc_selfpid() != xgl_pid) {
++		return 0;
++	}
++	return AMFI_DYLD_OUTPUT_ALLOW_AT_PATH | AMFI_DYLD_OUTPUT_ALLOW_PATH_VARS |
++	       AMFI_DYLD_OUTPUT_ALLOW_FAILED_LIBRARY_INSERTION;
++}
++
 +int
-+xc5_gl_env(const char *path, const char **extra, int max)
++xc5_gl_env(const char *path, int pid, const char **extra, int max)
 +{
 +	static int mode = -1, launches;
 +	if (mode < 0) {
@@ -1325,7 +1348,8 @@ index 0000000..5264cac
 +	vnode_put(vp);
 +	extra[0] = mode == 1 ? "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5test.dylib" :
 +	    "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5eagl.dylib";
-+	printf("XC5 GL: backboardd launch %d: %s inserted\n", launch, lib);
++	xgl_pid = pid;
++	printf("XC5 GL: backboardd launch %d (pid %d): %s inserted\n", launch, pid, lib);
 +	xcover5_drop_state[4]++;
 +	return 1;
 +}
@@ -1351,19 +1375,21 @@ index d26e1ee..701cbbd 100644
  	lock_trace = 1;
  }
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
-index deccec2..30b3513 100644
+index deccec2..d99902b 100644
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
-@@ -5741,6 +5741,27 @@ exec_extract_strings(struct image_params *imgp)
+@@ -5741,6 +5741,29 @@ exec_extract_strings(struct image_params *imgp)
  		imgp->ip_envc++;
  	}
  
 +#if defined(ARM64_BOARD_CONFIG_A5XELTE)
 +	/* XCover5: a drop-zone library for backboardd (boot-arg xc5gl, xc5_drop.c). */
 +	{
-+		extern int xc5_gl_env(const char *path, const char **extra, int max) __attribute__((weak));
++		extern int xc5_gl_env(const char *path, int pid, const char **extra, int max) __attribute__((weak));
 +		const char *extra[2];
-+		int n = xc5_gl_env ? xc5_gl_env(imgp->ip_strings + strlen(EXECUTABLE_KEY), extra, 2) : 0;
++		/* posix_spawn runs this on the parent's thread: the new process is the context's. */
++		int n = xc5_gl_env ? xc5_gl_env(imgp->ip_strings + strlen(EXECUTABLE_KEY),
++		    proc_getpid(vfs_context_proc(imgp->ip_vfs_context)), extra, 2) : 0;
 +		for (int i = 0; i < n; i++) {
 +			error = exec_add_user_string(imgp, CAST_USER_ADDR_T(extra[i]), UIO_SYSSPACE, TRUE);
 +			if (error) {
@@ -1382,7 +1408,7 @@ index deccec2..30b3513 100644
  	/* Save space for envv[] NULL terminator */
  	if (imgp->ip_argspace < new_ptr_size) {
  		error = E2BIG;
-@@ -7414,6 +7435,25 @@ process_signature(proc_t p, struct image_params *imgp)
+@@ -7414,6 +7437,25 @@ process_signature(proc_t p, struct image_params *imgp)
  #if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_A5XELTE)
  			/* A short line keeps the persistent console ring useful. */
  			printf("exec %s\n", p->p_name);
@@ -1408,6 +1434,64 @@ index deccec2..30b3513 100644
  #else
  			printf("Allowing spawn of iOS binary %s since it has "
  			    "com.apple.private.security.no-sandbox entitlement or unentitled_ios_sim_launch "
+diff --git a/bsd/kern/sweet_amfi.c b/bsd/kern/sweet_amfi.c
+index 4fd8729..b4969e4 100644
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -385,6 +385,43 @@ static struct mac_policy_conf sweet_amfi_mac_conf = {
+ 
+ static mac_policy_handle_t sweet_amfi_mac_handle;
+ 
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)  /* XCOVER5 tree */
++#include <sys/errno.h>
++extern uint64_t xc5_gl_dyld_flags(void);
++
++static int
++xc5_amfi_dyld_syscall(__unused struct proc *p, int call, user_addr_t arg)
++{
++	struct {
++		uint64_t input_flags;
++		uint64_t output;        /* user pointer to a u64 */
++	} args;
++	uint64_t flags;
++
++	if (call != 90 || (flags = xc5_gl_dyld_flags()) == 0) {
++		return ENOPOLICY;
++	}
++	if (copyin(arg, &args, sizeof(args)) != 0) {
++		return EFAULT;
++	}
++	printf("XC5 AMFI: dyld policy for pid %d: input 0x%llx -> 0x%llx\n",
++	    proc_selfpid(), args.input_flags, flags);
++	return copyout(&flags, (user_addr_t)args.output, sizeof(flags));
++}
++
++static const struct mac_policy_ops xc5_amfi_dyld_mac_ops = {
++	.mpo_policy_syscall = xc5_amfi_dyld_syscall,
++};
++
++static struct mac_policy_conf xc5_amfi_dyld_mac_conf = {
++	.mpc_name = "AMFI",
++	.mpc_fullname = "XCover5 dyld policy for xc5gl",
++	.mpc_ops = &xc5_amfi_dyld_mac_ops,
++};
++
++static mac_policy_handle_t xc5_amfi_dyld_mac_handle;
++#endif
++
+ /* Called from bsd_init once MAC policies can register, before any exec. */
+ void sweet_amfi_policy_register(void);
+ 
+@@ -397,5 +434,9 @@ sweet_amfi_policy_register(void)
+ 	error = mac_policy_register(&sweet_sandbox_mac_conf, &sweet_sandbox_mac_handle, NULL);
+ 	printf(PORT_NAME " Sandbox: permissive policy %s (%d)\n",
+ 	    error ? "NOT registered" : "registered", error);
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	error = mac_policy_register(&xc5_amfi_dyld_mac_conf, &xc5_amfi_dyld_mac_handle, NULL);
++	printf("XC5 AMFI: dyld policy %s (%d)\n", error ? "NOT registered" : "registered", error);
++#endif
+ }
+ #endif /* SWEET || A5XELTE */
 diff --git a/bsd/miscfs/specfs/spec_vnops.c b/bsd/miscfs/specfs/spec_vnops.c
 index 4ab3ef3..a5e3527 100644
 --- a/bsd/miscfs/specfs/spec_vnops.c
