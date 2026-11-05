@@ -167,6 +167,12 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
 - 부팅 48 (CI run 42003030139, 영상 20261105_183953): **XC5GPU 서비스 자체 시험 성공** —
   `gpusvc state=1 bos=1 jobs=1 failed=0 selftest=1 (115 us)`. 사용자 경로(버퍼 생성, GPU 매핑, Submit)로 WRITE_VALUE 실행.
   GPU 3단계 완료. 다음: 4단계(Mesa panfrost iOS 빌드, herodrm을 XC5GPU에 연결, 파일 전달 경로).
+- GPU 4단계 준비: Mesa 25.0.7 panfrost iOS 빌드 성공(mesa-ios run 42005058206), CACHE drop zone과 backboardd 삽입
+  커널(CI run 42005478588). Odin이 raw cache.img를 거부("Complete(Write) operation failed") → sparse 형식으로 변경.
+- 부팅 49 (`xc5-ios-gpu4-console.tar`): **루트 HFS 손상** — `hfs_swap_HFSPlusBTInternalNode: unrecognized catalog record
+  type`, `Runtime corruption detected on iOSRoot`, 이어서 rapportd를 쓰레기로 읽어 `non-platform binary` 패닉.
+  원인 미확정. 의심: drop zone이 16 MB를 쓰면서 처음 쓰인 512섹터 쓰기 명령(전에는 128). 쓰기는 128로 되돌리고
+  DMA 읽기는 처음 64번 뒤에도 256번에 1번 PIO로 비교(CI run 42007309883). USERDATA 재플래시 필요.
 
 ## S8 포트와 다른 점
 
