@@ -188,9 +188,70 @@ static id my_init(id self, SEL cmd, id a, id b, id c, id d, id e, id f) {
     return made;
 }
 
+// Boot 67: the store's extension tables are empty and _stateLock_initialExtensionsLoaded is 0: PosterBoard was
+// never told of any poster provider (extension point com.apple.posterkit.provider). Who is asked: the store's
+// extension provider (a PBFPosterExtensionProvider), whose object ivars are listed here; and what the system
+// answers when asked directly, through NSExtension (the same ExtensionKit/LaunchServices lookup).
+static void dump_object(const char *what, id obj) {
+    if (obj == nil) { say("xc5pb: %s: nil", what); return; }
+    say("xc5pb: %s: %s %p", what, object_getClassName(obj), obj);
+    for (Class c = object_getClass(obj); c != Nil && strcmp(class_getName(c), "NSObject") != 0;
+         c = class_getSuperclass(c)) {
+        unsigned count = 0;
+        Ivar *ivars = class_copyIvarList(c, &count);
+        for (unsigned i = 0; i < count && i < 16; i++) {
+            const char *name = ivar_getName(ivars[i]), *type = ivar_getTypeEncoding(ivars[i]);
+            if (name == NULL || type == NULL) continue;
+            if (type[0] == 'B' || type[0] == 'c') {
+                say("xc5pb:   %s.%s = %u", class_getName(c), name,
+                    *((unsigned char *)(void *)obj + ivar_getOffset(ivars[i])));
+                continue;
+            }
+            if (type[0] != '@') continue;
+            id v = object_getIvar(obj, ivars[i]);
+            unsigned long n = v != nil && responds(v, "count") ? SEND0(unsigned long, v, "count") : 0;
+            say("xc5pb:   %s.%s: %s, count %lu", class_getName(c), name, v != nil ? object_getClassName(v) : "nil", n);
+            if (v != nil && responds(v, "count") && n > 0) say_long(name, text(v));
+        }
+        free(ivars);
+    }
+}
+
+static void ask_system(void) {
+    Class ns = objc_getClass("NSExtension");
+    SEL sel = sel_registerName("extensionsWithMatchingAttributes:error:");
+    if (ns == Nil || !class_respondsToSelector(object_getClass((id)ns), sel)) {
+        say("xc5pb: NSExtension lookup not available%s", "");
+        return;
+    }
+    const void *k = CFSTR("NSExtensionPointName"), *v = CFSTR("com.apple.posterkit.provider");
+    CFDictionaryRef attrs = CFDictionaryCreate(NULL, &k, &v, 1, &kCFTypeDictionaryKeyCallBacks,
+        &kCFTypeDictionaryValueCallBacks);
+    id error = nil;
+    id found = ((id (*)(id, SEL, id, id *))objc_msgSend)((id)ns, sel, (id)attrs, &error);
+    CFRelease(attrs);
+    unsigned long n = found != nil && responds(found, "count") ? SEND0(unsigned long, found, "count") : 0;
+    say("xc5pb: NSExtension lookup of com.apple.posterkit.provider: %lu found, error %s", n,
+        error != nil ? "below" : "none");
+    if (error != nil) say_long("the lookup's error", text(error));
+    if (found != nil && n > 0) say_long("the extensions found", text(found));
+}
+
 static void report_state(const char *when) {
     say("xc5pb: --- state %s: data store %p, first-time setups %u ---", when, the_store, setups);
+    ask_system();
     if (the_store == nil) return;
+    {
+        unsigned count = 0;
+        Ivar *ivars = class_copyIvarList(object_getClass(the_store), &count);
+        for (unsigned i = 0; i < count; i++) {
+            const char *name = ivar_getName(ivars[i]), *type = ivar_getTypeEncoding(ivars[i]);
+            if (name != NULL && type != NULL && type[0] == '@' && strcasestr(name, "rovider") != NULL &&
+                strcasestr(name, "ssertion") == NULL)
+                dump_object(name, object_getIvar(the_store, ivars[i]));
+        }
+        free(ivars);
+    }
     unsigned count = 0;
     Ivar *ivars = class_copyIvarList(object_getClass(the_store), &count);
     int shown = 0;
