@@ -161,8 +161,85 @@ static void my_setup(id self, SEL cmd) {
     if (made != nil) say_long("the configuration made", text(made));
 }
 
+// Boot 66: the first-time setup was not called at all (boot 64's setup seems to have been saved), PosterBoard did
+// not crash, and the wallpaper stayed black: nothing was reported, since the report was inside the setup. Now the
+// data store is caught as it is made (its -initWith... methods, whatever their arguments: on arm64 they are all in
+// x2-x7 and pass through), and its state is reported 20 s and 60 s after this library is loaded, from a queue of
+// its own: ivars read directly, no lock taken, so a value may be mid-change, which is fine for a look.
+#include <dispatch/dispatch.h>
+
+static id the_store;
+#define INIT_MAX 4
+static SEL init_sels[INIT_MAX];
+static IMP init_imps[INIT_MAX];
+static int init_count;
+
+typedef id (*init6_t)(id, SEL, id, id, id, id, id, id);
+
+static id my_init(id self, SEL cmd, id a, id b, id c, id d, id e, id f) {
+    IMP orig = NULL;
+    for (int i = 0; i < init_count; i++)
+        if (init_sels[i] == cmd) orig = init_imps[i];
+    id made = orig != NULL ? ((init6_t)orig)(self, cmd, a, b, c, d, e, f) : nil;
+    if (made != nil) {
+        the_store = made;       /* the store lives as long as PosterBoard; not retained */
+        say("xc5pb: data store %p made by -%s", made, sel_getName(cmd));
+    }
+    return made;
+}
+
+static void report_state(const char *when) {
+    say("xc5pb: --- state %s: data store %p, first-time setups %u ---", when, the_store, setups);
+    if (the_store == nil) return;
+    unsigned count = 0;
+    Ivar *ivars = class_copyIvarList(object_getClass(the_store), &count);
+    int shown = 0;
+    for (unsigned i = 0; i < count && shown < 14; i++) {
+        const char *name = ivar_getName(ivars[i]), *type = ivar_getTypeEncoding(ivars[i]);
+        if (name == NULL || type == NULL) continue;
+        if (type[0] == 'B' || type[0] == 'c') {         /* the flags: first-time done (233) among them */
+            unsigned char v = *((unsigned char *)(void *)the_store + ivar_getOffset(ivars[i]));
+            say("xc5pb: ivar %s (%td) = %u", name, ivar_getOffset(ivars[i]), v);
+            shown++;
+            continue;
+        }
+        if (type[0] != '@') continue;
+        if (strcasestr(name, "xtension") == NULL && strcasestr(name, "oster") == NULL &&
+            strcasestr(name, "witcher") == NULL && strcasestr(name, "elected") == NULL &&
+            strcasestr(name, "ath") == NULL)
+            continue;
+        id value = object_getIvar(the_store, ivars[i]);
+        unsigned long n = value != nil && responds(value, "count") ? SEND0(unsigned long, value, "count") : 0;
+        say("xc5pb: ivar %s: %s, count %lu", name, value != nil ? object_getClassName(value) : "nil", n);
+        if (value != nil && (n > 0 || !responds(value, "count"))) say_long(name, text(value));
+        shown++;
+    }
+    free(ivars);
+}
+
+static void hook_inits(Class cls) {
+    unsigned count = 0;
+    Method *methods = class_copyMethodList(cls, &count);
+    for (unsigned i = 0; i < count && init_count < INIT_MAX; i++) {
+        const char *name = sel_getName(method_getName(methods[i]));
+        if (strncmp(name, "initWith", 8) != 0) continue;
+        init_sels[init_count] = method_getName(methods[i]);
+        init_imps[init_count] = method_setImplementation(methods[i], (IMP)my_init);
+        say("xc5pb: watching -%s", name);
+        init_count++;
+    }
+    free(methods);
+}
+
 __attribute__((constructor)) static void xc5_pbhook(void) {
     if (strcmp(getprogname(), "PosterBoard") != 0) return;
+    {
+        Class store = objc_getClass("PBFPosterExtensionDataStore");
+        if (store != Nil) hook_inits(store);
+        dispatch_queue_t q = dispatch_queue_create("xc5pb.report", NULL);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_SEC), q, ^{ report_state("at 20 s"); });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_SEC), q, ^{ report_state("at 60 s"); });
+    }
     Class cls = objc_getClass("PBFPosterExtensionDataStore");
     SEL sel = sel_registerName("_stateLock_setupSwitcherConfigurationForFirstTime");
     Method m = cls != Nil ? class_getInstanceMethod(cls, sel) : NULL;
