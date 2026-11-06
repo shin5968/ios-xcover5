@@ -117,18 +117,27 @@ static void say_long(const char *what, const char *s) {
         say("xc5pb:  %.180s", s + at);
 }
 
+// Boot 65: calling -knownExtensions from here took the data store's state lock, which the caller already holds
+// (the setup is a _stateLock_ method): os_unfair_lock trapped. So no methods of the store: its object ivars are
+// read directly, those whose names speak of extensions, posters or paths.
 static void report_extensions(id self) {
-    static const char *const names[] = { "knownExtensions", "extensions", "_stateLock_extensions",
-        "posterExtensions", NULL };
-    for (int i = 0; names[i] != NULL; i++) {
-        if (!responds(self, names[i])) continue;
-        id ext = SEND0(id, self, names[i]);
-        unsigned long count = ext != nil && responds(ext, "count") ? SEND0(unsigned long, ext, "count") : 0;
-        say("xc5pb: -%s: %lu", names[i], count);
-        if (ext != nil) say_long(names[i], text(ext));
-        return;
+    unsigned count = 0;
+    Ivar *ivars = class_copyIvarList(object_getClass(self), &count);
+    int shown = 0;
+
+    for (unsigned i = 0; i < count && shown < 8; i++) {
+        const char *name = ivar_getName(ivars[i]), *type = ivar_getTypeEncoding(ivars[i]);
+        if (name == NULL || type == NULL || type[0] != '@') continue;
+        if (strcasestr(name, "xtension") == NULL && strcasestr(name, "oster") == NULL &&
+            strcasestr(name, "ath") == NULL && strcasestr(name, "elected") == NULL)
+            continue;
+        id value = object_getIvar(self, ivars[i]);
+        unsigned long n = value != nil && responds(value, "count") ? SEND0(unsigned long, value, "count") : 0;
+        say("xc5pb: ivar %s %s: %s, count %lu", name, type, value != nil ? object_getClassName(value) : "nil", n);
+        if (value != nil && (n > 0 || !responds(value, "count"))) say_long(name, text(value));
+        shown++;
     }
-    say("xc5pb: the data store answers none of knownExtensions/extensions%s", "");
+    free(ivars);
 }
 
 static void my_setup(id self, SEL cmd) {
