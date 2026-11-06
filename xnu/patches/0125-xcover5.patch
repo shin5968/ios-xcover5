@@ -1820,7 +1820,7 @@ index 5bd24a7..b238705 100644
  	/* cpu_start() discards PE_cpu_start's return; do not silently carry on. */
  	if (rc != 0) {
 diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
-index ec6b9da..8ea5e8f 100644
+index ec6b9da..0b42f0a 100644
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
 @@ -133,6 +133,12 @@ public:
@@ -1856,7 +1856,7 @@ index ec6b9da..8ea5e8f 100644
  	uint64_t values[6] = {
  		(uint32_t)count, (uint32_t)(count >> 32),
  		(uint32_t)now, (uint32_t)(now >> 32),
-@@ -372,16 +382,82 @@ AppleCLCD::swap(const uint8_t *rec)
+@@ -372,16 +382,87 @@ AppleCLCD::swap(const uint8_t *rec)
  	if (copyNow) {
  		present(rec);
  	}
@@ -1903,9 +1903,14 @@ index ec6b9da..8ea5e8f 100644
 +	uint64_t len = s->memory->getLength();
 +	for (uint32_t py = 0; py < ph; py++) {
 +		volatile uint32_t *out = (volatile uint32_t *)(pixels + (uint64_t)py * rowBytes);
++		/* Boot 65: 1125x2436 at 1480 rows is 683 wide; the 37 left over are 18 + 19,
++		 * and clearing ox on each side left column 701 with the console's text in it
++		 * (a dotted white line down the right). Clear all that the picture misses. */
 +		for (uint32_t px = 0; px < ox; px++) {
 +			out[px] = 0;
-+			out[pw - 1 - px] = 0;
++		}
++		for (uint32_t px = ox + sw; px < pw; px++) {
++			out[px] = 0;
 +		}
 +		int32_t ly = (int32_t)((uint64_t)py * lh / ph);
 +		int32_t ry = sy + ly - dy;
@@ -1939,7 +1944,7 @@ index ec6b9da..8ea5e8f 100644
  #if defined(DREAMLTE)
  	sweet_fb_wait_frame_done();
  #endif
-@@ -413,7 +489,11 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -413,7 +494,11 @@ AppleCLCD::present(const uint8_t *rec)
  			continue;
  		}
  		SweetSurface *s = sweet_surface_copy(id);
@@ -1951,7 +1956,7 @@ index ec6b9da..8ea5e8f 100644
  			sweet_fb_swaps_logged++;
  			IOLog("SWEET FB: swap %u layer %u surface %u %ux%u fmt 0x%x bpr %u a %d,%d %ux%u b %d,%d %dx%d\n",
  			    get32(rec, 0x50), layer, id, s ? s->width : 0, s ? s->height : 0,
-@@ -426,6 +506,14 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -426,6 +511,14 @@ AppleCLCD::present(const uint8_t *rec)
  		}
  		uintptr_t src = s->kernelAddress();
  		uint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;
