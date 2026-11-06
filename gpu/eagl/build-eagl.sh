@@ -44,7 +44,9 @@ $CC -dynamiclib -o "$OUT/lib/libxc5eagl.dylib" "$OBJ"/{hg_eagl,hg_gl_hero,hg_ca_
   -L "$OUT/lib" -lOSMesa.8 -Wl,-rpath,$RPATH -Wl,-undefined,error
 
 # libxc5pb.dylib: the PosterBoard first-time-setup hook (src/xc5_pbhook.c), for boot-arg xc5pbhook=1.
-$CC -O2 -g -Wall -fno-objc-arc -dynamiclib -o "$OUT/lib/libxc5pb.dylib" "$HERE/src/xc5_pbhook.c" \
+# (compiled and linked apart: one clang step leaves a .dSYM directory in lib/, which the workflow's shasum trips on)
+$CC -O2 -g -Wall -fno-objc-arc -c "$HERE/src/xc5_pbhook.c" -o "$OBJ/xc5_pbhook.o"
+$CC -dynamiclib -o "$OUT/lib/libxc5pb.dylib" "$OBJ/xc5_pbhook.o" \
   -install_name @rpath/libxc5pb.dylib -framework CoreFoundation -framework IOKit -lobjc -Wl,-undefined,error
 
 for f in "$OUT/lib/libxc5eagl.dylib" "$OUT/lib/libxc5eagl-b.dylib" "$OUT/lib/libxc5pb.dylib"; do
