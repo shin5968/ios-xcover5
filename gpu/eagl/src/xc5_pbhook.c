@@ -94,9 +94,48 @@ static Ivar find_switcher_ivar(Class cls) {
     return found;
 }
 
+#define SEND0(type, obj, name) ((type (*)(id, SEL))objc_msgSend)((id)(obj), sel_registerName(name))
+
+static int responds(id obj, const char *name) {
+    return obj != nil && ((BOOL (*)(id, SEL, SEL))objc_msgSend)(obj, sel_registerName("respondsToSelector:"),
+        sel_registerName(name));
+}
+
+static const char *text(id obj) {
+    id d = obj != nil ? SEND0(id, obj, "description") : nil;
+    const char *s = d != nil ? SEND0(const char *, d, "UTF8String") : NULL;
+    return s != NULL ? s : "nil";
+}
+
+// Boot 64: past the first-time setup, PosterBoard traps on a nil "selectedLockPath" (+0x42654 of
+// PosterBoard.framework): no lock screen poster was chosen. What extensions does the data store know, and what
+// did the setup make? Long descriptions go out in pieces of 180 characters, at most 6.
+static void say_long(const char *what, const char *s) {
+    size_t len = strlen(s);
+    say("xc5pb: %s (%zu chars):", what, len);
+    for (size_t at = 0, piece = 0; at < len && piece < 6; at += 180, piece++)
+        say("xc5pb:  %.180s", s + at);
+}
+
+static void report_extensions(id self) {
+    static const char *const names[] = { "knownExtensions", "extensions", "_stateLock_extensions",
+        "posterExtensions", NULL };
+    for (int i = 0; names[i] != NULL; i++) {
+        if (!responds(self, names[i])) continue;
+        id ext = SEND0(id, self, names[i]);
+        unsigned long count = ext != nil && responds(ext, "count") ? SEND0(unsigned long, ext, "count") : 0;
+        say("xc5pb: -%s: %lu", names[i], count);
+        if (ext != nil) say_long(names[i], text(ext));
+        return;
+    }
+    say("xc5pb: the data store answers none of knownExtensions/extensions%s", "");
+}
+
 static void my_setup(id self, SEL cmd) {
     unsigned n = ++setups;
     id existing = switcher_ivar != NULL ? object_getIvar(self, switcher_ivar) : nil;
+
+    if (n == 1) report_extensions(self);
 
     if (existing != nil) {
         cleared++;
@@ -110,6 +149,7 @@ static void my_setup(id self, SEL cmd) {
     id made = switcher_ivar != NULL ? object_getIvar(self, switcher_ivar) : nil;
     say("xc5pb: first-time setup #%u done: switcher configuration %s %p", n,
         made != nil ? object_getClassName(made) : "nil", made);
+    if (made != nil) say_long("the configuration made", text(made));
 }
 
 __attribute__((constructor)) static void xc5_pbhook(void) {
