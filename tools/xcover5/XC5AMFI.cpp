@@ -45,6 +45,16 @@ public:
 OSDefineMetaClassAndStructors(AppleMobileFileIntegrity, IOService);
 OSDefineMetaClassAndStructors(AppleMobileFileIntegrityUserClient, IOUserClient);
 
+/*
+ * For the heartbeat (boot 70: every extension kind 0 after a LaunchServices rebuild; is this service used at
+ * all?): published, user clients opened, calls per selector 0-15, and the last caller's name.
+ */
+extern "C" {
+uint32_t xcover5_amfi_svc[2];           /* published, user clients */
+uint32_t xcover5_amfi_sel[16];
+char xcover5_amfi_last[2][20];          /* last opener, last caller */
+}
+
 bool
 AppleMobileFileIntegrity::start(IOService *provider)
 {
@@ -55,6 +65,7 @@ AppleMobileFileIntegrity::start(IOService *provider)
 		return false;
 	}
 	registerService();
+	xcover5_amfi_svc[0] = 1;
 	IOLog("XC5 AMFI: AppleMobileFileIntegrity service published\n");
 	return true;
 }
@@ -73,6 +84,8 @@ AppleMobileFileIntegrity::newUserClient(task_t owningTask, void *securityID __un
 		return kIOReturnNoMemory;
 	}
 	*handler = client;
+	xcover5_amfi_svc[1]++;
+	proc_selfname(xcover5_amfi_last[0], sizeof(xcover5_amfi_last[0]));
 	return kIOReturnSuccess;
 }
 
@@ -82,6 +95,8 @@ AppleMobileFileIntegrityUserClient::externalMethod(uint32_t selector, IOExternal
 {
 	static uint64_t seen;
 
+	xcover5_amfi_sel[selector < 16 ? selector : 15]++;
+	proc_selfname(xcover5_amfi_last[1], sizeof(xcover5_amfi_last[1]));
 	if (selector < 64 && !(seen & (1ULL << selector))) {
 		char name[32];
 		seen |= 1ULL << selector;

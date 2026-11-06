@@ -1580,10 +1580,10 @@ index a29409d..641d7b2 100644
  	/*
  	 * Generate a corefile/crashlog if:
 diff --git a/bsd/kern/sweet_amfi.c b/bsd/kern/sweet_amfi.c
-index 4fd8729..7ce2082 100644
+index 4fd8729..8a687cc 100644
 --- a/bsd/kern/sweet_amfi.c
 +++ b/bsd/kern/sweet_amfi.c
-@@ -385,6 +385,101 @@ static struct mac_policy_conf sweet_amfi_mac_conf = {
+@@ -385,6 +385,135 @@ static struct mac_policy_conf sweet_amfi_mac_conf = {
  
  static mac_policy_handle_t sweet_amfi_mac_handle;
  
@@ -1604,10 +1604,43 @@ index 4fd8729..7ce2082 100644
 +SYSCTL_NODE(_security_mac, OID_AUTO, amfi, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "AMFI");
 +static uint64_t xc5_amfi_developer_mode = 1;
 +static uint64_t xc5_amfi_qa_root_certs = 0;
-+SYSCTL_QUAD(_security_mac_amfi, OID_AUTO, developer_mode_status, CTLFLAG_RD | CTLFLAG_LOCKED,
-+    &xc5_amfi_developer_mode, "developer mode (on: nothing is restricted here)");
++/*
++ * For the heartbeat (boot 70: no extension of any kind registered; is AMFI asked
++ * at all, and by whom?): reads of developer_mode_status, and the first six
++ * __mac_syscall("AMFI") request numbers with their counts and last caller.
++ */
++uint32_t xcover5_amfi_dev_reads;
++char xcover5_amfi_dev_last[20];
++int32_t xcover5_amfi_callno[6] = { -1, -1, -1, -1, -1, -1 };
++uint32_t xcover5_amfi_callcnt[6];
++char xcover5_amfi_calllast[6][20];
++
++static int
++xc5_amfi_dev_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2,
++    struct sysctl_req *req)
++{
++	xcover5_amfi_dev_reads++;
++	proc_selfname(xcover5_amfi_dev_last, sizeof(xcover5_amfi_dev_last));
++	return SYSCTL_OUT(req, &xc5_amfi_developer_mode, sizeof(xc5_amfi_developer_mode));
++}
++SYSCTL_PROC(_security_mac_amfi, OID_AUTO, developer_mode_status,
++    CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED, NULL, 0, xc5_amfi_dev_sysctl, "Q",
++    "developer mode (on: nothing is restricted here)");
 +SYSCTL_QUAD(_security_mac_amfi, OID_AUTO, qa_root_certs_allowed, CTLFLAG_RD | CTLFLAG_LOCKED,
 +    &xc5_amfi_qa_root_certs, "");
++
++static void
++xc5_amfi_count(int call)
++{
++	for (int i = 0; i < 6; i++) {
++		if (xcover5_amfi_callno[i] == call || xcover5_amfi_callno[i] < 0) {
++			xcover5_amfi_callno[i] = call;
++			xcover5_amfi_callcnt[i]++;
++			proc_selfname(xcover5_amfi_calllast[i], sizeof(xcover5_amfi_calllast[i]));
++			return;
++		}
++	}
++}
 +
 +static int
 +xc5_amfi_dyld_syscall(__unused struct proc *p, int call, user_addr_t arg)
@@ -1618,6 +1651,7 @@ index 4fd8729..7ce2082 100644
 +	} args;
 +	uint64_t flags;
 +
++	xc5_amfi_count(call);
 +	/*
 +	 * Request 0x60, the state of AMFI's boot-args (herolte 0306, after FiiO JM21's
 +	 * kern_minimac.c): unless one of the bits 0x86 is set, ExtensionKit wants
@@ -1685,7 +1719,7 @@ index 4fd8729..7ce2082 100644
  /* Called from bsd_init once MAC policies can register, before any exec. */
  void sweet_amfi_policy_register(void);
  
-@@ -397,5 +492,9 @@ sweet_amfi_policy_register(void)
+@@ -397,5 +526,9 @@ sweet_amfi_policy_register(void)
  	error = mac_policy_register(&sweet_sandbox_mac_conf, &sweet_sandbox_mac_handle, NULL);
  	printf(PORT_NAME " Sandbox: permissive policy %s (%d)\n",
  	    error ? "NOT registered" : "registered", error);
@@ -2023,10 +2057,10 @@ index d11fe26..6f5de61 100644
  	    arg0, in_scalars, in_struct, out_scalars, out_struct, ret);
  	return ret;
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-index 193845f..56b62f4 100644
+index 193845f..025c955 100644
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -22,6 +22,321 @@ public:
+@@ -22,6 +22,338 @@ public:
  
  OSDefineMetaClassAndStructors(SweetPlatformExpert, IODTPlatformExpert);
  
@@ -2055,6 +2089,11 @@ index 193845f..56b62f4 100644
 +extern uint32_t xcover5_gpusvc_line;
 +extern uint32_t xcover5_drop_state[5];
 +extern uint32_t xcover5_gl_exit[4];
++extern uint32_t xcover5_amfi_svc[2], xcover5_amfi_sel[16], xcover5_amfi_dev_reads;
++extern char xcover5_amfi_last[2][20], xcover5_amfi_dev_last[20];
++extern int32_t xcover5_amfi_callno[6];
++extern uint32_t xcover5_amfi_callcnt[6];
++extern char xcover5_amfi_calllast[6][20];
 +}
 +
 +/*
@@ -2289,6 +2328,18 @@ index 193845f..56b62f4 100644
 +		IOLog("XC5 GL exit pid=%u status=0x%x ns=%u code=0x%x\n", xcover5_gl_exit[0],
 +		    xcover5_gl_exit[1], xcover5_gl_exit[2], xcover5_gl_exit[3]);
 +	}
++	IOLog("XC5 amfi svc=%u open=%u(%s) sel0-7=%u,%u,%u,%u,%u,%u,%u,%u(%s) dev=%u(%s)\n",
++	    xcover5_amfi_svc[0], xcover5_amfi_svc[1], xcover5_amfi_last[0],
++	    xcover5_amfi_sel[0], xcover5_amfi_sel[1], xcover5_amfi_sel[2], xcover5_amfi_sel[3],
++	    xcover5_amfi_sel[4], xcover5_amfi_sel[5], xcover5_amfi_sel[6], xcover5_amfi_sel[7],
++	    xcover5_amfi_last[1], xcover5_amfi_dev_reads, xcover5_amfi_dev_last);
++	IOLog("XC5 amfi sys %d:%u(%s) %d:%u(%s) %d:%u(%s) %d:%u(%s) %d:%u(%s) %d:%u(%s)\n",
++	    xcover5_amfi_callno[0], xcover5_amfi_callcnt[0], xcover5_amfi_calllast[0],
++	    xcover5_amfi_callno[1], xcover5_amfi_callcnt[1], xcover5_amfi_calllast[1],
++	    xcover5_amfi_callno[2], xcover5_amfi_callcnt[2], xcover5_amfi_calllast[2],
++	    xcover5_amfi_callno[3], xcover5_amfi_callcnt[3], xcover5_amfi_calllast[3],
++	    xcover5_amfi_callno[4], xcover5_amfi_callcnt[4], xcover5_amfi_calllast[4],
++	    xcover5_amfi_callno[5], xcover5_amfi_callcnt[5], xcover5_amfi_calllast[5]);
 +	for (uint32_t i = xcover5_gpusvc_line > 4 ? xcover5_gpusvc_line - 4 : 0;
 +	    i < xcover5_gpusvc_line; i++) {
 +		IOLog("XC5 mesa: %s\n", xcover5_gpusvc_lines[i % 4]);
@@ -2348,7 +2399,7 @@ index 193845f..56b62f4 100644
  bool
  SweetPlatformExpert::start(IOService *provider)
  {
-@@ -36,6 +351,16 @@ SweetPlatformExpert::start(IOService *provider)
+@@ -36,6 +368,16 @@ SweetPlatformExpert::start(IOService *provider)
  	registerService();
  #if defined(A5XELTE)
  	IOLog("A5XELTE: platform expert registered\n");
@@ -2455,10 +2506,10 @@ index 7f90c56..315b7ae 100644
  		for (uint32_t i = 0; i < args->scalarOutputCount; i++) {
 diff --git a/iokit/Kernel/arm/XC5AMFI.cpp b/iokit/Kernel/arm/XC5AMFI.cpp
 new file mode 100644
-index 0000000..2ac865f
+index 0000000..2c660ec
 --- /dev/null
 +++ b/iokit/Kernel/arm/XC5AMFI.cpp
-@@ -0,0 +1,107 @@
+@@ -0,0 +1,122 @@
 +/*
 + * XCover5: an IOService named AppleMobileFileIntegrity, as the AMFI kext
 + * publishes on a device (after MakrSas/ios-topaz 0151, MIT/APSL tree).
@@ -2506,6 +2557,16 @@ index 0000000..2ac865f
 +OSDefineMetaClassAndStructors(AppleMobileFileIntegrity, IOService);
 +OSDefineMetaClassAndStructors(AppleMobileFileIntegrityUserClient, IOUserClient);
 +
++/*
++ * For the heartbeat (boot 70: every extension kind 0 after a LaunchServices rebuild; is this service used at
++ * all?): published, user clients opened, calls per selector 0-15, and the last caller's name.
++ */
++extern "C" {
++uint32_t xcover5_amfi_svc[2];           /* published, user clients */
++uint32_t xcover5_amfi_sel[16];
++char xcover5_amfi_last[2][20];          /* last opener, last caller */
++}
++
 +bool
 +AppleMobileFileIntegrity::start(IOService *provider)
 +{
@@ -2516,6 +2577,7 @@ index 0000000..2ac865f
 +		return false;
 +	}
 +	registerService();
++	xcover5_amfi_svc[0] = 1;
 +	IOLog("XC5 AMFI: AppleMobileFileIntegrity service published\n");
 +	return true;
 +}
@@ -2534,6 +2596,8 @@ index 0000000..2ac865f
 +		return kIOReturnNoMemory;
 +	}
 +	*handler = client;
++	xcover5_amfi_svc[1]++;
++	proc_selfname(xcover5_amfi_last[0], sizeof(xcover5_amfi_last[0]));
 +	return kIOReturnSuccess;
 +}
 +
@@ -2543,6 +2607,8 @@ index 0000000..2ac865f
 +{
 +	static uint64_t seen;
 +
++	xcover5_amfi_sel[selector < 16 ? selector : 15]++;
++	proc_selfname(xcover5_amfi_last[1], sizeof(xcover5_amfi_last[1]));
 +	if (selector < 64 && !(seen & (1ULL << selector))) {
 +		char name[32];
 +		seen |= 1ULL << selector;
