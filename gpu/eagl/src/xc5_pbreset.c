@@ -148,13 +148,84 @@ static int scan(const char *root, int move) {
     return found;
 }
 
+// Boot-arg xc5lsreset=1 (boot 68): asked directly, the system knows no poster provider
+// (+[NSExtension extensionsWithMatchingAttributes:] for com.apple.posterkit.provider: 0, no error), while the extension
+// point is in /System/Library/xpc/extensions.plist and the providers (WallpaperKit's CollectionsPoster.appex and the
+// rest) are on the root. The LaunchServices store was built in boots where AMFI's answers kept every extension out
+// (before the 0x60 answer and the AppleMobileFileIntegrity service), and lsd keeps a store it finds. So: its files,
+// com.apple.LaunchServices-NNN-v2.csstore, are moved aside once (".xc5old" next to them; none moved when one is there
+// already), and lsd builds the store again, extensions included, at the next boot.
+static int ls_moved, ls_seen, ls_done_before;
+
+// move == 0: only see what is there (and whether a store was moved aside before); move == 1: move the stores aside.
+static void ls_scan_dir(const char *dir, int move) {
+    DIR *d = opendir(dir);
+    struct dirent *e;
+    char from[1024], to[1024];
+
+    if (d == NULL) return;
+    while ((e = readdir(d)) != NULL) {
+        if (strncmp(e->d_name, "com.apple.LaunchServices", 24) != 0) continue;
+        snprintf(from, sizeof from, "%s/%s", dir, e->d_name);
+        if (!move) {
+            ls_seen++;
+            say("found %s%s", from, "");
+            if (strstr(e->d_name, ".xc5old") != NULL) ls_done_before = 1;
+            continue;
+        }
+        if (strstr(e->d_name, "csstore") == NULL || strstr(e->d_name, ".xc5old") != NULL) continue;
+        snprintf(to, sizeof to, "%s.xc5old", from);
+        if (rename(from, to) == 0) {
+            ls_moved++;
+            say("%s moved aside: lsd builds the store again%s", from, "");
+        } else {
+            say("%s: rename failed: %s", from, strerror(errno));
+        }
+    }
+    closedir(d);
+}
+
+static void ls_scan_all(int move) {
+    char path[1024];
+    DIR *d;
+    struct dirent *e;
+
+    ls_scan_dir("/private/var/mobile/Library/Caches", move);
+    ls_scan_dir("/private/var/db/lsd", move);
+    if ((d = opendir("/private/var/containers/Data/System")) != NULL) {
+        while ((e = readdir(d)) != NULL) {
+            if (e->d_name[0] == '.') continue;
+            snprintf(path, sizeof path, "/private/var/containers/Data/System/%s/Library/Caches", e->d_name);
+            ls_scan_dir(path, move);
+        }
+        closedir(d);
+    }
+}
+
+static void ls_reset(void) {
+    char counts[64];
+
+    say("xc5lsreset: looking for the LaunchServices store%s%s", "", "");
+    ls_scan_all(0);
+    snprintf(counts, sizeof counts, "%d files seen", ls_seen);
+    if (ls_done_before) {
+        say("xc5lsreset: moved aside in an earlier boot (%s), nothing done%s", counts, "");
+        return;
+    }
+    ls_scan_all(1);
+    snprintf(counts, sizeof counts, "%d files seen, %d stores moved aside", ls_seen, ls_moved);
+    say("xc5lsreset: %s%s", counts, "");
+}
+
 __attribute__((constructor)) static void xc5_pbreset(void) {
     char args[1024] = "";
     size_t size = sizeof args - 1;
 
     if (strcmp(getprogname(), "backboardd") != 0) return;
-    if (sysctlbyname("kern.bootargs", args, &size, NULL, 0) != 0 || strstr(args, "xc5pbreset=1") == NULL) return;
+    if (sysctlbyname("kern.bootargs", args, &size, NULL, 0) != 0) return;
     klog = (void (*)(const char *, ...))dlsym(RTLD_DEFAULT, "herodrm_log");
+    if (strstr(args, "xc5lsreset=1") != NULL) ls_reset();
+    if (strstr(args, "xc5pbreset=1") == NULL) return;
     say("looking for PosterBoard's data container (uid %s)%s", getuid() == 0 ? "0" : "not 0", "");
     if (scan(APP_DATA, 1) == 0) say("no data container names com.apple.PosterBoard%s%s", "", "");
     scan(APP_GROUPS, 0);

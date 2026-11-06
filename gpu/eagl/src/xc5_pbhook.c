@@ -217,24 +217,34 @@ static void dump_object(const char *what, id obj) {
     }
 }
 
+static void ask_point(CFStringRef point, const char *name);
+
+// Boot 68: 0 poster providers. Are other kinds missing too (widgets "Waiting..."): then LaunchServices knows no
+// extensions at all, not only these.
 static void ask_system(void) {
+    ask_point(CFSTR("com.apple.posterkit.provider"), "com.apple.posterkit.provider");
+    ask_point(CFSTR("com.apple.widgetkit-extension"), "com.apple.widgetkit-extension");
+    ask_point(CFSTR("com.apple.share-services"), "com.apple.share-services");
+    ask_point(CFSTR("com.apple.fileprovider-nonui"), "com.apple.fileprovider-nonui");
+}
+
+static void ask_point(CFStringRef point, const char *pname) {
     Class ns = objc_getClass("NSExtension");
     SEL sel = sel_registerName("extensionsWithMatchingAttributes:error:");
     if (ns == Nil || !class_respondsToSelector(object_getClass((id)ns), sel)) {
         say("xc5pb: NSExtension lookup not available%s", "");
         return;
     }
-    const void *k = CFSTR("NSExtensionPointName"), *v = CFSTR("com.apple.posterkit.provider");
+    const void *k = CFSTR("NSExtensionPointName"), *v = point;
     CFDictionaryRef attrs = CFDictionaryCreate(NULL, &k, &v, 1, &kCFTypeDictionaryKeyCallBacks,
         &kCFTypeDictionaryValueCallBacks);
     id error = nil;
     id found = ((id (*)(id, SEL, id, id *))objc_msgSend)((id)ns, sel, (id)attrs, &error);
     CFRelease(attrs);
     unsigned long n = found != nil && responds(found, "count") ? SEND0(unsigned long, found, "count") : 0;
-    say("xc5pb: NSExtension lookup of com.apple.posterkit.provider: %lu found, error %s", n,
-        error != nil ? "below" : "none");
+    say("xc5pb: NSExtension lookup of %s: %lu found, error %s", pname, n, error != nil ? "below" : "none");
     if (error != nil) say_long("the lookup's error", text(error));
-    if (found != nil && n > 0) say_long("the extensions found", text(found));
+    if (found != nil && n > 0 && strstr(pname, "poster") != NULL) say_long("the extensions found", text(found));
 }
 
 static void report_state(const char *when) {
