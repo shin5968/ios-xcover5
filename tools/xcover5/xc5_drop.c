@@ -351,6 +351,9 @@ static const struct {
 	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5pb.dylib", "PosterBoard" },
 	{ "/usr/sbin/mediaserverd", "xc5media", "/private/var/xc5/lib/libxc5media.dylib",
 	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5media.dylib", "mediaserverd" },
+	/* xc5poster=1: CollectionsPoster's start sampled (gpu/eagl/src/xc5_poster.c, boots 71-72's check-in timeout) */
+	{ "/CollectionsPoster.appex/CollectionsPoster", "xc5poster", "/private/var/xc5/lib/libxc5poster.dylib",
+	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5poster.dylib", "CollectionsPoster" },
 };
 
 static int

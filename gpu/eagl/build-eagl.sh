@@ -54,7 +54,13 @@ $CC -O2 -g -Wall -fno-objc-arc -c "$HERE/src/xc5_media.c" -o "$OBJ/xc5_media.o"
 $CC -dynamiclib -o "$OUT/lib/libxc5media.dylib" "$OBJ/xc5_media.o" \
   -install_name @rpath/libxc5media.dylib -framework CoreFoundation -framework IOKit -lobjc -Wl,-undefined,error
 
-for f in "$OUT/lib/libxc5eagl.dylib" "$OUT/lib/libxc5eagl-b.dylib" "$OUT/lib/libxc5pb.dylib" "$OUT/lib/libxc5media.dylib"; do
+# libxc5poster.dylib: samples a poster extension's main thread during its start (src/xc5_poster.c), xc5poster=1.
+$CC -O2 -g -Wall -fno-objc-arc -c "$HERE/src/xc5_poster.c" -o "$OBJ/xc5_poster.o"
+$CC -dynamiclib -o "$OUT/lib/libxc5poster.dylib" "$OBJ/xc5_poster.o" \
+  -install_name @rpath/libxc5poster.dylib -framework CoreFoundation -framework IOKit -Wl,-undefined,error
+
+for f in "$OUT/lib/libxc5eagl.dylib" "$OUT/lib/libxc5eagl-b.dylib" "$OUT/lib/libxc5pb.dylib" "$OUT/lib/libxc5media.dylib" \
+    "$OUT/lib/libxc5poster.dylib"; do
   codesign -s - -f "$f"
   otool -L "$f"
 done

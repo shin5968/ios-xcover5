@@ -983,10 +983,10 @@ index ba647a8..979c83f 100644
  	int log_contacts = 0;
 diff --git a/bsd/dev/xc5_drop.c b/bsd/dev/xc5_drop.c
 new file mode 100644
-index 0000000..e1d9290
+index 0000000..3124aba
 --- /dev/null
 +++ b/bsd/dev/xc5_drop.c
-@@ -0,0 +1,510 @@
+@@ -0,0 +1,513 @@
 +/*
 + * XCover5 drop zone: files for the iOS root from the CACHE partition, so the
 + * Mesa libraries reach the phone without reflashing the 12 GB root image.
@@ -1340,6 +1340,9 @@ index 0000000..e1d9290
 +	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5pb.dylib", "PosterBoard" },
 +	{ "/usr/sbin/mediaserverd", "xc5media", "/private/var/xc5/lib/libxc5media.dylib",
 +	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5media.dylib", "mediaserverd" },
++	/* xc5poster=1: CollectionsPoster's start sampled (gpu/eagl/src/xc5_poster.c, boots 71-72's check-in timeout) */
++	{ "/CollectionsPoster.appex/CollectionsPoster", "xc5poster", "/private/var/xc5/lib/libxc5poster.dylib",
++	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5poster.dylib", "CollectionsPoster" },
 +};
 +
 +static int
