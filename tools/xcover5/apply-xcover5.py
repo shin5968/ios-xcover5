@@ -1536,6 +1536,36 @@ edit('iokit/KernelConfigTables.cpp', [
      '    "   {"\n'
      '    "     \'IOClass\'         = SweetBattery;"\n', 1),
 ])
+# Boots 58-59: wallpaper black, widgets "Waiting...", PosterBoard asserting in
+# its first-time switcher setup; answering AMFI request 0x60 alone did not
+# help. MakrSas/ios-topaz (same iOS 16.7.16 iPhone X userland, an ios-sweet
+# fork) got wallpapers and widgets with three AMFI pieces (0147, 0150, 0151):
+# the AMFI-named policy answering __mac_syscall, the security.mac.amfi sysctl
+# node, and an AppleMobileFileIntegrity service whose user client trusts every
+# cdhash (ExtensionKit's check of the signed extensions.plist). This is 0151.
+(tree / 'iokit/Kernel/arm/XC5AMFI.cpp').write_text(
+    (Path(__file__).resolve().parent / 'XC5AMFI.cpp').read_text())
+print('wrote iokit/Kernel/arm/XC5AMFI.cpp')
+edit('iokit/conf/files.arm64', [
+    ('iokit/Kernel/arm/XC5GPU.cpp                                      optional iokitcpp\n',
+     'iokit/Kernel/arm/XC5GPU.cpp                                      optional iokitcpp\n'
+     'iokit/Kernel/arm/XC5AMFI.cpp                                     optional iokitcpp\n', 1),
+])
+edit('iokit/KernelConfigTables.cpp', [
+    ('    "     \'IOClass\'         = XC5GPU;"\n'
+     '    "     \'IOProviderClass\' = IOResources;"\n'
+     '    "     \'IOMatchCategory\' = XC5GPU;"\n'
+     '    "   },"\n',
+     '    "     \'IOClass\'         = XC5GPU;"\n'
+     '    "     \'IOProviderClass\' = IOResources;"\n'
+     '    "     \'IOMatchCategory\' = XC5GPU;"\n'
+     '    "   },"\n'
+     '    "   {"\n'
+     '    "     \'IOClass\'         = AppleMobileFileIntegrity;"\n'
+     '    "     \'IOProviderClass\' = IOResources;"\n'
+     '    "     \'IOMatchCategory\' = AppleMobileFileIntegrity;"\n'
+     '    "   },"\n', 1),
+])
 
 # GPU step 4: the CACHE drop zone (bsd/dev/xc5_drop.c, tools/xcover5/
 # mkdrop.py) for Mesa's libraries, and boot-arg xc5gl, which inserts a
@@ -1756,7 +1786,24 @@ edit('bsd/kern/sweet_amfi.c', [
      '#if defined(ARM64_BOARD_CONFIG_A5XELTE)  /* XCOVER5 tree */\n'
      '#include <sys/errno.h>\n'
      '#include <pexpert/pexpert.h>\n'
+     '#include <sys/sysctl.h>\n'
      'extern uint64_t xc5_gl_dyld_flags(void);\n'
+     '\n'
+     '/*\n'
+     ' * AMFI\'s sysctl node, which the AMFI kext makes on a device (ios-topaz 0150):\n'
+     ' * libamfi\'s amfi_developer_mode_status() reads security.mac.amfi.\n'
+     ' * developer_mode_status (8 bytes, 1 = on) and ExtensionKit wants it when it\n'
+     ' * reads the extension cache. Without it: "Unable to find AMFI", no extension\n'
+     ' * points, no wallpapers or widgets.\n'
+     ' */\n'
+     'SYSCTL_DECL(_security_mac);\n'
+     'SYSCTL_NODE(_security_mac, OID_AUTO, amfi, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "AMFI");\n'
+     'static uint64_t xc5_amfi_developer_mode = 1;\n'
+     'static uint64_t xc5_amfi_qa_root_certs = 0;\n'
+     'SYSCTL_QUAD(_security_mac_amfi, OID_AUTO, developer_mode_status, CTLFLAG_RD | CTLFLAG_LOCKED,\n'
+     '    &xc5_amfi_developer_mode, "developer mode (on: nothing is restricted here)");\n'
+     'SYSCTL_QUAD(_security_mac_amfi, OID_AUTO, qa_root_certs_allowed, CTLFLAG_RD | CTLFLAG_LOCKED,\n'
+     '    &xc5_amfi_qa_root_certs, "");\n'
      '\n'
      'static int\n'
      'xc5_amfi_dyld_syscall(__unused struct proc *p, int call, user_addr_t arg)\n'
@@ -1775,12 +1822,12 @@ edit('bsd/kern/sweet_amfi.c', [
      '\t * every app extension: no PosterBoard wallpapers (black), widgets "Waiting...".\n'
      '\t * Boot-arg xc5ext=0 keeps the old answer.\n'
      '\t */\n'
+     '\tstatic int ext = -1;\n'
+     '\tif (ext < 0) {\n'
+     '\t\text = 1;\n'
+     '\t\t(void)PE_parse_boot_argn("xc5ext", &ext, sizeof(ext));\n'
+     '\t}\n'
      '\tif (call == 0x60) {\n'
-     '\t\tstatic int ext = -1;\n'
-     '\t\tif (ext < 0) {\n'
-     '\t\t\text = 1;\n'
-     '\t\t\t(void)PE_parse_boot_argn("xc5ext", &ext, sizeof(ext));\n'
-     '\t\t}\n'
      '\t\tif (!ext) {\n'
      '\t\t\treturn ENOPOLICY;\n'
      '\t\t}\n'
@@ -1791,7 +1838,23 @@ edit('bsd/kern/sweet_amfi.c', [
      '\t\tflags = 0x86;\n'
      '\t\treturn copyout(&flags, arg, sizeof(flags));\n'
      '\t}\n'
-     '\tif (call != 90 || (flags = xc5_gl_dyld_flags()) == 0) {\n'
+     '\t/*\n'
+     '\t * Any other request (ios-topaz 0147): succeed and leave the caller\'s output\n'
+     '\t * alone, as libamfi\'s queries (ExtensionFoundation\'s among them) expect from a\n'
+     '\t * policy named AMFI. dyld\'s request 90 keeps ENOPOLICY except for xc5gl.\n'
+     '\t */\n'
+     '\tif (call != 90) {\n'
+     '\t\tstatic uint64_t seen;\n'
+     '\t\tif (!ext) {\n'
+     '\t\t\treturn ENOPOLICY;\n'
+     '\t\t}\n'
+     '\t\tif (call >= 0 && call < 64 && !(seen & (1ULL << call))) {\n'
+     '\t\t\tseen |= 1ULL << call;\n'
+     '\t\t\tprintf("XC5 AMFI: request %d from pid %d: ok\\n", call, proc_selfpid());\n'
+     '\t\t}\n'
+     '\t\treturn 0;\n'
+     '\t}\n'
+     '\tif ((flags = xc5_gl_dyld_flags()) == 0) {\n'
      '\t\treturn ENOPOLICY;\n'
      '\t}\n'
      '\tif (copyin(arg, &args, sizeof(args)) != 0) {\n'

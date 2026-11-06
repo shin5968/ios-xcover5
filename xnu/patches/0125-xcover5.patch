@@ -1523,17 +1523,34 @@ index a29409d..641d7b2 100644
  	/*
  	 * Generate a corefile/crashlog if:
 diff --git a/bsd/kern/sweet_amfi.c b/bsd/kern/sweet_amfi.c
-index 4fd8729..5a2c4b6 100644
+index 4fd8729..7ce2082 100644
 --- a/bsd/kern/sweet_amfi.c
 +++ b/bsd/kern/sweet_amfi.c
-@@ -385,6 +385,68 @@ static struct mac_policy_conf sweet_amfi_mac_conf = {
+@@ -385,6 +385,101 @@ static struct mac_policy_conf sweet_amfi_mac_conf = {
  
  static mac_policy_handle_t sweet_amfi_mac_handle;
  
 +#if defined(ARM64_BOARD_CONFIG_A5XELTE)  /* XCOVER5 tree */
 +#include <sys/errno.h>
 +#include <pexpert/pexpert.h>
++#include <sys/sysctl.h>
 +extern uint64_t xc5_gl_dyld_flags(void);
++
++/*
++ * AMFI's sysctl node, which the AMFI kext makes on a device (ios-topaz 0150):
++ * libamfi's amfi_developer_mode_status() reads security.mac.amfi.
++ * developer_mode_status (8 bytes, 1 = on) and ExtensionKit wants it when it
++ * reads the extension cache. Without it: "Unable to find AMFI", no extension
++ * points, no wallpapers or widgets.
++ */
++SYSCTL_DECL(_security_mac);
++SYSCTL_NODE(_security_mac, OID_AUTO, amfi, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "AMFI");
++static uint64_t xc5_amfi_developer_mode = 1;
++static uint64_t xc5_amfi_qa_root_certs = 0;
++SYSCTL_QUAD(_security_mac_amfi, OID_AUTO, developer_mode_status, CTLFLAG_RD | CTLFLAG_LOCKED,
++    &xc5_amfi_developer_mode, "developer mode (on: nothing is restricted here)");
++SYSCTL_QUAD(_security_mac_amfi, OID_AUTO, qa_root_certs_allowed, CTLFLAG_RD | CTLFLAG_LOCKED,
++    &xc5_amfi_qa_root_certs, "");
 +
 +static int
 +xc5_amfi_dyld_syscall(__unused struct proc *p, int call, user_addr_t arg)
@@ -1552,12 +1569,12 @@ index 4fd8729..5a2c4b6 100644
 +	 * every app extension: no PosterBoard wallpapers (black), widgets "Waiting...".
 +	 * Boot-arg xc5ext=0 keeps the old answer.
 +	 */
++	static int ext = -1;
++	if (ext < 0) {
++		ext = 1;
++		(void)PE_parse_boot_argn("xc5ext", &ext, sizeof(ext));
++	}
 +	if (call == 0x60) {
-+		static int ext = -1;
-+		if (ext < 0) {
-+			ext = 1;
-+			(void)PE_parse_boot_argn("xc5ext", &ext, sizeof(ext));
-+		}
 +		if (!ext) {
 +			return ENOPOLICY;
 +		}
@@ -1568,7 +1585,23 @@ index 4fd8729..5a2c4b6 100644
 +		flags = 0x86;
 +		return copyout(&flags, arg, sizeof(flags));
 +	}
-+	if (call != 90 || (flags = xc5_gl_dyld_flags()) == 0) {
++	/*
++	 * Any other request (ios-topaz 0147): succeed and leave the caller's output
++	 * alone, as libamfi's queries (ExtensionFoundation's among them) expect from a
++	 * policy named AMFI. dyld's request 90 keeps ENOPOLICY except for xc5gl.
++	 */
++	if (call != 90) {
++		static uint64_t seen;
++		if (!ext) {
++			return ENOPOLICY;
++		}
++		if (call >= 0 && call < 64 && !(seen & (1ULL << call))) {
++			seen |= 1ULL << call;
++			printf("XC5 AMFI: request %d from pid %d: ok\n", call, proc_selfpid());
++		}
++		return 0;
++	}
++	if ((flags = xc5_gl_dyld_flags()) == 0) {
 +		return ENOPOLICY;
 +	}
 +	if (copyin(arg, &args, sizeof(args)) != 0) {
@@ -1595,7 +1628,7 @@ index 4fd8729..5a2c4b6 100644
  /* Called from bsd_init once MAC policies can register, before any exec. */
  void sweet_amfi_policy_register(void);
  
-@@ -397,5 +459,9 @@ sweet_amfi_policy_register(void)
+@@ -397,5 +492,9 @@ sweet_amfi_policy_register(void)
  	error = mac_policy_register(&sweet_sandbox_mac_conf, &sweet_sandbox_mac_handle, NULL);
  	printf(PORT_NAME " Sandbox: permissive policy %s (%d)\n",
  	    error ? "NOT registered" : "registered", error);
@@ -2358,6 +2391,119 @@ index 7f90c56..315b7ae 100644
  	default:
  		/* Values, notifications, ownership, timestamps...: accept and ignore. */
  		for (uint32_t i = 0; i < args->scalarOutputCount; i++) {
+diff --git a/iokit/Kernel/arm/XC5AMFI.cpp b/iokit/Kernel/arm/XC5AMFI.cpp
+new file mode 100644
+index 0000000..2ac865f
+--- /dev/null
++++ b/iokit/Kernel/arm/XC5AMFI.cpp
+@@ -0,0 +1,107 @@
++/*
++ * XCover5: an IOService named AppleMobileFileIntegrity, as the AMFI kext
++ * publishes on a device (after MakrSas/ios-topaz 0151, MIT/APSL tree).
++ *
++ * ExtensionKit reads the signed extension cache (/System/Library/xpc/
++ * extensions.plist, +[NSDictionary _EX_dictionaryWithSignedURL:error:]) only
++ * after asking AMFI's user client whether the signature's cdhash is trusted:
++ * IOServiceGetMatchingService("AppleMobileFileIntegrity"), IOServiceOpen type 0,
++ * IOConnectCallMethod selector 6 with one scalar and the cdhash. Without the
++ * service: "Unable to find AMFI", no extension point in LaunchServices,
++ * PlugInKit -10814 for every extension point: no PosterBoard wallpaper
++ * providers (black wallpaper), widgets stuck at "Waiting...".
++ *
++ * This kernel enforces no code signatures (sweet_amfi.c), so every hash is
++ * trusted: every call succeeds with zeroed outputs. Each selector is logged
++ * the first time. Matched on IOResources (iokit/KernelConfigTables.cpp);
++ * boot-arg xc5ext=0 leaves it unpublished.
++ */
++#include <pexpert/arm64/board_config.h>
++
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++#include <IOKit/IOService.h>
++#include <IOKit/IOUserClient.h>
++#include <IOKit/IOLib.h>
++#include <pexpert/pexpert.h>
++#include <sys/proc.h>
++
++class AppleMobileFileIntegrity : public IOService
++{
++	OSDeclareDefaultStructors(AppleMobileFileIntegrity);
++public:
++	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++	IOReturn newUserClient(task_t owningTask, void *securityID, UInt32 type, IOUserClient **handler) APPLE_KEXT_OVERRIDE;
++};
++
++class AppleMobileFileIntegrityUserClient : public IOUserClient
++{
++	OSDeclareDefaultStructors(AppleMobileFileIntegrityUserClient);
++public:
++	IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *args,
++	    IOExternalMethodDispatch *dispatch, OSObject *target, void *reference) APPLE_KEXT_OVERRIDE;
++	IOReturn clientClose(void) APPLE_KEXT_OVERRIDE;
++};
++
++OSDefineMetaClassAndStructors(AppleMobileFileIntegrity, IOService);
++OSDefineMetaClassAndStructors(AppleMobileFileIntegrityUserClient, IOUserClient);
++
++bool
++AppleMobileFileIntegrity::start(IOService *provider)
++{
++	int ext = 1;
++
++	(void)PE_parse_boot_argn("xc5ext", &ext, sizeof(ext));
++	if (!ext || !IOService::start(provider)) {
++		return false;
++	}
++	registerService();
++	IOLog("XC5 AMFI: AppleMobileFileIntegrity service published\n");
++	return true;
++}
++
++IOReturn
++AppleMobileFileIntegrity::newUserClient(task_t owningTask, void *securityID __unused, UInt32 type __unused,
++    IOUserClient **handler)
++{
++	AppleMobileFileIntegrityUserClient *client = OSTypeAlloc(AppleMobileFileIntegrityUserClient);
++
++	if (client == NULL || !client->initWithTask(owningTask, NULL, 0) || !client->attach(this) || !client->start(this)) {
++		if (client != NULL) {
++			client->detach(this);
++			client->release();
++		}
++		return kIOReturnNoMemory;
++	}
++	*handler = client;
++	return kIOReturnSuccess;
++}
++
++IOReturn
++AppleMobileFileIntegrityUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *args,
++    IOExternalMethodDispatch *dispatch __unused, OSObject *target __unused, void *reference __unused)
++{
++	static uint64_t seen;
++
++	if (selector < 64 && !(seen & (1ULL << selector))) {
++		char name[32];
++		seen |= 1ULL << selector;
++		proc_selfname(name, sizeof(name));
++		IOLog("XC5 AMFI: user client selector %u from %s (%u scalars, %u bytes in): trusted\n", selector, name,
++		    args->scalarInputCount, args->structureInputSize);
++	}
++	for (uint32_t i = 0; i < args->scalarOutputCount; i++) {
++		args->scalarOutput[i] = 0;
++	}
++	if (args->structureOutputDescriptor == NULL && args->structureOutput != NULL) {
++		bzero(args->structureOutput, args->structureOutputSize);
++	}
++	return kIOReturnSuccess;
++}
++
++IOReturn
++AppleMobileFileIntegrityUserClient::clientClose(void)
++{
++	terminate();
++	return kIOReturnSuccess;
++}
++#endif
 diff --git a/iokit/Kernel/arm/XC5GPU.cpp b/iokit/Kernel/arm/XC5GPU.cpp
 new file mode 100644
 index 0000000..cb641f8
@@ -3240,10 +3386,10 @@ index 0000000..cb641f8
 +}
 +#endif /* XCOVER5 */
 diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
-index 9a35982..cc46cd6 100644
+index 9a35982..863e490 100644
 --- a/iokit/KernelConfigTables.cpp
 +++ b/iokit/KernelConfigTables.cpp
-@@ -90,6 +90,11 @@ const char * gIOKernelConfigTables =
+@@ -90,6 +90,16 @@ const char * gIOKernelConfigTables =
      "     'IOMatchCategory' = SweetHIDTouch;"
      "   },"
  #if !defined(ARM64_BOARD_CONFIG_A5XELTE) || 1  /* S8: MAX77865 */
@@ -3252,18 +3398,24 @@ index 9a35982..cc46cd6 100644
 +    "     'IOProviderClass' = IOResources;"
 +    "     'IOMatchCategory' = XC5GPU;"
 +    "   },"
++    "   {"
++    "     'IOClass'         = AppleMobileFileIntegrity;"
++    "     'IOProviderClass' = IOResources;"
++    "     'IOMatchCategory' = AppleMobileFileIntegrity;"
++    "   },"
      "   {"
      "     'IOClass'         = SweetBattery;"
      "     'IOProviderClass' = IOResources;"
 diff --git a/iokit/conf/files.arm64 b/iokit/conf/files.arm64
-index acc9ae0..a99d756 100644
+index acc9ae0..a3fec54 100644
 --- a/iokit/conf/files.arm64
 +++ b/iokit/conf/files.arm64
-@@ -16,6 +16,7 @@ iokit/Kernel/arm/SweetWatchdog.cpp                               optional iokitc
+@@ -16,6 +16,8 @@ iokit/Kernel/arm/SweetWatchdog.cpp                               optional iokitc
  iokit/Kernel/arm/SweetSurface.cpp                                optional iokitcpp
  iokit/Kernel/arm/SweetFramebuffer.cpp                            optional iokitcpp
  iokit/Kernel/arm/SweetBattery.cpp                                optional iokitcpp
 +iokit/Kernel/arm/XC5GPU.cpp                                      optional iokitcpp
++iokit/Kernel/arm/XC5AMFI.cpp                                     optional iokitcpp
  iokit/Kernel/arm/hid/SweetHID.cpp                                optional iokitcpp
  iokit/Kernel/arm/hid/IOHIDEvent.cpp                              optional iokitcpp
  iokit/Kernel/arm/hid/IOHIDEventServiceQueue.cpp                  optional iokitcpp
