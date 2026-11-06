@@ -983,10 +983,10 @@ index ba647a8..979c83f 100644
  	int log_contacts = 0;
 diff --git a/bsd/dev/xc5_drop.c b/bsd/dev/xc5_drop.c
 new file mode 100644
-index 0000000..6a2554e
+index 0000000..5155f58
 --- /dev/null
 +++ b/bsd/dev/xc5_drop.c
-@@ -0,0 +1,433 @@
+@@ -0,0 +1,490 @@
 +/*
 + * XCover5 drop zone: files for the iOS root from the CACHE partition, so the
 + * Mesa libraries reach the phone without reflashing the 12 GB root image.
@@ -1315,10 +1315,64 @@ index 0000000..6a2554e
 +static int xgl_pid = -1;
 +uint64_t xc5_gl_dyld_flags(void);
 +
++/*
++ * Boot-arg xc5pbhook=1: PosterBoard gets /private/var/xc5/lib/libxc5pb.dylib
++ * (gpu/eagl/src/xc5_pbhook.c). Boots 56-63: it traps on
++ * !_stateLock_switcherConfiguration in its first-time switcher setup; the
++ * configuration's lazy getter has made one before the setup ran. The library
++ * empties it first. The first XPB_MAX launches of a boot get it; their pids
++ * are allowed DYLD_INSERT_LIBRARIES like backboardd's.
++ */
++#define XPB_TARGET      "/PosterBoard.app/PosterBoard"
++#define XPB_LIB         "/private/var/xc5/lib/libxc5pb.dylib"
++#define XPB_MAX         6
++static int xpb_pids[XPB_MAX];
++static int xpb_count;
++
++static int
++xpb_pid_allowed(int pid)
++{
++	for (int i = 0; i < xpb_count && i < XPB_MAX; i++) {
++		if (xpb_pids[i] == pid) {
++			return 1;
++		}
++	}
++	return 0;
++}
++
++static int
++xpb_env(const char *path, int pid, const char **extra, int max)
++{
++	static int on = -1;
++	if (on < 0) {
++		on = 0;
++		(void)PE_parse_boot_argn("xc5pbhook", &on, sizeof(on));
++	}
++	size_t len = path != NULL ? strlen(path) : 0, tlen = strlen(XPB_TARGET);
++	if (!on || len < tlen || strcmp(path + len - tlen, XPB_TARGET) != 0 || max < 1) {
++		return 0;
++	}
++	if (xpb_count >= XPB_MAX) {
++		printf("XC5 PB: PosterBoard launch %d (pid %d): stock\n", xpb_count + 1, pid);
++		return 0;
++	}
++	vnode_t vp = NULLVP;
++	if (vnode_lookup(XPB_LIB, 0, &vp, vfs_context_kernel()) != 0) {
++		printf("XC5 PB: PosterBoard (pid %d): no %s, stock\n", pid, XPB_LIB);
++		return 0;
++	}
++	vnode_put(vp);
++	xpb_pids[xpb_count++] = pid;
++	extra[0] = "DYLD_INSERT_LIBRARIES=" XPB_LIB;
++	printf("XC5 PB: PosterBoard launch %d (pid %d): %s inserted\n", xpb_count, pid, XPB_LIB);
++	return 1;
++}
++
 +uint64_t
 +xc5_gl_dyld_flags(void)
 +{
-+	if (xgl_pid < 0 || proc_selfpid() != xgl_pid) {
++	int self = proc_selfpid();
++	if ((xgl_pid < 0 || self != xgl_pid) && !xpb_pid_allowed(self)) {
 +		return 0;
 +	}
 +	return AMFI_DYLD_OUTPUT_ALLOW_AT_PATH | AMFI_DYLD_OUTPUT_ALLOW_PATH_VARS |
@@ -1333,7 +1387,10 @@ index 0000000..6a2554e
 +		mode = 0;
 +		(void)PE_parse_boot_argn("xc5gl", &mode, sizeof(mode));
 +	}
-+	if (mode <= 0 || path == NULL || strcmp(path, XGL_TARGET) != 0 || max < 2) {
++	if (path != NULL && strcmp(path, XGL_TARGET) != 0) {
++		return xpb_env(path, pid, extra, max);
++	}
++	if (mode <= 0 || path == NULL || max < 2) {
 +		return 0;
 +	}
 +	static const char *const libs[] = {
