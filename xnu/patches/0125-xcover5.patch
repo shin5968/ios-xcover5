@@ -1523,15 +1523,16 @@ index a29409d..641d7b2 100644
  	/*
  	 * Generate a corefile/crashlog if:
 diff --git a/bsd/kern/sweet_amfi.c b/bsd/kern/sweet_amfi.c
-index 4fd8729..b4969e4 100644
+index 4fd8729..5a2c4b6 100644
 --- a/bsd/kern/sweet_amfi.c
 +++ b/bsd/kern/sweet_amfi.c
-@@ -385,6 +385,43 @@ static struct mac_policy_conf sweet_amfi_mac_conf = {
+@@ -385,6 +385,68 @@ static struct mac_policy_conf sweet_amfi_mac_conf = {
  
  static mac_policy_handle_t sweet_amfi_mac_handle;
  
 +#if defined(ARM64_BOARD_CONFIG_A5XELTE)  /* XCOVER5 tree */
 +#include <sys/errno.h>
++#include <pexpert/pexpert.h>
 +extern uint64_t xc5_gl_dyld_flags(void);
 +
 +static int
@@ -1543,6 +1544,30 @@ index 4fd8729..b4969e4 100644
 +	} args;
 +	uint64_t flags;
 +
++	/*
++	 * Request 0x60, the state of AMFI's boot-args (herolte 0306, after FiiO JM21's
++	 * kern_minimac.c): unless one of the bits 0x86 is set, ExtensionKit wants
++	 * /System/Library/xpc/extensions.plist's signature checked by AMFI's IOKit
++	 * service, which is not here; the table is not read and LaunchServices refuses
++	 * every app extension: no PosterBoard wallpapers (black), widgets "Waiting...".
++	 * Boot-arg xc5ext=0 keeps the old answer.
++	 */
++	if (call == 0x60) {
++		static int ext = -1;
++		if (ext < 0) {
++			ext = 1;
++			(void)PE_parse_boot_argn("xc5ext", &ext, sizeof(ext));
++		}
++		if (!ext) {
++			return ENOPOLICY;
++		}
++		static int said;
++		if (said++ < 3) {
++			printf("XC5 AMFI: boot-arg state (0x60) for pid %d: 0x86\n", proc_selfpid());
++		}
++		flags = 0x86;
++		return copyout(&flags, arg, sizeof(flags));
++	}
 +	if (call != 90 || (flags = xc5_gl_dyld_flags()) == 0) {
 +		return ENOPOLICY;
 +	}
@@ -1570,7 +1595,7 @@ index 4fd8729..b4969e4 100644
  /* Called from bsd_init once MAC policies can register, before any exec. */
  void sweet_amfi_policy_register(void);
  
-@@ -397,5 +434,9 @@ sweet_amfi_policy_register(void)
+@@ -397,5 +459,9 @@ sweet_amfi_policy_register(void)
  	error = mac_policy_register(&sweet_sandbox_mac_conf, &sweet_sandbox_mac_handle, NULL);
  	printf(PORT_NAME " Sandbox: permissive policy %s (%d)\n",
  	    error ? "NOT registered" : "registered", error);
