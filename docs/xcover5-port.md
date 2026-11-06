@@ -193,6 +193,21 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   (blue), 8192 red, 57344 blue of 65536 -> OK`, `300 frames 256x256 with glFinish: 2161.6 ms, 7.21 ms/frame (139 fps)`.
   `gpusvc clients=1 bos=14 jobs=1205 failed=0`. 잠금화면 정상, 손상 없음. GPU 4단계 완료. 다음: 5단계(EAGL 브리지로
   CoreAnimation을 GLES/Mali로).
+- 부팅 55 (`xc5gl=2`, HakiOS 브리지 `libxc5eagl.dylib`, mesa-ios run 42025552688, 영상 20261105_212701): 브리지를 넣은
+  backboardd 2번이 첫 셰이더 두 개를 컴파일한 직후 사라짐(`bbd launches=3 inserted=2`, `jobs=5`), 3번째(순정)가 잠금화면.
+  CRASH 줄과 로그는 화면 밖으로 밀려 원인 불명 → 종료 원인과 GPU 클라이언트 로그를 천천히 다시 보여 주는
+  `xc5_gl_exit()` 추가(CI run 42027973635).
+- 부팅 56 (영상 20261105_214222): `xc5_gl_exit`이 exec(xpcproxy→backboardd)의 그림자 proc 종료를 backboardd 종료로
+  착각해 pid를 지움 → dyld가 삽입을 무시(순정과 같음). `proc_is_shadow()` 제외(CI run 42030281799).
+- 부팅 57 (영상 20261105_215844): `XC5 GL exit pid=57 status=0xb`, `CRASH backboardd[57] sig 11 … far 0x30`. iOS 16.7
+  공유 캐시로 심볼화: QuartzCore → `IOSurfaceClientGetBulkAttachments` → `memmove`(NULL+0x30). IOSurfaceClient+0x70은
+  lock 결과 +8(공유 상태 페이지)인데 0: CoreAnimation의 GL 경로가 IOSurfaceRoot 셀렉터 6/7(클라이언트 이미지/메모리
+  감싸기)을 부르고 기본 분기가 0으로 채운 "성공"을 돌려줌. S7 포트(herolte 0244/0255/0259)처럼 6/7 거절,
+  `IOSurfaceAddress` 페이지 정렬이면 그 메모리를 surface로, 아니면 픽셀 복사(CI run 42180380006, 커밋 daa2257).
+- 부팅 58 (영상 20261106_163048): **CoreAnimation이 Mali-G52로 그림.** `bbd launches=1 inserted=1`(재시작 없음),
+  `hakios-gl: frame 40: 287 GL calls, 32 draws, 177 triangles`, `gpusvc clients=1 bos=98 jobs=863 failed=0`.
+  잠금화면(4:02)과 홈 화면(위젯 2개, 사진·App Store·설정, 독) 표시. 배경화면은 검정, 위젯은 "Waiting…".
+  GPU 5단계 완료. 남은 것: 배경화면(S7처럼 ASTC/P3 문제일 가능성), 프레임 속도 측정, 6단계.
 
 ## S8 포트와 다른 점
 
