@@ -217,23 +217,27 @@ static void dump_object(const char *what, id obj) {
     }
 }
 
-static void ask_point(CFStringRef point, const char *name);
+static long ask_point(CFStringRef point, const char *name);
+static char summary[200];
 
 // Boot 68: 0 poster providers. Are other kinds missing too (widgets "Waiting..."): then LaunchServices knows no
-// extensions at all, not only these.
+// extensions at all, not only these. Boot 69: the four lines overwrote each other on the console; the counts also
+// go into one summary line, said last, which the heartbeat keeps among its "XC5 mesa:" lines.
 static void ask_system(void) {
-    ask_point(CFSTR("com.apple.posterkit.provider"), "com.apple.posterkit.provider");
-    ask_point(CFSTR("com.apple.widgetkit-extension"), "com.apple.widgetkit-extension");
-    ask_point(CFSTR("com.apple.share-services"), "com.apple.share-services");
-    ask_point(CFSTR("com.apple.fileprovider-nonui"), "com.apple.fileprovider-nonui");
+    long poster = ask_point(CFSTR("com.apple.posterkit.provider"), "com.apple.posterkit.provider");
+    long widget = ask_point(CFSTR("com.apple.widgetkit-extension"), "com.apple.widgetkit-extension");
+    long share = ask_point(CFSTR("com.apple.share-services"), "com.apple.share-services");
+    long files = ask_point(CFSTR("com.apple.fileprovider-nonui"), "com.apple.fileprovider-nonui");
+    snprintf(summary, sizeof summary, "xc5pb: SUMMARY extensions poster=%ld widget=%ld share=%ld fileprovider=%ld",
+        poster, widget, share, files);
 }
 
-static void ask_point(CFStringRef point, const char *pname) {
+static long ask_point(CFStringRef point, const char *pname) {
     Class ns = objc_getClass("NSExtension");
     SEL sel = sel_registerName("extensionsWithMatchingAttributes:error:");
     if (ns == Nil || !class_respondsToSelector(object_getClass((id)ns), sel)) {
         say("xc5pb: NSExtension lookup not available%s", "");
-        return;
+        return -1;
     }
     const void *k = CFSTR("NSExtensionPointName"), *v = point;
     CFDictionaryRef attrs = CFDictionaryCreate(NULL, &k, &v, 1, &kCFTypeDictionaryKeyCallBacks,
@@ -245,12 +249,19 @@ static void ask_point(CFStringRef point, const char *pname) {
     say("xc5pb: NSExtension lookup of %s: %lu found, error %s", pname, n, error != nil ? "below" : "none");
     if (error != nil) say_long("the lookup's error", text(error));
     if (found != nil && n > 0 && strstr(pname, "poster") != NULL) say_long("the extensions found", text(found));
+    return error != nil ? -2 : (long)n;
 }
+
+static void report_store(void);
 
 static void report_state(const char *when) {
     say("xc5pb: --- state %s: data store %p, first-time setups %u ---", when, the_store, setups);
     ask_system();
-    if (the_store == nil) return;
+    if (the_store != nil) report_store();
+    say("%s (%s)", summary, when);
+}
+
+static void report_store(void) {
     {
         unsigned count = 0;
         Ivar *ivars = class_copyIvarList(object_getClass(the_store), &count);

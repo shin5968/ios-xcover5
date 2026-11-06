@@ -185,21 +185,52 @@ static void ls_scan_dir(const char *dir, int move) {
     closedir(d);
 }
 
-static void ls_scan_all(int move) {
-    char path[1024];
+// Boot 69: none of the three places held a store ("0 files seen"). So the whole of /private/var is walked (depth 8,
+// at most 40000 entries, applications' bundles left out) for directories holding com.apple.LaunchServices* files;
+// those directories are then scanned as before. Directories that cannot be opened are counted, the first named.
+#define LS_MAX_DIRS 8
+static char ls_dirs[LS_MAX_DIRS][512];
+static int ls_ndirs, ls_entries, ls_denied;
+static char ls_first_denied[256];
+
+static void ls_walk(const char *dir, int depth) {
     DIR *d;
     struct dirent *e;
+    char path[1024];
+    int marked = 0;
 
-    ls_scan_dir("/private/var/mobile/Library/Caches", move);
-    ls_scan_dir("/private/var/db/lsd", move);
-    if ((d = opendir("/private/var/containers/Data/System")) != NULL) {
-        while ((e = readdir(d)) != NULL) {
-            if (e->d_name[0] == '.') continue;
-            snprintf(path, sizeof path, "/private/var/containers/Data/System/%s/Library/Caches", e->d_name);
-            ls_scan_dir(path, move);
-        }
-        closedir(d);
+    if (depth > 8 || ls_entries > 40000) return;
+    if ((d = opendir(dir)) == NULL) {
+        if (ls_denied++ == 0) snprintf(ls_first_denied, sizeof ls_first_denied, "%s (%s)", dir, strerror(errno));
+        return;
     }
+    while ((e = readdir(d)) != NULL && ls_entries <= 40000) {
+        ls_entries++;
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+        if (!marked && strncmp(e->d_name, "com.apple.LaunchServices", 24) == 0 && ls_ndirs < LS_MAX_DIRS) {
+            snprintf(ls_dirs[ls_ndirs++], sizeof ls_dirs[0], "%s", dir);
+            marked = 1;
+        }
+        if (e->d_type != DT_DIR) continue;
+        if (strcmp(e->d_name, "Bundle") == 0 || strcmp(e->d_name, "staged_system_apps") == 0 ||
+            strcmp(e->d_name, "xc5") == 0 || strstr(e->d_name, ".app") != NULL)
+            continue;
+        snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
+        ls_walk(path, depth + 1);
+    }
+    closedir(d);
+}
+
+static void ls_scan_all(int move) {
+    if (!move) {
+        ls_walk("/private/var", 0);
+        char line[200];
+        snprintf(line, sizeof line, "walked %d entries, %d directories hold the store, %d not opened",
+            ls_entries, ls_ndirs, ls_denied);
+        say("xc5lsreset: %s%s", line, "");
+        if (ls_denied) say("xc5lsreset: first not opened: %s%s", ls_first_denied, "");
+    }
+    for (int i = 0; i < ls_ndirs; i++) ls_scan_dir(ls_dirs[i], move);
 }
 
 static void ls_reset(void) {
