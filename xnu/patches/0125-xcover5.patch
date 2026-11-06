@@ -2245,6 +2245,94 @@ index 193845f..56b62f4 100644
  #else
  	IOLog("SWEET: platform expert registered\n");
  #endif
+diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.cpp
+index 7f90c56..315b7ae 100644
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -82,6 +82,10 @@ SweetSurface::free()
+ {
+ 	if (OSDynamicCast(IOBufferMemoryDescriptor, memory) != NULL) {
+ 		OSAddAtomic64(-(SInt64)allocSize, (volatile SInt64 *)&sweet_surface_wired);
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	} else if (memory != NULL) {
++		memory->complete();     /* a client's pages, wired by create() */
++#endif
+ 	}
+ 	OSSafeReleaseNULL(kernelMap);
+ 	OSSafeReleaseNULL(memory);
+@@ -684,7 +688,35 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
+ 	}
+ 	s->parentID = args->scalarInputCount > 0 ? (uint32_t)args->scalarInput[0] : 0;
+ 	ret = sweet_surface_layout(s, props);
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	/* A surface over the client's own page-aligned memory is those pages, wired. */
++	bool wrapped = false;
++	uint64_t client_at = 0;
+ 	if (ret == kIOReturnSuccess) {
++		OSNumber *client = OSDynamicCast(OSNumber, props->getObject("IOSurfaceAddress"));
++		client_at = client != NULL ? client->unsigned64BitValue() : 0;
++		if (client_at != 0 && (client_at & PAGE_MASK) == 0 && (s->allocSize & PAGE_MASK) == 0 &&
++		    s->allocSize != 0) {
++			IOMemoryDescriptor *over = IOMemoryDescriptor::withAddressRange((mach_vm_address_t)client_at,
++			    (mach_vm_size_t)s->allocSize, kIODirectionInOut, fTask);
++			if (over != NULL && over->prepare() == kIOReturnSuccess) {
++				s->memory = over;
++				s->mapCache = kIOMapDefaultCache;
++				wrapped = true;
++				if (!sweet_surface_publish(s)) {
++					ret = kIOReturnNoResources;
++				}
++			} else {
++				OSSafeReleaseNULL(over);
++			}
++			IOLog("SWEET SURF: %ux%u at client address 0x%llx: %s\n", s->width, s->height, client_at,
++			    wrapped ? "the surface is that memory" : "not wired, copied");
++		}
++	}
++	if (ret == kIOReturnSuccess && !wrapped) {
++#else
++	if (ret == kIOReturnSuccess) {
++#endif
+ 		IOBufferMemoryDescriptor *mem = NULL;
+ 		if ((uint64_t)OSAddAtomic64(s->allocSize, (volatile SInt64 *)&sweet_surface_wired) +
+ 		    s->allocSize <= SWEET_SURFACE_WIRED_MAX) {
+@@ -696,6 +728,16 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
+ 			ret = kIOReturnNoMemory;
+ 		} else {
+ 			bzero(mem->getBytesNoCopy(), s->allocSize);
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++			/* Over client memory that could not be wired: at least start with those pixels. */
++			if (client_at != 0) {
++				uint64_t want = (uint64_t)s->bytesPerRow * s->height;
++				int err = copyin((user_addr_t)client_at, mem->getBytesNoCopy(),
++				    (vm_size_t)MIN(want, (uint64_t)s->allocSize));
++				IOLog("SWEET SURF: pixels of %ux%u taken from client address 0x%llx -> %d\n",
++				    s->width, s->height, client_at, err);
++			}
++#endif
+ 			s->memory = mem;
+ 			s->mapCache = kIOMapDefaultCache;
+ 			if (!sweet_surface_publish(s)) {
+@@ -772,6 +814,19 @@ IOSurfaceRootUserClient::externalMethod(uint32_t selector, IOExternalMethodArgum
+ 		sweet_surf_log_once("sel", selector);
+ 		return kIOReturnSuccess;
+ 	}
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	case 6:         /* wrap client image: struct in 0x20 */
++	case 7:         /* wrap client memory: scalars [address, length] */
++		/*
++		 * Both answer with a lock result the library turns into an
++		 * IOSurfaceClient. Not implemented: refuse, so the caller
++		 * (CoreAnimation's image upload) takes its copying path. A zeroed
++		 * "success" left a client with NULL pointers (boot 57: backboardd
++		 * faulted on NULL+0x30 in IOSurfaceClientGetBulkAttachments).
++		 */
++		sweet_surf_log_once("sel", selector);
++		return kIOReturnUnsupported;
++#endif
+ 	default:
+ 		/* Values, notifications, ownership, timestamps...: accept and ignore. */
+ 		for (uint32_t i = 0; i < args->scalarOutputCount; i++) {
 diff --git a/iokit/Kernel/arm/XC5GPU.cpp b/iokit/Kernel/arm/XC5GPU.cpp
 new file mode 100644
 index 0000000..cb641f8

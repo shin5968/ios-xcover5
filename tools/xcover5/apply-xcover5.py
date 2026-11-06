@@ -1630,6 +1630,90 @@ edit('bsd/kern/kern_exec.c', [
      '\n'
      '\t/* Save space for envv[] NULL terminator */\n', 1),
 ])
+# Boot 57 (xc5gl=2): backboardd died with sig 11 at NULL+0x30 in memmove under
+# IOSurfaceClientGetBulkAttachments, called from QuartzCore. client+0x70 (the lock
+# result's +8, the shared state page) was NULL: CoreAnimation's GL path asks
+# IOSurfaceRoot for selectors 6/7 (a surface over the client's own image or
+# memory), the default case answered a zeroed "success", and the library built a
+# client with NULL pointers. As the Galaxy S7 port (wardevsa/ios-a5xelte herolte,
+# 0244/0255/0259): refuse 6/7 so CoreAnimation takes its copying path, and make a
+# surface created with IOSurfaceAddress be that memory (page aligned) or start
+# with those pixels (anything else).
+edit('iokit/Kernel/arm/SweetSurface.cpp', [
+    ('\tif (OSDynamicCast(IOBufferMemoryDescriptor, memory) != NULL) {\n'
+     '\t\tOSAddAtomic64(-(SInt64)allocSize, (volatile SInt64 *)&sweet_surface_wired);\n'
+     '\t}\n',
+     '\tif (OSDynamicCast(IOBufferMemoryDescriptor, memory) != NULL) {\n'
+     '\t\tOSAddAtomic64(-(SInt64)allocSize, (volatile SInt64 *)&sweet_surface_wired);\n'
+     '#if defined(ARM64_BOARD_CONFIG_A5XELTE)\n'
+     '\t} else if (memory != NULL) {\n'
+     '\t\tmemory->complete();     /* a client\'s pages, wired by create() */\n'
+     '#endif\n'
+     '\t}\n', 1),
+    ('\tret = sweet_surface_layout(s, props);\n'
+     '\tif (ret == kIOReturnSuccess) {\n'
+     '\t\tIOBufferMemoryDescriptor *mem = NULL;\n',
+     '\tret = sweet_surface_layout(s, props);\n'
+     '#if defined(ARM64_BOARD_CONFIG_A5XELTE)\n'
+     '\t/* A surface over the client\'s own page-aligned memory is those pages, wired. */\n'
+     '\tbool wrapped = false;\n'
+     '\tuint64_t client_at = 0;\n'
+     '\tif (ret == kIOReturnSuccess) {\n'
+     '\t\tOSNumber *client = OSDynamicCast(OSNumber, props->getObject("IOSurfaceAddress"));\n'
+     '\t\tclient_at = client != NULL ? client->unsigned64BitValue() : 0;\n'
+     '\t\tif (client_at != 0 && (client_at & PAGE_MASK) == 0 && (s->allocSize & PAGE_MASK) == 0 &&\n'
+     '\t\t    s->allocSize != 0) {\n'
+     '\t\t\tIOMemoryDescriptor *over = IOMemoryDescriptor::withAddressRange((mach_vm_address_t)client_at,\n'
+     '\t\t\t    (mach_vm_size_t)s->allocSize, kIODirectionInOut, fTask);\n'
+     '\t\t\tif (over != NULL && over->prepare() == kIOReturnSuccess) {\n'
+     '\t\t\t\ts->memory = over;\n'
+     '\t\t\t\ts->mapCache = kIOMapDefaultCache;\n'
+     '\t\t\t\twrapped = true;\n'
+     '\t\t\t\tif (!sweet_surface_publish(s)) {\n'
+     '\t\t\t\t\tret = kIOReturnNoResources;\n'
+     '\t\t\t\t}\n'
+     '\t\t\t} else {\n'
+     '\t\t\t\tOSSafeReleaseNULL(over);\n'
+     '\t\t\t}\n'
+     '\t\t\tIOLog("SWEET SURF: %ux%u at client address 0x%llx: %s\\n", s->width, s->height, client_at,\n'
+     '\t\t\t    wrapped ? "the surface is that memory" : "not wired, copied");\n'
+     '\t\t}\n'
+     '\t}\n'
+     '\tif (ret == kIOReturnSuccess && !wrapped) {\n'
+     '#else\n'
+     '\tif (ret == kIOReturnSuccess) {\n'
+     '#endif\n'
+     '\t\tIOBufferMemoryDescriptor *mem = NULL;\n', 1),
+    ('\t\t\tbzero(mem->getBytesNoCopy(), s->allocSize);\n',
+     '\t\t\tbzero(mem->getBytesNoCopy(), s->allocSize);\n'
+     '#if defined(ARM64_BOARD_CONFIG_A5XELTE)\n'
+     '\t\t\t/* Over client memory that could not be wired: at least start with those pixels. */\n'
+     '\t\t\tif (client_at != 0) {\n'
+     '\t\t\t\tuint64_t want = (uint64_t)s->bytesPerRow * s->height;\n'
+     '\t\t\t\tint err = copyin((user_addr_t)client_at, mem->getBytesNoCopy(),\n'
+     '\t\t\t\t    (vm_size_t)MIN(want, (uint64_t)s->allocSize));\n'
+     '\t\t\t\tIOLog("SWEET SURF: pixels of %ux%u taken from client address 0x%llx -> %d\\n",\n'
+     '\t\t\t\t    s->width, s->height, client_at, err);\n'
+     '\t\t\t}\n'
+     '#endif\n', 1),
+    ('\tdefault:\n'
+     '\t\t/* Values, notifications, ownership, timestamps...: accept and ignore. */\n',
+     '#if defined(ARM64_BOARD_CONFIG_A5XELTE)\n'
+     '\tcase 6:         /* wrap client image: struct in 0x20 */\n'
+     '\tcase 7:         /* wrap client memory: scalars [address, length] */\n'
+     '\t\t/*\n'
+     '\t\t * Both answer with a lock result the library turns into an\n'
+     '\t\t * IOSurfaceClient. Not implemented: refuse, so the caller\n'
+     '\t\t * (CoreAnimation\'s image upload) takes its copying path. A zeroed\n'
+     '\t\t * "success" left a client with NULL pointers (boot 57: backboardd\n'
+     '\t\t * faulted on NULL+0x30 in IOSurfaceClientGetBulkAttachments).\n'
+     '\t\t */\n'
+     '\t\tsweet_surf_log_once("sel", selector);\n'
+     '\t\treturn kIOReturnUnsupported;\n'
+     '#endif\n'
+     '\tdefault:\n'
+     '\t\t/* Values, notifications, ownership, timestamps...: accept and ignore. */\n', 1),
+])
 # Boot 55: both backboardds with the EAGL bridge went away without a CRASH
 # line and their log had scrolled off: report the exit and replay the log.
 edit('bsd/kern/kern_exit.c', [
