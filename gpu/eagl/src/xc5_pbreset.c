@@ -233,6 +233,41 @@ static void ls_scan_all(int move) {
     for (int i = 0; i < ls_ndirs; i++) ls_scan_dir(ls_dirs[i], move);
 }
 
+// Boot-arg xc5lsrestore=1 (boot 71): after the store was rebuilt (boot 70: still 0 extensions of every kind), the
+// next boot never brought SpringBoard up (7 minutes, backboardd alone). Put the old store back: each
+// "X.xc5old" becomes X again, and the store lsd made in its place is kept as "X.xc5new".
+static void ls_restore(void) {
+    char from[1024], to[1024], keep[1024];
+    int restored = 0;
+
+    say("xc5lsrestore: looking for stores moved aside%s%s", "", "");
+    ls_walk("/private/var", 0);
+    for (int i = 0; i < ls_ndirs; i++) {
+        DIR *d = opendir(ls_dirs[i]);
+        struct dirent *e;
+        if (d == NULL) continue;
+        while ((e = readdir(d)) != NULL) {
+            size_t n = strlen(e->d_name);
+            if (strncmp(e->d_name, "com.apple.LaunchServices", 24) != 0 || n < 7 ||
+                strcmp(e->d_name + n - 7, ".xc5old") != 0)
+                continue;
+            snprintf(from, sizeof from, "%s/%s", ls_dirs[i], e->d_name);
+            snprintf(to, sizeof to, "%s/%.*s", ls_dirs[i], (int)(n - 7), e->d_name);
+            snprintf(keep, sizeof keep, "%s.xc5new", to);
+            (void)rename(to, keep);
+            if (rename(from, to) == 0) {
+                restored++;
+                say("restored %s%s", to, "");
+            } else {
+                say("%s: restore failed: %s", to, strerror(errno));
+            }
+        }
+        closedir(d);
+    }
+    snprintf(from, sizeof from, "%d stores restored", restored);
+    say("xc5lsrestore: %s%s", from, "");
+}
+
 static void ls_reset(void) {
     char counts[64];
 
@@ -255,7 +290,8 @@ __attribute__((constructor)) static void xc5_pbreset(void) {
     if (strcmp(getprogname(), "backboardd") != 0) return;
     if (sysctlbyname("kern.bootargs", args, &size, NULL, 0) != 0) return;
     klog = (void (*)(const char *, ...))dlsym(RTLD_DEFAULT, "herodrm_log");
-    if (strstr(args, "xc5lsreset=1") != NULL) ls_reset();
+    if (strstr(args, "xc5lsrestore=1") != NULL) ls_restore();
+    else if (strstr(args, "xc5lsreset=1") != NULL) ls_reset();
     if (strstr(args, "xc5pbreset=1") == NULL) return;
     say("looking for PosterBoard's data container (uid %s)%s", getuid() == 0 ? "0" : "not 0", "");
     if (scan(APP_DATA, 1) == 0) say("no data container names com.apple.PosterBoard%s%s", "", "");
