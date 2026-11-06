@@ -334,11 +334,24 @@ uint64_t xc5_gl_dyld_flags(void);
  * empties it first. The first XPB_MAX launches of a boot get it; their pids
  * are allowed DYLD_INSERT_LIBRARIES like backboardd's.
  */
-#define XPB_TARGET      "/PosterBoard.app/PosterBoard"
-#define XPB_LIB         "/private/var/xc5/lib/libxc5pb.dylib"
-#define XPB_MAX         6
+/*
+ * Boot-arg xc5media=1: mediaserverd gets /private/var/xc5/lib/libxc5media.dylib
+ * (gpu/eagl/src/xc5_media.c: its capture stack's portrait-filter prewarm is
+ * skipped, as HakiOS's inject_media.c does, so the daemon stays up to decode the
+ * stock wallpaper's HEIC pictures for everybody). Same table, same pid list.
+ */
+#define XPB_MAX         12
 static int xpb_pids[XPB_MAX];
 static int xpb_count;
+
+static const struct {
+	const char *suffix, *bootarg, *lib, *env, *name;
+} xpb_targets[] = {
+	{ "/PosterBoard.app/PosterBoard", "xc5pbhook", "/private/var/xc5/lib/libxc5pb.dylib",
+	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5pb.dylib", "PosterBoard" },
+	{ "/usr/sbin/mediaserverd", "xc5media", "/private/var/xc5/lib/libxc5media.dylib",
+	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5media.dylib", "mediaserverd" },
+};
 
 static int
 xpb_pid_allowed(int pid)
@@ -354,29 +367,36 @@ xpb_pid_allowed(int pid)
 static int
 xpb_env(const char *path, int pid, const char **extra, int max)
 {
-	static int on = -1;
-	if (on < 0) {
-		on = 0;
-		(void)PE_parse_boot_argn("xc5pbhook", &on, sizeof(on));
-	}
-	size_t len = path != NULL ? strlen(path) : 0, tlen = strlen(XPB_TARGET);
-	if (!on || len < tlen || strcmp(path + len - tlen, XPB_TARGET) != 0 || max < 1) {
+	size_t len = path != NULL ? strlen(path) : 0;
+
+	if (max < 1) {
 		return 0;
 	}
-	if (xpb_count >= XPB_MAX) {
-		printf("XC5 PB: PosterBoard launch %d (pid %d): stock\n", xpb_count + 1, pid);
-		return 0;
+	for (size_t t = 0; t < sizeof(xpb_targets) / sizeof(xpb_targets[0]); t++) {
+		size_t tlen = strlen(xpb_targets[t].suffix);
+		int on = 0;
+		if (len < tlen || strcmp(path + len - tlen, xpb_targets[t].suffix) != 0) {
+			continue;
+		}
+		if (!PE_parse_boot_argn(xpb_targets[t].bootarg, &on, sizeof(on)) || !on) {
+			return 0;
+		}
+		if (xpb_count >= XPB_MAX) {
+			printf("XC5 PB: %s (pid %d): no room, stock\n", xpb_targets[t].name, pid);
+			return 0;
+		}
+		vnode_t vp = NULLVP;
+		if (vnode_lookup(xpb_targets[t].lib, 0, &vp, vfs_context_kernel()) != 0) {
+			printf("XC5 PB: %s (pid %d): no %s, stock\n", xpb_targets[t].name, pid, xpb_targets[t].lib);
+			return 0;
+		}
+		vnode_put(vp);
+		xpb_pids[xpb_count++] = pid;
+		extra[0] = xpb_targets[t].env;
+		printf("XC5 PB: %s (pid %d): %s inserted\n", xpb_targets[t].name, pid, xpb_targets[t].lib);
+		return 1;
 	}
-	vnode_t vp = NULLVP;
-	if (vnode_lookup(XPB_LIB, 0, &vp, vfs_context_kernel()) != 0) {
-		printf("XC5 PB: PosterBoard (pid %d): no %s, stock\n", pid, XPB_LIB);
-		return 0;
-	}
-	vnode_put(vp);
-	xpb_pids[xpb_count++] = pid;
-	extra[0] = "DYLD_INSERT_LIBRARIES=" XPB_LIB;
-	printf("XC5 PB: PosterBoard launch %d (pid %d): %s inserted\n", xpb_count, pid, XPB_LIB);
-	return 1;
+	return 0;
 }
 
 uint64_t

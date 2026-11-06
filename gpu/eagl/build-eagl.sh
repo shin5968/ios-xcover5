@@ -49,7 +49,12 @@ $CC -O2 -g -Wall -fno-objc-arc -c "$HERE/src/xc5_pbhook.c" -o "$OBJ/xc5_pbhook.o
 $CC -dynamiclib -o "$OUT/lib/libxc5pb.dylib" "$OBJ/xc5_pbhook.o" \
   -install_name @rpath/libxc5pb.dylib -framework CoreFoundation -framework IOKit -lobjc -Wl,-undefined,error
 
-for f in "$OUT/lib/libxc5eagl.dylib" "$OUT/lib/libxc5eagl-b.dylib" "$OUT/lib/libxc5pb.dylib"; do
+# libxc5media.dylib: mediaserverd's portrait-filter prewarm skipped (src/xc5_media.c), for boot-arg xc5media=1.
+$CC -O2 -g -Wall -fno-objc-arc -c "$HERE/src/xc5_media.c" -o "$OBJ/xc5_media.o"
+$CC -dynamiclib -o "$OUT/lib/libxc5media.dylib" "$OBJ/xc5_media.o" \
+  -install_name @rpath/libxc5media.dylib -framework CoreFoundation -framework IOKit -lobjc -Wl,-undefined,error
+
+for f in "$OUT/lib/libxc5eagl.dylib" "$OUT/lib/libxc5eagl-b.dylib" "$OUT/lib/libxc5pb.dylib" "$OUT/lib/libxc5media.dylib"; do
   codesign -s - -f "$f"
   otool -L "$f"
 done
