@@ -235,6 +235,14 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   (3) heartbeat 줄 `XC5 hip mib=.. cfm=.. ver=.. mlme=.. build=.. scb=.. q0 r/w q3 r/w ls=<log-strings 크기> log <레코드 수> bad <깨진 헤더>`,
   펌웨어 panic record가 0이 아니면 `XC5 wlbt PANIC ...`. 이미지 `xc5-ios-wifi8-console.tar`(76,953,600 B, xnu CI 42370479102, 드롭 패키지 1794053226 = log-strings 포함, 인자 wifi7과 같음).
   첫 부팅에서 드롭 설치가 60초보다 늦으면 로그가 해독 없이(`fmt@오프셋`) 나옴 → 그럴 땐 재부팅 한 번.
+- **wifi8 결과(영상 20261107_210843): 로그 해독 성공.** `XC5 hip mib=4496 cfm=0 ver=4 mlme=0xe07 ... ls=866969 log 56 bad 0`.
+  펌웨어 로그 끝부분: `APM IPC -- CMD 17..21 VALID !`, `apm_proto_check_valid_ack()`, `WLBT/FM LDOs(LDO14, 18, 19, 20)`,
+  `FM=0 Command sequence completed`, **`FW 56: 1a9c8 Received SM_MSG_START_REQ for service: 1`** → 그 뒤 아무 로그 없음, CFM 없음,
+  PANIC 줄 못 봄. 원인 후보: 삼성 드라이버는 hcf를 그대로 주지 않음(mgt.c slsi_mib_open_file: 8바이트 헤더 버림,
+  slsi_mib_get_platform: 앞의 0xFFFE/0xFFFF 키(플랫폼 이름 `NACHO_S612_XCOVER5_KOR`) 버림). 우리는 파일 전체를 줌.
+  조치(커밋 ac7babe, xnu CI 42371495675): `hcf_payload()`로 같은 방식으로 자름 → wlan.hcf 4082 B + wlan_sw.hcf 268 B = mib 4350. 콘솔
+  `XC5 WLBT: MIB payloads ...`. 이미지 `xc5-ios-wifi9-console.tar`(드롭 그대로 1794053226).
+  그래도 멈추면: 첫 테스트 = WLAN 요청 뒤 NULL 서비스 START_REQ도 보내 관리 태스크가 살아 있는지 보기.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
