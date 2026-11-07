@@ -635,8 +635,12 @@ static uint16_t mlme_ids[8];
 static bool mlme_asked;
 /* what came back: MLME-GET values, ADD_VIF / ADD_SCAN results, scan results */
 static uint32_t mib_ht = 0xff, mib_vht = 0xff, mib_rates[3];
-static uint8_t conn_data[16];
+static uint8_t conn_data[48];
 static uint32_t conn_len;
+/* wifi14: the AP answered the association with status 18. What the firmware asked with (MLME-PROCEDURE-STARTED.ind
+ * carries our association request), and a second try with rate elements given (MLME-ADD-INFO-ELEMENTS) */
+static uint8_t req_ids[12], req_rates[12], n_req_ids, n_req_rates;
+static uint32_t req_len, conn_try, info_res = 0xffff;
 static uint32_t mib_chip, mib_plat, mib_build, vif_res = 0xffff, scan_res = 0xffff, scan_inds, scan_done;
 #define APN 16
 static struct {
@@ -1159,6 +1163,27 @@ on_signal(uint32_t ref)
 		conn_ind = *(uint16_t *)(sig + 12);
 		conn_len = n;
 		memcpy(conn_data, data, MIN((size_t)n, sizeof(conn_data)));
+		if (conn_ind == 0x8212 && conn_try == 0 && ap_sel >= 0) {
+			conn_try = 1;
+			/* MLME-ADD-INFO-ELEMENTS.request 0x2004 {vif 1; purpose 0x0010 association request}: the AP's rates */
+			uint8_t s[26] = { 0x04, 0x20 };
+			s[10] = 1;
+			s[12] = 0x10;
+			uint8_t d[24], k = 0, nr = aps[ap_sel].nrates;
+			d[k++] = 1;
+			d[k++] = (uint8_t)MIN(nr, 8);
+			for (uint8_t i = 0; i < MIN(nr, 8); i++) {
+				d[k++] = aps[ap_sel].rates[i];
+			}
+			if (nr > 8) {
+				d[k++] = 50;
+				d[k++] = (uint8_t)(nr - 8);
+				for (uint8_t i = 8; i < nr; i++) {
+					d[k++] = aps[ap_sel].rates[i];
+				}
+			}
+			send_sig(s, sizeof(s), d, k);
+		}
 		uint8_t s[24] = { 0x00, 0x22 };
 		s[10] = 1;
 		if (conn_ind == 0) {
@@ -1168,6 +1193,28 @@ on_signal(uint32_t ref)
 	}
 	case 0x2309:                            /* MLME_DISCONNECTED_IND */
 		disc_reason = *(uint16_t *)(sig + 18);
+		break;
+	case 0x2104:                            /* MLME_ADD_INFO_ELEMENTS_CFM */
+		info_res = *(uint16_t *)(sig + 12);
+		if (conn_try == 1) {
+			conn_try = 2;
+			conn_ind = 0xffff;
+			send_connect();
+		}
+		break;
+	case 0x230a:                            /* MLME_PROCEDURE_STARTED_IND: our association request */
+		req_len = n;
+		n_req_ids = n_req_rates = 0;
+		for (uint32_t p = 28; p + 2 <= n && p + 2u + data[p + 1] <= n; p += 2u + data[p + 1]) {
+			if (n_req_ids < sizeof(req_ids)) {
+				req_ids[n_req_ids++] = data[p];
+			}
+			if (data[p] == 1 || data[p] == 50) {
+				for (uint32_t i = 0; i < data[p + 1] && n_req_rates < sizeof(req_rates); i++) {
+					req_rates[n_req_rates++] = data[p + 2 + i];
+				}
+			}
+		}
 		break;
 	case 0x1100:                            /* MA_UNITDATA_CFM */
 		data_cfm = *(uint16_t *)(sig + 12);
@@ -1445,23 +1492,19 @@ xc5_wlbt_heartbeat(void)
 		    mlme_ids[(mlme_got + 5) % 8], mlme_ids[(mlme_got + 6) % 8], mlme_ids[(mlme_got + 7) % 8]);
 		printf("XC5 chip %x plat %x build %u\n", mib_chip, mib_plat, mib_build);
 		printf("XC5 vif %x scan %x ind %u done %u aps %u\n", vif_res, scan_res, scan_inds, scan_done, ap_count);
-		for (uint32_t k = 0; k < ap_count && k < 6; k++) {
+		for (uint32_t k = 0; k < ap_count && k < 3; k++) {
 			printf("XC5 ap %u %d %c %.24s\n", aps[k].mhz, aps[k].rssi, aps[k].open ? 'o' : 's', aps[k].ssid);
 		}
 		const uint8_t *ip = (const uint8_t *)&ack_ip, *gw = (const uint8_t *)&ack_gw, *of = (const uint8_t *)&offer_ip;
 		printf("XC5 join %.20s cfm %x ind %x disc %x\n", ap_sel >= 0 ? aps[ap_sel].ssid : "-", conn_cfm, conn_ind,
 		    disc_reason);
-		if (ap_sel >= 0) {
-			const uint8_t *r = aps[ap_sel].rates;
-			printf("XC5 rates %u caps %x: %x %x %x %x %x %x %x %x %x %x %x %x\n", aps[ap_sel].nrates, aps[ap_sel].caps, r[0],
-			    r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11]);
-		}
-		printf("XC5 fw ht %x vht %x rates %08x %08x %08x\n", mib_ht, mib_vht, mib_rates[0], mib_rates[1], mib_rates[2]);
-		printf("XC5 assoc %u: %02x%02x %02x%02x %02x%02x %02x%02x %02x%02x %02x%02x %02x%02x %02x%02x\n", conn_len,
-		    conn_data[0], conn_data[1], conn_data[2], conn_data[3], conn_data[4], conn_data[5], conn_data[6], conn_data[7],
-		    conn_data[8], conn_data[9], conn_data[10], conn_data[11], conn_data[12], conn_data[13], conn_data[14],
-		    conn_data[15]);
-		printf("XC5 data tx %u cfm %x rx %u dhcp %u offer %u.%u.%u.%u\n", data_tx, data_cfm, data_rx, dhcp_state, of[0],
+		printf("XC5 req %u ids %u: %x %x %x %x %x %x %x %x %x %x\n", req_len, n_req_ids, req_ids[0], req_ids[1], req_ids[2],
+		    req_ids[3], req_ids[4], req_ids[5], req_ids[6], req_ids[7], req_ids[8], req_ids[9]);
+		printf("XC5 req rates %u: %x %x %x %x %x %x %x %x %x %x %x %x\n", n_req_rates, req_rates[0], req_rates[1],
+		    req_rates[2], req_rates[3], req_rates[4], req_rates[5], req_rates[6], req_rates[7], req_rates[8], req_rates[9],
+		    req_rates[10], req_rates[11]);
+		printf("XC5 resp %u status %u try %u info %x\n", conn_len, conn_len >= 28 ? (conn_data[26] | conn_data[27] << 8) : 0xffff,
+		    conn_try, info_res);		printf("XC5 data tx %u cfm %x rx %u dhcp %u offer %u.%u.%u.%u\n", data_tx, data_cfm, data_rx, dhcp_state, of[0],
 		    of[1], of[2], of[3]);
 		printf("XC5 ip %u.%u.%u.%u gw %u.%u.%u.%u\n", ip[0], ip[1], ip[2], ip[3], gw[0], gw[1], gw[2], gw[3]);	}
 	/* the firmware's last log lines, oldest first */
