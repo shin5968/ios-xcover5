@@ -230,7 +230,7 @@ make_stream(struct mx_stream *s, uint32_t length, uint32_t packet, bool to_ap, u
 
 static struct mx_conf *conf;
 static uint32_t conf_off;
-static uint32_t hb_power, hb_cfg, hb_msgs, hb_first[4], hb_last[3], hb_sent;
+static uint32_t hb_power, hb_cfg, hb_msgs, hb_first[4], hb_last[3], hb_sent, hb_cfm;
 static bool started;                    /* MM_START_IND seen */
 static uint64_t hb_smc;
 
@@ -272,6 +272,9 @@ read_mgmt(void)
 		hb_msgs++;
 		if (p[0] == 0 && p[1] == 0) {
 			started = true;
+		}
+		if (p[0] == 1 && p[2] == 1 && p[1] < 8) {
+			hb_cfm |= 1u << p[1];          /* SM_MSG_START_CFM for that service */
 		}
 		printf("XC5 WLBT: mgmt message: channel %u, %02x %02x %02x %02x %02x %02x %02x %02x%s\n", p[0], p[1], p[2],
 		    p[3], p[4], p[5], p[6], p[7], p[8], p[0] == 0 && p[1] == 0 ? " = MM_START_IND" : "");
@@ -318,6 +321,122 @@ start_service(uint8_t id, uint32_t ref)
 	uint8_t m[6] = { id, 0, (uint8_t)ref, (uint8_t)(ref >> 8), (uint8_t)(ref >> 16), (uint8_t)(ref >> 24) };
 	send_mgmt(1, m, sizeof(m));
 	printf("XC5 WLBT: SM_MSG_START_REQ for service %u (configuration %#x) sent\n", id, ref);
+}
+
+/*
+ * Step 3b: the WLAN service's HIP4 (hip4.h / hip4_init, cm_if.c slsi_sm_wlan_service_open): 2.5 MiB of the shared
+ * memory, 4 KiB aligned -- here the second 4 MiB of the window, mapped on its own (one 12 MiB map failed, wifi1) --
+ * laid out as CONFIG 8 KiB (the hip4_hip_control), MIB 32 KiB (the stock wlan.hcf files back to back), TX data 1 MiB,
+ * TX control 64 KiB, RX 1 MiB. The control (packed parts, Samsung's alignments): init {magic 0xcaaa0400,
+ * conf_hip4_ver (the firmware's), refs to config A (v4) and B (v5)} at 0, config v5 (120 bytes) at 32, config v4
+ * (227) at 160, scoreboard u32[256] at 448, six queues of {u32[256], 3 index bytes} each 1088 bytes from 1472.
+ * Every location is an offset in the shared memory. Then SM_MSG_START_REQ for service 1 with the control's offset.
+ */
+#define HIP_OFF         0x400000u       /* in the shared memory */
+#define HIP_MIB         0x2000u
+#define HIP_MIB_SZ      0x8000u
+#define HIP_TX          (HIP_MIB + HIP_MIB_SZ)
+#define HIP_TX_SZ       (0x100000u + 0x10000u)
+#define HIP_RX          (HIP_TX + HIP_TX_SZ)
+#define HIP_RX_SZ       0x100000u
+#define HIP_V5          32u
+#define HIP_V4          160u
+#define HIP_SCBRD       448u
+#define HIP_Q           1472u
+#define HIP_QSZ         1088u
+#define HIP_TH_BIT      7u              /* to-AP: the next free one after the transports' 0-6 */
+#define HIP_FH_BIT      5u              /* AP->R4: the next free one after the transports' */
+
+struct hip_cfg_head {                   /* the part both versions share, 64 bytes */
+	uint32_t magic;
+	uint16_t ver, len;
+	uint32_t compat_flag;           /* firmware's */
+	uint16_t sap_mlme, sap_ma, sap_debug, sap_test;
+	uint32_t fw_build, fw_patch;
+	uint8_t headroom, tailroom, align, host_cache_line;
+	uint32_t host_buf_loc, host_buf_sz, fw_buf_loc, fw_buf_sz, mib_loc, mib_sz, log_loc, log_sz;
+} __attribute__((packed));
+_Static_assert(sizeof(struct hip_cfg_head) == 64, "hip config head");
+struct hip_cfg_v4 {
+	struct hip_cfg_head h;
+	uint8_t fh_int, r1[3], th_int[6], r2[2];
+	uint32_t scbrd_loc;
+	uint16_t q_num, q_len, q_idx_sz;
+	uint8_t r3[2];
+	uint32_t q_loc[6];
+	uint8_t r4[99 + 16];
+} __attribute__((packed));
+_Static_assert(sizeof(struct hip_cfg_v4) == 227, "hip config v4");
+struct hip_cfg_v5 {
+	struct hip_cfg_head h;
+	uint8_t fh_int, th_int, r1[2];
+	uint32_t scbrd_loc;
+	uint16_t q_num, q_len, q_idx_sz;
+	uint8_t r2[2];
+	uint32_t q_loc[6];
+	uint8_t r3[16];
+} __attribute__((packed));
+_Static_assert(sizeof(struct hip_cfg_v5) == 120, "hip config v5");
+struct hip_init {
+	uint32_t magic, conf_ver, a_ref, b_ref;
+};
+
+static uint8_t *hip;                    /* kernel address of HIP_OFF */
+static uint32_t hip_mib;
+static int wlan_mode = 1;               /* xc5wlan: 1 start WLAN, 0 the NULL service (step 3a) */
+
+static void
+head_fill(struct hip_cfg_head *h, uint16_t ver, uint16_t len)
+{
+	h->magic = 0xcaba0401;
+	h->ver = ver;
+	h->len = len;
+	h->host_cache_line = 64;
+	h->host_buf_loc = HIP_OFF + HIP_TX;
+	h->host_buf_sz = HIP_TX_SZ;
+	h->fw_buf_loc = HIP_OFF + HIP_RX;
+	h->fw_buf_sz = HIP_RX_SZ;
+	h->mib_loc = hip_mib ? HIP_OFF + HIP_MIB : 0;
+	h->mib_sz = hip_mib;
+}
+
+static bool
+make_hip(void)
+{
+	hip = (uint8_t *)ml_io_map_wcomb(SHMEM_PA + HIP_OFF, 0x400000);
+	if (hip == NULL) {
+		return false;
+	}
+	bzero(hip, HIP_RX + HIP_RX_SZ);
+	/* the MIB: the stock files the Samsung driver loads (wlan.hcf, wlan_sw.hcf as mx140_*), whole, back to back */
+	int64_t a = read_file("/private/var/xc5/wifi/wlan.hcf", hip + HIP_MIB, HIP_MIB_SZ);
+	int64_t b = a > 0 ? read_file("/private/var/xc5/wifi/wlan_sw.hcf", hip + HIP_MIB + a, HIP_MIB_SZ - (size_t)a) : -1;
+	hip_mib = (uint32_t)((a > 0 ? a : 0) + (b > 0 ? b : 0));
+
+	struct hip_cfg_v5 *v5 = (struct hip_cfg_v5 *)(hip + HIP_V5);
+	struct hip_cfg_v4 *v4 = (struct hip_cfg_v4 *)(hip + HIP_V4);
+	head_fill(&v5->h, 5, sizeof(*v5));
+	head_fill(&v4->h, 4, sizeof(*v4));
+	v5->fh_int = v4->fh_int = HIP_FH_BIT;
+	v5->th_int = HIP_TH_BIT;
+	for (int i = 0; i < 6; i++) {
+		v4->th_int[i] = HIP_TH_BIT;
+		v4->q_loc[i] = v5->q_loc[i] = HIP_OFF + HIP_Q + (uint32_t)i * HIP_QSZ;
+	}
+	v4->scbrd_loc = v5->scbrd_loc = HIP_OFF + HIP_SCBRD;
+	v4->q_num = v5->q_num = 6;
+	v4->q_len = v5->q_len = 256;
+	v4->q_idx_sz = v5->q_idx_sz = 1;
+	struct hip_init *in = (struct hip_init *)hip;
+	in->a_ref = HIP_OFF + HIP_V4;
+	in->b_ref = HIP_OFF + HIP_V5;
+	__asm__ volatile ("dsb sy" ::: "memory");
+	in->magic = 0xcaaa0400;
+	__asm__ volatile ("dsb sy" ::: "memory");
+	wr(mbox, 0x010, rd(mbox, 0x010) & ~(1u << (16 + HIP_TH_BIT)));        /* INTMR0: the HIP's to-AP bit */
+	printf("XC5 WLBT: HIP4 control at %#x (MIB %u bytes: %lld + %lld), TX %#x RX %#x, bits to-AP %u AP->R4 %u\n",
+	    HIP_OFF, hip_mib, a, b, HIP_OFF + HIP_TX, HIP_OFF + HIP_RX, HIP_TH_BIT, HIP_FH_BIT);
+	return true;
 }
 
 static void
@@ -447,7 +566,11 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 		read_mgmt();
 		if (started && !asked) {
 			asked = true;
-			start_service(0, 0);            /* the NULL service */
+			if (wlan_mode != 0 && make_hip()) {
+				start_service(1, HIP_OFF);      /* WLAN, with its HIP4 control */
+			} else {
+				start_service(0, 0);            /* the NULL service */
+			}
 		}
 		uint32_t logw = *(volatile uint32_t *)(shm + conf->mxlog.buf.write_index_loc);
 		if (logw != last_log) {
@@ -493,6 +616,16 @@ xc5_wlbt_heartbeat(void)
 		return;
 	}
 	read_mgmt();
+	if (hip != NULL) {
+		struct hip_init *in = (struct hip_init *)hip;
+		struct hip_cfg_v5 *v5 = (struct hip_cfg_v5 *)(hip + HIP_V5);
+		struct hip_cfg_v4 *v4 = (struct hip_cfg_v4 *)(hip + HIP_V4);
+		struct hip_cfg_head *h = in->conf_ver == 4 ? &v4->h : &v5->h;
+		printf("XC5 hip cfm=%#x ver=%u compat=%#x mlme=%#x ma=%#x build=%#x patch=%#x room=%u/%u scb=%08x %08x q0 %u/%u "
+		    "q3 %u/%u mib=%u\n", hb_cfm, in->conf_ver, h->compat_flag, h->sap_mlme, h->sap_ma, h->fw_build, h->fw_patch,
+		    h->headroom, h->tailroom, *(volatile uint32_t *)(hip + HIP_SCBRD), *(volatile uint32_t *)(hip + HIP_SCBRD + 4),
+		    hip[HIP_Q + 1024], hip[HIP_Q + 1025], hip[HIP_Q + 3 * HIP_QSZ + 1024], hip[HIP_Q + 3 * HIP_QSZ + 1025], hip_mib);
+	}
 	printf("XC5 wlbt pwr=%u cfg=%u smc=%#llx st=%#x issr0=%#x sr0=%#x mgmt r%u w%u msgs=%u first=%08x last=%08x %08x "
 	    "sent=%u out r%u w%u log w%u\n", hb_power, hb_cfg, hb_smc, rd(pmu, WLBT_STATES), rd(mbox, ISSR(0)),
 	    rd(mbox, INTSR0), *(volatile uint32_t *)(shm + conf->mgmt.to_ap.buf.read_index_loc),
@@ -510,6 +643,7 @@ xc5_wlbt_start(void)
 	if (!PE_parse_boot_argn("xc5wifi", &on, sizeof(on)) || on == 0) {
 		return;
 	}
+	PE_parse_boot_argn("xc5wlan", &wlan_mode, sizeof(wlan_mode));
 	thread_t thread;
 	if (kernel_thread_start(wlbt_thread, NULL, &thread) == KERN_SUCCESS) {
 		thread_deallocate(thread);
