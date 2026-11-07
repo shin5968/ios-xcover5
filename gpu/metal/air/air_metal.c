@@ -58,6 +58,13 @@
 #include "util/driconf.h"
 #include "util/xmlconfig.h"
 #include <xf86drm.h>
+
+/* XCover5's libdrm (gpu/mesa/herodrm.c): an IOSurface as a GPU buffer */
+struct herodrm_surface {
+   uint32_t handle, bytes_per_row, width, height, pixel_format, offset, planes;
+   uint64_t size;
+};
+int herodrm_surface_import(uint32_t surface_id, struct herodrm_surface *info);
 #endif
 #include "util/format/u_format.h"
 #include "util/half_float.h"
@@ -1673,9 +1680,26 @@ texture_of_shape(struct rwa_device *device, const struct rwa_texture_shape *shap
        * surface has no tiling and no UBWC metadata, and fd6_layout_resource_for_modifier
        * on DRM_FORMAT_MOD_LINEAR only notes "not UBWC" and returns success.
        */
+      /*
+       * XCover5: herodrm takes an IOSurface as a stand-in descriptor that
+       * herodrm_surface_import makes (XC5GPU SurfaceBO), not as the bare ID. The descriptor
+       * belongs to herodrm and goes when the BO is freed. A buffer's own export (kind set)
+       * is already a descriptor.
+       */
+      int import_fd = import->id;
+      if (import->kind == NULL) {
+         struct herodrm_surface sb;
+         import_fd = herodrm_surface_import((uint32_t)import->id, &sb);
+         if (import_fd < 0) {
+            say(why, why_size, "IOSurface %d: the kernel would not hand its memory to the GPU "
+                               "(XC5GPU SurfaceBO)", import->id);
+            free(texture);
+            return NULL;
+         }
+      }
       struct winsys_handle whandle = {
          .type = WINSYS_HANDLE_TYPE_FD,
-         .handle = (unsigned) import->id,
+         .handle = (unsigned) import_fd,
          .stride = import->row_bytes,
          .offset = import->offset,
          .modifier = DRM_FORMAT_MOD_LINEAR,

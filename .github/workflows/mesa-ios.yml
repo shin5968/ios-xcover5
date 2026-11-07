@@ -32,7 +32,8 @@ jobs:
           set -o pipefail
           bash gpu/mesa/build-mesa.sh "$RUNNER_TEMP/mesa-work" out 2>&1 | tee build.log
           MESA_INC="$RUNNER_TEMP/mesa-work/mesa/include" bash gpu/eagl/build-eagl.sh out 2>&1 | tee -a build.log
-          shasum -a 256 out/osmesa-test out/lib/* | tee out/SHA256SUMS
+          bash gpu/metal/build-metal.sh out 2>&1 | tee -a build.log || echo "::warning::RedwoodMetal.bundle did not build"
+          (cd out && find . -type f ! -name SHA256SUMS | sort | xargs shasum -a 256) | tee out/SHA256SUMS
       - name: Report build errors as annotations
         if: failure()
         run: |

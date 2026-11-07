@@ -154,6 +154,8 @@ for lib in "$OUT"/lib/*.dylib; do
     esac
   done
 done
+# libredwoodair is dlopen'ed by path from the Metal bundle: its own rpath finds libdrm.2 beside it.
+[ -f "$OUT/lib/libredwoodair.dylib" ] && install_name_tool -add_rpath /private/var/xc5/lib "$OUT/lib/libredwoodair.dylib"
 
 # XCover5: files live in /private/var/xc5/lib (the CACHE drop zone,
 # tools/xcover5/mkdrop.py), and the test runs inside backboardd as
