@@ -252,6 +252,15 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   slsi_mib_initial_get): (1) to-AP 비트 7 인터럽트·scoreboard·큐 6개 읽기(FH ctrl/data/RFB, TH ctrl/data/RFB), (2) mbulk 풀
   (TX ctrl 64 KiB)로 MLME-GET.request(MIB에서 MAC 주소 등 읽기)를 TH? 아님 FH 큐에 넣고 AP->R4 비트 5 울리기, (3) 응답
   MLME-GET.confirm을 RX에서 읽어 MAC 주소 출력. 자료: hip4.c(hip4_q_add_signal, scoreboard 인덱스), mbulk.h, fapi.h, mib.c.
+- **Wi-Fi 3c 구현**: MAC 주소는 펌웨어 것이 아님(삼성 드라이버가 efs 파일에서 읽어 줌) → 첫 신호는 드라이버의
+  slsi_mib_initial_get처럼 **MLME-GET.request(0x2001)**: MIB 키 unifiChipVersion 0x07E6, unifiHardwarePlatform 0x0941,
+  unifiFirmwareBuildId 0x07E5 (`{u16 psid, u16 0}`씩). 큐: 0 FH ctrl, 1 FH data, 2 FH RFB, 3 TH ctrl, 4 TH data, 5 TH RFB;
+  scoreboard 바이트 위치 [쓰기, 읽기] = {0,64} {1,65} {66,2} {67,3} {68,4} {5,69}(펌웨어 쪽 +64). mbulk = 20바이트 헤더 {next,
+  flag(1 신호|4 상대 소유), class 5, pool 1, refcnt, dat_bufsz, sig_bufsz, len, head, chain} + 신호 버퍼(펌웨어 헤더 4 B + FAPI
+  헤더 {id, receiver 0, sender 0xC001, fw_ref} + vif + spare 12) + headroom(248) 뒤 데이터. TX ctrl 영역 첫 2 KiB 슬롯
+  (공유 메모리 0x34a000)에 만들어 q0에 넣고 AP->R4 비트 5. q3에서 응답(MLME-GET.confirm 0x2101)을
+  읽고 q5로 돌려줌, q2 따라감. RX 512 KiB(0x35a000-0x3da000, 매핑 안). heartbeat: `XC5 hip ... | q0 wN rN q2 wN q3 wN rN q5 wN rN`,
+  `XC5 mlme sent= got= id= siglen= len= data ...`. 이미지 `xc5-ios-wifi10-console.tar`(커밋 920f99a, xnu CI 42372891680, 드롭 그대로 1794053226).
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
