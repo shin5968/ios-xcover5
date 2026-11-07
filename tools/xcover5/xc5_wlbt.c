@@ -230,6 +230,8 @@ make_stream(struct mx_stream *s, uint32_t length, uint32_t packet, bool to_ap, u
 
 static struct mx_conf *conf;
 static uint32_t conf_off;
+static uint32_t hb_power, hb_cfg, hb_msgs, hb_first[4];
+static uint64_t hb_smc;
 
 static void
 make_conf(uint32_t runtime)
@@ -262,6 +264,10 @@ read_mgmt(void)
 	volatile uint32_t *wi = (volatile uint32_t *)(shm + b->write_index_loc);
 	while (*ri != *wi) {
 		uint8_t *p = shm + b->buffer_loc + (*ri % b->num_packets) * b->packet_size;
+		if (hb_msgs == 0) {
+			memcpy(hb_first, p, sizeof(hb_first));
+		}
+		hb_msgs++;
 		printf("XC5 WLBT: mgmt message: channel %u, %02x %02x %02x %02x %02x %02x %02x %02x%s\n", p[0], p[1], p[2],
 		    p[3], p[4], p[5], p[6], p[7], p[8], p[0] == 0 && p[1] == 0 ? " = MM_START_IND" : "");
 		*ri = (*ri + 1) % b->num_packets;
@@ -344,6 +350,7 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 		}
 	}
 	printf("XC5 WLBT: power %s (STATUS %#x)\n", (v & 1) ? "on" : "NOT on", v);
+	hb_power = v & 1;
 	upd(pmu, WLBT_CTRL_NS, 1u << 6, 0);
 	upd(pmu, WLBT_CTRL_NS, 1u << 5, 1u << 5);
 	xcover5_wlbt_state[0] = 2;
@@ -357,9 +364,11 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 		}
 	}
 	xcover5_wlbt_state[1] = cfg;
+	hb_cfg = cfg;
 	report(cfg ? "CFG_REQ" : "no CFG_REQ in 1 s");
 	uint64_t smc = smc4(0x82000710, 1ull << 32, 0, 0);
 	printf("XC5 WLBT: SMC CONN_IF set TZPC: %#llx\n", smc);
+	hb_smc = smc;
 	wr(remap, 0x400, 0x80000000u >> 12);
 	printf("XC5 WLBT: CHIP_VERSION_ID %#x\n", rd(remap, 0x410));
 	wr(dbaaw, 0x0, 0x80000000u >> 12);
@@ -419,6 +428,26 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 		    *(volatile uint32_t *)(shm + conf->mxlog.buf.write_index_loc), p[0], p[1], p[2]);
 		delay(20 * 1000 * 1000);
 	}
+}
+
+/*
+ * wifi3 (video 194332): the core raised to-AP bits 0 (management) and 6 (log) -- INTSR0 0x410000 -- and ISSR0 became
+ * 0x2222801b, but no other line of this file could be found on the screen: the console scrolls too fast. So one line in
+ * the heartbeat block (SweetPlatformExpert), which is drawn where it can always be read.
+ */
+void xc5_wlbt_heartbeat(void);
+void
+xc5_wlbt_heartbeat(void)
+{
+	if (mbox == NULL || conf == NULL) {
+		return;
+	}
+	read_mgmt();
+	printf("XC5 wlbt pwr=%u cfg=%u smc=%#llx st=%#x issr0=%#x sr0=%#x msr0=%#x mgmt r%u w%u msgs=%u first=%08x %08x %08x "
+	    "log w%u\n", hb_power, hb_cfg, hb_smc, rd(pmu, WLBT_STATES), rd(mbox, ISSR(0)), rd(mbox, INTSR0),
+	    rd(mbox, INTMSR0), *(volatile uint32_t *)(shm + conf->mgmt.to_ap.buf.read_index_loc),
+	    *(volatile uint32_t *)(shm + conf->mgmt.to_ap.buf.write_index_loc), hb_msgs, hb_first[0], hb_first[1],
+	    hb_first[2], *(volatile uint32_t *)(shm + conf->mxlog.buf.write_index_loc));
 }
 
 void xc5_wlbt_start(void);

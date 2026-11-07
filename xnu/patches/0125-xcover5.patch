@@ -2106,10 +2106,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..ff7540c
+index 0000000..cfd543a
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,436 @@
+@@ -0,0 +1,465 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -2342,6 +2342,8 @@ index 0000000..ff7540c
 +
 +static struct mx_conf *conf;
 +static uint32_t conf_off;
++static uint32_t hb_power, hb_cfg, hb_msgs, hb_first[4];
++static uint64_t hb_smc;
 +
 +static void
 +make_conf(uint32_t runtime)
@@ -2374,6 +2376,10 @@ index 0000000..ff7540c
 +	volatile uint32_t *wi = (volatile uint32_t *)(shm + b->write_index_loc);
 +	while (*ri != *wi) {
 +		uint8_t *p = shm + b->buffer_loc + (*ri % b->num_packets) * b->packet_size;
++		if (hb_msgs == 0) {
++			memcpy(hb_first, p, sizeof(hb_first));
++		}
++		hb_msgs++;
 +		printf("XC5 WLBT: mgmt message: channel %u, %02x %02x %02x %02x %02x %02x %02x %02x%s\n", p[0], p[1], p[2],
 +		    p[3], p[4], p[5], p[6], p[7], p[8], p[0] == 0 && p[1] == 0 ? " = MM_START_IND" : "");
 +		*ri = (*ri + 1) % b->num_packets;
@@ -2456,6 +2462,7 @@ index 0000000..ff7540c
 +		}
 +	}
 +	printf("XC5 WLBT: power %s (STATUS %#x)\n", (v & 1) ? "on" : "NOT on", v);
++	hb_power = v & 1;
 +	upd(pmu, WLBT_CTRL_NS, 1u << 6, 0);
 +	upd(pmu, WLBT_CTRL_NS, 1u << 5, 1u << 5);
 +	xcover5_wlbt_state[0] = 2;
@@ -2469,9 +2476,11 @@ index 0000000..ff7540c
 +		}
 +	}
 +	xcover5_wlbt_state[1] = cfg;
++	hb_cfg = cfg;
 +	report(cfg ? "CFG_REQ" : "no CFG_REQ in 1 s");
 +	uint64_t smc = smc4(0x82000710, 1ull << 32, 0, 0);
 +	printf("XC5 WLBT: SMC CONN_IF set TZPC: %#llx\n", smc);
++	hb_smc = smc;
 +	wr(remap, 0x400, 0x80000000u >> 12);
 +	printf("XC5 WLBT: CHIP_VERSION_ID %#x\n", rd(remap, 0x410));
 +	wr(dbaaw, 0x0, 0x80000000u >> 12);
@@ -2531,6 +2540,26 @@ index 0000000..ff7540c
 +		    *(volatile uint32_t *)(shm + conf->mxlog.buf.write_index_loc), p[0], p[1], p[2]);
 +		delay(20 * 1000 * 1000);
 +	}
++}
++
++/*
++ * wifi3 (video 194332): the core raised to-AP bits 0 (management) and 6 (log) -- INTSR0 0x410000 -- and ISSR0 became
++ * 0x2222801b, but no other line of this file could be found on the screen: the console scrolls too fast. So one line in
++ * the heartbeat block (SweetPlatformExpert), which is drawn where it can always be read.
++ */
++void xc5_wlbt_heartbeat(void);
++void
++xc5_wlbt_heartbeat(void)
++{
++	if (mbox == NULL || conf == NULL) {
++		return;
++	}
++	read_mgmt();
++	printf("XC5 wlbt pwr=%u cfg=%u smc=%#llx st=%#x issr0=%#x sr0=%#x msr0=%#x mgmt r%u w%u msgs=%u first=%08x %08x %08x "
++	    "log w%u\n", hb_power, hb_cfg, hb_smc, rd(pmu, WLBT_STATES), rd(mbox, ISSR(0)), rd(mbox, INTSR0),
++	    rd(mbox, INTMSR0), *(volatile uint32_t *)(shm + conf->mgmt.to_ap.buf.read_index_loc),
++	    *(volatile uint32_t *)(shm + conf->mgmt.to_ap.buf.write_index_loc), hb_msgs, hb_first[0], hb_first[1],
++	    hb_first[2], *(volatile uint32_t *)(shm + conf->mxlog.buf.write_index_loc));
 +}
 +
 +void xc5_wlbt_start(void);
@@ -3134,10 +3163,10 @@ index d11fe26..6f5de61 100644
  	    arg0, in_scalars, in_struct, out_scalars, out_struct, ret);
  	return ret;
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-index 193845f..025c955 100644
+index 193845f..b9ce419 100644
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -22,6 +22,338 @@ public:
+@@ -22,6 +22,342 @@ public:
  
  OSDefineMetaClassAndStructors(SweetPlatformExpert, IODTPlatformExpert);
  
@@ -3165,6 +3194,7 @@ index 193845f..025c955 100644
 +extern char xcover5_gpusvc_lines[4][120];
 +extern uint32_t xcover5_gpusvc_line;
 +extern uint32_t xcover5_drop_state[5];
++void xc5_wlbt_heartbeat(void) __attribute__((weak));   /* bsd/dev/xc5_wlbt.c */
 +extern uint32_t xcover5_gl_exit[4];
 +extern uint32_t xcover5_amfi_svc[2], xcover5_amfi_sel[16], xcover5_amfi_dev_reads;
 +extern char xcover5_amfi_last[2][20], xcover5_amfi_dev_last[20];
@@ -3401,6 +3431,9 @@ index 193845f..025c955 100644
 +	const uint32_t *ds = xcover5_drop_state;
 +	IOLog("XC5 drop state=%u written=%u failed=%u bbd launches=%u inserted=%u\n",
 +	    ds[2], ds[0], ds[1], ds[3], ds[4]);
++	if (xc5_wlbt_heartbeat) {
++		xc5_wlbt_heartbeat();
++	}
 +	if (xcover5_gl_exit[0] != 0) {
 +		IOLog("XC5 GL exit pid=%u status=0x%x ns=%u code=0x%x\n", xcover5_gl_exit[0],
 +		    xcover5_gl_exit[1], xcover5_gl_exit[2], xcover5_gl_exit[3]);
@@ -3476,7 +3509,7 @@ index 193845f..025c955 100644
  bool
  SweetPlatformExpert::start(IOService *provider)
  {
-@@ -36,6 +368,16 @@ SweetPlatformExpert::start(IOService *provider)
+@@ -36,6 +372,16 @@ SweetPlatformExpert::start(IOService *provider)
  	registerService();
  #if defined(A5XELTE)
  	IOLog("A5XELTE: platform expert registered\n");
