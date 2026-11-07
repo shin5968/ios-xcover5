@@ -179,6 +179,12 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   to-AP 버퍼는 0xff로 채움. INTMR0 비트 16-22 unmask. 실행 중 mgmt 링을 읽어 `XC5 WLBT: mgmt message: channel ...`
   (채널 0, 메시지 0 = MM_START_IND), mxlog 쓰기 인덱스 변화, 끝나면 20초마다 3분간 `XC5 WLBT summary: ...` 반복.
   이미지 `xc5-ios-wifi3-console.tar`(드롭 1794046067 그대로).
+- **wifi3 결과(영상 20261107_194332, 가로로 찍힘 → ffmpeg `transpose=2`)**: `XC5 WLBT t+5000/t+15000 ms: STATUS 0x1
+  STATES 0x10 ... mbox INTSR0 0x410000 INTMSR0 0x410000 INTSR1 0 ... ISSR0-3 0x2222801b 0x234000 0xbcdeedcb 0`.
+  → **펌웨어가 to-AP 비트 0(관리 채널 쓰기)과 6(mxlog 쓰기)을 올림**, ISSR0도 0x22220004 → 0x2222801b로 달라짐(mxconf를 읽고
+  더 진행). mxconf는 0x234000. 다른 줄(`mgmt message`, summary)은 콘솔이 너무 빨리 밀려서 못 찾음.
+  조치(커밋 bf017de, xnu CI 42365571196): heartbeat 블록에 `XC5 wlbt pwr= cfg= smc= st= issr0= sr0= msr0= mgmt rN wN msgs=
+  first=... log wN` 한 줄. 이미지 `xc5-ios-wifi4-console.tar`.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
