@@ -2106,7 +2106,7 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..e5c9e6e
+index 0000000..565936b
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
 @@ -0,0 +1,1537 @@
@@ -3038,7 +3038,7 @@ index 0000000..e5c9e6e
 +static int ap_sel = -1;
 +static uint32_t conn_cfm = 0xffff, conn_ind = 0xffff, disc_reason = 0xffff, data_cfm = 0xffff, data_tx, data_rx;
 +static uint32_t dhcp_state, dhcp_xid = 0x58433501, offer_ip, offer_srv, ack_ip, ack_gw, ack_dns, ack_mask;
-+static uint64_t dhcp_next;
++static uint64_t dhcp_next, rescan_at;
 +static char want_ssid[33];
 +
 +static void
@@ -3266,6 +3266,11 @@ index 0000000..e5c9e6e
 +		scan_done++;
 +		if (ap_sel < 0 && conn_cfm == 0xffff) {
 +			send_connect();
++			if (ap_sel < 0) {
++				uint64_t ns;
++				absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
++				rescan_at = ns + 8000000000ull;         /* nothing to join yet: scan again */
++			}
 +		}
 +		break;
 +	case 0x210b:                            /* MLME_CONNECT_CFM */
@@ -3362,6 +3367,14 @@ index 0000000..e5c9e6e
 +		fh_rfb++;
 +	}
 +	dhcp_tick();
++	if (rescan_at != 0) {
++		uint64_t ns;
++		absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
++		if (ns >= rescan_at) {
++			rescan_at = 0;
++			send_add_scan();
++		}
++	}
 +	for (int q = 3; q <= 4; q++) {
 +		for (int guard = 0; guard < 64 && *scb(q, 1) != *scb(q, 0); guard++) {
 +			uint8_t r = *scb(q, 1);
@@ -3591,47 +3604,34 @@ index 0000000..e5c9e6e
 +		return;
 +	}
 +	read_mgmt();
-+	if (hip != NULL) {
-+		struct hip_init *in = (struct hip_init *)hip;
-+		struct hip_cfg_v5 *v5 = (struct hip_cfg_v5 *)(hip + HIP_V5);
-+		struct hip_cfg_v4 *v4 = (struct hip_cfg_v4 *)(hip + HIP_V4);
-+		struct hip_cfg_head *h = in->conf_ver == 4 ? &v4->h : &v5->h;
-+		printf("XC5 hip mib=%u cfm=%#x ver=%u mlme=%#x ls=%u log %u bad %u | q0 w%u r%u q2 w%u q3 w%u r%u q5 w%u r%u\n",
-+		    hip_mib, hb_cfm, in->conf_ver, h->sap_mlme, ls_sz, log_recs, log_bad, *scb(0, 0), *scb(0, 1), *scb(2, 0),
-+		    *scb(3, 0), *scb(3, 1), *scb(5, 0), *scb(5, 1));
-+		/* wifi10: the line was cut at the screen's edge -- short lines */
-+		printf("XC5 mlme sent=%u got=%u rfb=%u ids %x %x %x %x\n", mlme_sent, mlme_got, fh_rfb, mlme_ids[(mlme_got + 4) % 8],
-+		    mlme_ids[(mlme_got + 5) % 8], mlme_ids[(mlme_got + 6) % 8], mlme_ids[(mlme_got + 7) % 8]);
-+		printf("XC5 chip %x plat %x build %u\n", mib_chip, mib_plat, mib_build);
-+		printf("XC5 vif %x scan %x ind %u done %u aps %u\n", vif_res, scan_res, scan_inds, scan_done, ap_count);
-+		for (uint32_t k = 0; k < ap_count && k < 3; k++) {
-+			printf("XC5 ap %u %d %c %.24s\n", aps[k].mhz, aps[k].rssi, aps[k].open ? 'o' : 's', aps[k].ssid);
-+		}
-+		const uint8_t *ip = (const uint8_t *)&ack_ip, *gw = (const uint8_t *)&ack_gw, *of = (const uint8_t *)&offer_ip;
-+		printf("XC5 join %.20s cfm %x ind %x disc %x\n", ap_sel >= 0 ? aps[ap_sel].ssid : "-", conn_cfm, conn_ind,
-+		    disc_reason);
-+		printf("XC5 req %u ids %u: %x %x %x %x %x %x %x %x %x %x\n", req_len, n_req_ids, req_ids[0], req_ids[1], req_ids[2],
-+		    req_ids[3], req_ids[4], req_ids[5], req_ids[6], req_ids[7], req_ids[8], req_ids[9]);
-+		printf("XC5 req rates %u: %x %x %x %x %x %x %x %x %x %x %x %x\n", n_req_rates, req_rates[0], req_rates[1],
-+		    req_rates[2], req_rates[3], req_rates[4], req_rates[5], req_rates[6], req_rates[7], req_rates[8], req_rates[9],
-+		    req_rates[10], req_rates[11]);
-+		printf("XC5 resp %u status %u try %u info %x\n", conn_len, conn_len >= 28 ? (conn_data[26] | conn_data[27] << 8) : 0xffff,
-+		    conn_try, info_res);		printf("XC5 data tx %u cfm %x rx %u dhcp %u offer %u.%u.%u.%u\n", data_tx, data_cfm, data_rx, dhcp_state, of[0],
-+		    of[1], of[2], of[3]);
-+		printf("XC5 ip %u.%u.%u.%u gw %u.%u.%u.%u\n", ip[0], ip[1], ip[2], ip[3], gw[0], gw[1], gw[2], gw[3]);	}
-+	/* the firmware's last log lines, oldest first */
-+	for (uint32_t k = log_recs >= LOGN ? log_recs - LOGN + 1 : 1; k != 0 && k <= log_recs; k++) {
-+		printf("XC5 fw%u %s\n", k, loglines[k % LOGN]);
++	/*
++	 * wifi14/15: the block got so long that its first lines were pushed off the screen by the time it could be filmed:
++	 * the Wi-Fi state is now a few short lines, the ones that matter last (just above "XC5 amfi").
++	 */
++	printf("XC5 wlbt pwr=%u st=%#x issr0=%#x mgmt w%u log w%u fw%u: %.60s\n", hb_power, rd(pmu, WLBT_STATES),
++	    rd(mbox, ISSR(0)), *(volatile uint32_t *)(shm + conf->mgmt.to_ap.buf.write_index_loc),
++	    *(volatile uint32_t *)(shm + conf->mxlog.buf.write_index_loc), log_recs, loglines[log_recs % LOGN]);
++	if (hip == NULL) {
++		return;
 +	}
-+	printf("XC5 wlbt pwr=%u cfg=%u smc=%#llx st=%#x issr0=%#x sr0=%#x mgmt r%u w%u msgs=%u first=%08x last=%08x %08x "
-+	    "sent=%u out r%u w%u log w%u\n", hb_power, hb_cfg, hb_smc, rd(pmu, WLBT_STATES), rd(mbox, ISSR(0)),
-+	    rd(mbox, INTSR0), *(volatile uint32_t *)(shm + conf->mgmt.to_ap.buf.read_index_loc),
-+	    *(volatile uint32_t *)(shm + conf->mgmt.to_ap.buf.write_index_loc), hb_msgs, hb_first[0], hb_last[0],
-+	    hb_last[1], hb_sent, *(volatile uint32_t *)(shm + conf->mgmt.from_ap.buf.read_index_loc),
-+	    *(volatile uint32_t *)(shm + conf->mgmt.from_ap.buf.write_index_loc),
-+	    *(volatile uint32_t *)(shm + conf->mxlog.buf.write_index_loc));
++	printf("XC5 w cfm %x vif %x scan %x ind %u done %u aps %u got %u\n", hb_cfm, vif_res, scan_res, scan_inds, scan_done,
++	    ap_count, mlme_got);
++	if (ap_sel >= 0) {
++		printf("XC5 w ap %.20s %u %d %c\n", aps[ap_sel].ssid, aps[ap_sel].mhz, aps[ap_sel].rssi, aps[ap_sel].open ? 'o' : 's');
++	} else {
++		for (uint32_t k = 0; k < ap_count && k < 3; k++) {
++			printf("XC5 w ap? %.20s %u %d %c\n", aps[k].ssid, aps[k].mhz, aps[k].rssi, aps[k].open ? 'o' : 's');
++		}
++	}
++	printf("XC5 w req %u ids %x %x %x %x %x %x r %x %x %x %x %x %x %x %x\n", req_len, req_ids[0], req_ids[1], req_ids[2],
++	    req_ids[3], req_ids[4], req_ids[5], req_rates[0], req_rates[1], req_rates[2], req_rates[3], req_rates[4],
++	    req_rates[5], req_rates[6], req_rates[7]);
++	printf("XC5 w join cfm %x ind %x st %u try %u info %x disc %x\n", conn_cfm, conn_ind,
++	    conn_len >= 28 ? (conn_data[26] | conn_data[27] << 8) : 0xffff, conn_try, info_res, disc_reason);
++	const uint8_t *ip = (const uint8_t *)&ack_ip, *of = (const uint8_t *)&offer_ip;
++	printf("XC5 w data tx %u cfm %x rx %u dhcp %u offer %u.%u.%u.%u ip %u.%u.%u.%u\n", data_tx, data_cfm, data_rx,
++	    dhcp_state, of[0], of[1], of[2], of[3], ip[0], ip[1], ip[2], ip[3]);
 +}
-+
 +void xc5_wlbt_start(void);
 +void
 +xc5_wlbt_start(void)
