@@ -327,6 +327,15 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   없음**(P2P 방식) → AP 기본 rate(1/2/5.5/11) 불충족 → 상태 18. 재시도(ADD_INFO_ELEMENTS 0, CONNECT cfm 1)는 효과 없음.
   **원인: ADD_VIF의 device_address** — 드라이버는 station이면 FF:FF:FF:FF:FF:FF(cfg80211_ops.c slsi_connect, P2P일 때만 실제 주소),
   우리는 우리 주소를 넣음. 조치(커밋 f459cfa, xnu CI 42383026520): FF로. rate 재시도는 `xc5wretry=1`일 때만. 이미지 `xc5-ios-wifi17-console.tar`.
+- **wifi17 결과(영상 20261107_235543): Wi-Fi 4a/4b 성공 — 개방형 핫스팟에 연결하고 DHCP로 IP를 받음.**
+  `XC5 w cfm 2 vif 0 scan 0 ind 2 done 1 aps 1 got 147`, `XC5 w ap S24 2437 -20 o`, `XC5 w req 120 ids 0 1 32 24 21 2d r 82 84 8b 96
+  c 12 18 24`(이제 11b rate 들어감 + 확장 rate 원소 0x32), `XC5 w join cfm 0 ind 0 st 0 try 0`, `XC5 w data tx 2 cfm ffff rx 7 dhcp 3
+  offer 10.168.19.211 ip 10.168.19.211`. → ADD_VIF device_address = FF가 원인이었음. 프레임 송신(DISCOVER, REQUEST)과 수신(OFFER, ACK
+  포함 7개) 모두 동작. MA-UNITDATA.confirm은 안 옴(cfm ffff, 요청 안 하면 안 오는 듯 — 문제 아님).
+- **다음 = 4c: iOS 네트워크에 en0 올리기.** 커널에서 BSD `ifnet` 생성(ifnet_allocate_extended, family IFNET_FAMILY_ETHERNET,
+  ifnet_attach, ether 주소 02:58:43:35:00:01) + output 콜백 → MA-UNITDATA, 수신 프레임 → ifnet_input. 주소는 DHCP로 받은 값을
+  커널에서 설정(SIOCAIFADDR, 서브넷·게이트웨이·DNS는 ACK에서 — 현재 mask/gw/dns도 파싱함), 기본 경로 추가. 확인: 다른 기기에서
+  ping, 또는 iOS 앱의 인터넷. 그다음 configd/IPConfiguration이 en0을 인식하게(IOKit IONetworkInterface 흉내) 할지 결정.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
