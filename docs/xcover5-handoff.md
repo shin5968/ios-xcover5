@@ -161,7 +161,19 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   **RTC는 재부팅 뒤에도 유지**: `the PMIC's clock said 2026-11-07 10:08:25 UTC`(rtc4가 써 둔 시각).
   조치(커밋 9699df6, xnu CI 42363089520): 공유 메모리 앞 4 MiB만 매핑(`SHMEM_MAP`). 이미지 `xc5-ios-wifi2-console.tar`
   (드롭은 wifi1과 같음 1794046067, 이미 설치됐으면 그대로).
-- **Wi-Fi 1단계 결과 읽기**: 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
+- **wifi2 결과(영상 20261107_192345)**: 패닉 없이 부팅, 잠금화면까지. WLBT 보고(t+5000, t+15000 ms 같음):
+  `STATUS 0x1 STATES 0x10 CONF 0x1 OPT 0 CTRL_NS 0x21 CTRL_S 0x8 DEBUG 0 | mbox INTSR0 0 INTMSR0 0 INTSR1 0 INTMSR1 0
+  ISSR0-3 0x22220004 0 0xbcdeedcb 0 | spi mbox 0 alive 0 cfg 0 wdog 0`. **ISSR0이 우리가 쓴 진입점 0x1a9에서 0x22220004로
+  바뀜** → WLBT 쪽(부트 ROM 또는 펌웨어)이 실행돼 메일박스에 씀(살아 있다는 증거). panic record(@0x1930a4)는 0, 메일박스
+  인터럽트 없음. 0x22220004의 뜻은 삼성 소스에 없음(상태/오류 코드로 추정). 앞쪽 줄(firmware/power/CFG_REQ/SMC)은 콘솔이
+  밀려서 영상에 없음. 추정: mxconf가 없어서(ISSR1=0) 거기서 멈춤.
+  RTC: `the PMIC's clock said 2026-11-07 10:21:09 ..., behind xc5epoch 1794046920: using 1794046950; RTC written`
+  (rtc4가 쓴 값이 이미지 시각보다 약간 뒤 → 이미지 시각 사용, 정상 동작).
+- **다음 = Wi-Fi 2단계**: mxconf(mxconf.h: magic, version, mx_trans_conf = mxmgmt 전송의 두 방향 스트림, mxlog, gdb 전송,
+  fwconfig)를 공유 메모리(4 MiB 매핑 안, 펌웨어 런타임 0x233df0 뒤)에 만들고 ISSR1 = 그 오프셋. mxmgmt 전송은
+  mifstream(cpacket_buffer 링 + 메일박스 인덱스 + 인터럽트 비트, mxmgmt_transport.c, mifstream.c, cpacket_buffer.c,
+  mifintrbit.c, mifmboxman.c). 목표: 펌웨어가 `MM_START_IND`(mxman.c 528/852) 보냄. 필요하면 매핑을 2 MiB 단위로 늘림.
+- **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
 - (끝남) RTC: rtc4에서 날짜 해결.
