@@ -2664,10 +2664,10 @@ index 0000000..2c660ec
 +#endif
 diff --git a/iokit/Kernel/arm/XC5GPU.cpp b/iokit/Kernel/arm/XC5GPU.cpp
 new file mode 100644
-index 0000000..47783d6
+index 0000000..a3291e4
 --- /dev/null
 +++ b/iokit/Kernel/arm/XC5GPU.cpp
-@@ -0,0 +1,964 @@
+@@ -0,0 +1,1057 @@
 +/*
 + * XC5GPU: the Galaxy XCover5's Mali-G52 MP1 (Exynos 850) for user space, the
 + * kernel half of a Panfrost-style driver (Mesa's panfrost in an iOS process).
@@ -3316,11 +3316,10 @@ index 0000000..47783d6
 + * opens "/System/Library/Extensions/" + it + ".bundle" with NSBundle and makes the class
 + * "MetalPluginClassName" names (or the bundle's principal class) with -initWithAcceleratorPort:.
 + *
-+ * Boot-arg xc5metal=1 publishes the service with neither property, so nothing finds a Metal
-+ * device until a process sets them (IORegistryEntrySetCFProperties, e.g. libxc5mtl.dylib):
-+ * Metal's conditions on a device are asserts, and a daemon that aborts on them is restarted by
-+ * launchd in a loop, so the properties exist only while somebody wants them. An empty string
-+ * removes one. Only those two keys, only strings.
++ * Boot-arg xc5metal=1 publishes the service with both properties pointing at the drop zone's
++ * RedwoodMetal.bundle, readable only by the processes boot-arg xc5metalfor names (below).
++ * A process may still change them (IORegistryEntrySetCFProperties; an empty string removes
++ * one). Only those two keys, only strings.
 + */
 +#define kXC5MetalNameKey  "MetalPluginName"
 +#define kXC5MetalClassKey "MetalPluginClassName"
@@ -3330,9 +3329,98 @@ index 0000000..47783d6
 +
 +public:
 +	IOReturn setProperties(OSObject *properties) APPLE_KEXT_OVERRIDE;
++	OSObject *copyProperty(const char *aKey) const APPLE_KEXT_OVERRIDE;
++	OSObject *copyProperty(const OSString *aKey) const APPLE_KEXT_OVERRIDE;
++	OSObject *copyProperty(const OSSymbol *aKey) const APPLE_KEXT_OVERRIDE;
++	OSObject *copyProperty(const char *aKey, const IORegistryPlane *plane,
++	    IOOptionBits options) const APPLE_KEXT_OVERRIDE;
++	bool serializeProperties(OSSerialize *s) const APPLE_KEXT_OVERRIDE;
 +};
 +
 +OSDefineMetaClassAndStructors(IOAcceleratorES, IOService);
++
++/*
++ * Boot 78 (xc5metal=1 xc5mtl=1): chronod made the device, a buffer and a command buffer -- and
++ * SpringBoard, which asked Metal while the properties were up, took the same device and aborted
++ * (MPSImageGaussianBlur, SiriUI's pipelines, "<MTLDepthStencilState> ... not in this process").
++ * So the two properties are now seen only by the processes named in boot-arg xc5metalfor
++ * (comma separated, default "chronod"); everybody else reads an accelerator without them and
++ * goes on as before. The kernel itself sees everything.
++ */
++static bool
++xc5_metal_key(const char *key)
++{
++	return key != NULL && (strcmp(key, kXC5MetalNameKey) == 0 || strcmp(key, kXC5MetalClassKey) == 0);
++}
++
++static bool
++xc5_metal_caller_allowed(void)
++{
++	if (proc_selfpid() == 0) {
++		return true;
++	}
++	char who[MAXCOMLEN + 1];
++	char list[128] = "chronod";
++	proc_selfname(who, sizeof(who));
++	(void)PE_parse_boot_argn("xc5metalfor", list, sizeof(list));
++	size_t wl = strlen(who);
++	for (const char *p = list; *p != '\0';) {
++		const char *e = strchr(p, ',');
++		size_t n = e ? (size_t)(e - p) : strlen(p);
++		if (n == wl && strncmp(p, who, n) == 0) {
++			return true;
++		}
++		if (e == NULL) {
++			break;
++		}
++		p = e + 1;
++	}
++	return false;
++}
++
++OSObject *
++IOAcceleratorES::copyProperty(const char *aKey) const
++{
++	return xc5_metal_key(aKey) && !xc5_metal_caller_allowed() ? NULL : IOService::copyProperty(aKey);
++}
++
++OSObject *
++IOAcceleratorES::copyProperty(const OSString *aKey) const
++{
++	return aKey && xc5_metal_key(aKey->getCStringNoCopy()) && !xc5_metal_caller_allowed()
++	       ? NULL : IOService::copyProperty(aKey);
++}
++
++OSObject *
++IOAcceleratorES::copyProperty(const OSSymbol *aKey) const
++{
++	return aKey && xc5_metal_key(aKey->getCStringNoCopy()) && !xc5_metal_caller_allowed()
++	       ? NULL : IOService::copyProperty(aKey);
++}
++
++OSObject *
++IOAcceleratorES::copyProperty(const char *aKey, const IORegistryPlane *plane, IOOptionBits options) const
++{
++	return xc5_metal_key(aKey) && !xc5_metal_caller_allowed()
++	       ? NULL : IOService::copyProperty(aKey, plane, options);
++}
++
++bool
++IOAcceleratorES::serializeProperties(OSSerialize *s) const
++{
++	if (xc5_metal_caller_allowed()) {
++		return IOService::serializeProperties(s);
++	}
++	OSDictionary *dict = dictionaryWithProperties();
++	if (dict == NULL) {
++		return false;
++	}
++	dict->removeObject(kXC5MetalNameKey);
++	dict->removeObject(kXC5MetalClassKey);
++	bool ok = dict->serialize(s);
++	dict->release();
++	return ok;
++}
 +
 +IOReturn
 +IOAcceleratorES::setProperties(OSObject *properties)
@@ -3392,8 +3480,13 @@ index 0000000..47783d6
 +	IOAcceleratorES *acc = OSTypeAlloc(IOAcceleratorES);
 +	if (acc != NULL && acc->init() && acc->attach(provider)) {
 +		acc->setName("sgx");
++		/* the drop zone's bundle (gpu/metal/build-metal.sh), seen only by xc5metalfor's processes */
++		acc->setProperty(kXC5MetalNameKey, "../../../private/var/xc5/metal/RedwoodMetal");
++		acc->setProperty(kXC5MetalClassKey, "RedwoodMetalDevice");
 +		acc->registerService();
-+		printf("XC5 metal: IOAcceleratorES published (xc5metal=%d)\n", metal);
++		char list[128] = "chronod";
++		(void)PE_parse_boot_argn("xc5metalfor", list, sizeof(list));
++		printf("XC5 metal: IOAcceleratorES published (xc5metal=%d) for %s\n", metal, list);
 +	}
 +	OSSafeReleaseNULL(acc);
 +}

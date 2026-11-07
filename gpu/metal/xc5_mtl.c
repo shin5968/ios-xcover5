@@ -10,8 +10,9 @@
  * Then, on a thread of its own after a few seconds: ask Metal for the device, and if there is
  * one, a buffer, a command queue and an empty command buffer committed and waited on. Every step
  * says itself on the console first ("gl: mtl ..." through XC5GPU's Log selector), so that an
- * abort names the step it happened in. xc5mtl=1 takes the properties off again afterwards
- * (processes started later go back to no Metal); xc5mtl=2 leaves them.
+ * abort names the step it happened in. Boot 78 took the properties off again afterwards, but
+ * SpringBoard had already taken the device in between and aborted; the kernel now shows the
+ * properties only to the processes in xc5metalfor, so they stay.
  */
 #include <CoreFoundation/CoreFoundation.h>
 #include <dlfcn.h>
@@ -157,13 +158,6 @@ probe(void *arg)
 	}
 	say("done: Metal device works this far");
 out:
-	if (mode == 1) {
-		io_object_t acc = IOServiceGetMatchingService(0, IOServiceMatching("IOAcceleratorES"));
-		if (acc) {
-			say("properties off: %#x", set_props(acc, "", ""));
-			IOObjectRelease(acc);
-		}
-	}
 	return NULL;
 }
 
@@ -176,9 +170,15 @@ xc5_mtl_init(void)
 		say("no IOAcceleratorES (boot with xc5metal=1); nothing to do");
 		return;
 	}
-	kern_return_t kr = set_props(acc, PLUGIN_NAME, PLUGIN_CLASS);
+	/* the kernel publishes them for xc5metalfor's processes (boot 79 on); an older kernel
+	 * (boot 78) had them empty, so they are set only when this process cannot read them */
 	CFTypeRef v = IORegistryEntryCreateCFProperty(acc, CFSTR("MetalPluginName"), NULL, 0);
-	say("xc5mtl=%d: properties set %#x, MetalPluginName %s", mode, kr, v ? "reads back" : "is NOT there");
+	kern_return_t kr = 0;
+	if (!v) {
+		kr = set_props(acc, PLUGIN_NAME, PLUGIN_CLASS);
+		v = IORegistryEntryCreateCFProperty(acc, CFSTR("MetalPluginName"), NULL, 0);
+	}
+	say("xc5mtl=%d: MetalPluginName %s (set %#x)", mode, v ? "reads here" : "is NOT readable here", kr);
 	if (v) {
 		CFRelease(v);
 	}

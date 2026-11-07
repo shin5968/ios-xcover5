@@ -4310,7 +4310,8 @@ rw_note_view(const struct rwa_texture_shape *from, NSUInteger format, NSUInteger
 	uint64_t chip = 0;
 
 	if (gpu_is_mali && gpu_param(_gpu, 0x03, &chip)) {
-		return [NSString stringWithFormat:@"Mali-G77 MP11 (product %#x, Redwood)",
+		/* XCover5: the Exynos 850's Mali-G52 MP1 (product 0x7212) */
+		return [NSString stringWithFormat:@"Mali-G52 MP1 (product %#x, XCover5)",
 				 (unsigned)(chip & 0xffffffffu)];
 	}
 	if (gpu_param(_gpu, 0x03, &chip)) {
