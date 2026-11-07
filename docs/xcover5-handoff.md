@@ -308,6 +308,14 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   진단 출력 — `XC5 rates <개수> caps <1 HT|2 VHT|4 HE>: <rate 바이트들>`(0x80 비트 = 기본 rate, 0xff/0xfe/0xfa 등 = selector),
   `XC5 fw ht <unifiHtActivated> vht <..> rates <unifiSupportedDataRates>`, `XC5 assoc <길이>: <CONNECT_IND 데이터 앞 16바이트>`.
   이미지 `xc5-ios-wifi14-console.tar`. 같은 이미지로 핫스팟 "Wi-Fi 6" 옵션을 끄고 재부팅해 비교하면 좋음.
+- **wifi14 결과(영상 20261107_231043)**: `XC5 rates 12 caps 3: 82 84 8b 96 c 12 18 24 30 48 60 6c`(AP: 기본 1/2/5.5/11, 나머지 6-54,
+  HT+VHT, selector 없음 → Wi-Fi 6 가설 아님), `XC5 fw ht 1 vht 1 rates 04020ca1 16120c0b ..`(펌웨어: 02 04 0b 0c 12 16 18 24 30 48..
+  = AP 기본 rate 다 있음), `XC5 assoc 46: 1000 3a01 0258 4335 0001 cab0 c81e 6a24`(= AP의 Association Response, 우리 주소로).
+  → 거부는 AP가 우리 **association request**를 보고 한 것. 조치(커밋 아래): MLME-PROCEDURE-STARTED.ind 0x230a 데이터(= 펌웨어가 보낸
+  assoc request 프레임, rx.c slsi_peer_update_assoc_req)의 원소 id와 rate 표시, AP 응답 status(+26) 표시, status 18이면 한 번 더:
+  **MLME-ADD-INFO-ELEMENTS.request 0x2004**(vif 1, purpose 0x0010 assoc req) + AP의 rate 원소(1, 50) → CONFIRM 0x2104 → CONNECT 다시. (커밋 b131bab, xnu CI 42380750766)
+  heartbeat `XC5 req <길이> ids <n>: ...`, `XC5 req rates <n>: ...`, `XC5 resp <길이> status <AP status> try <0-2> info <결과>`.
+  이미지 `xc5-ios-wifi15-console.tar`.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
