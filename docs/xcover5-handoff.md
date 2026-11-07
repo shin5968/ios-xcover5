@@ -114,6 +114,15 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   - 조치(커밋 53fb077, xnu CI 42358950388): rtc_sync 결과를 저장하고 스레드가 **20초마다 3분간 다시 찍음**(거부 시 원시 값 포함,
     설정 시 readback, 현재 달력 값). 달력이 아직 2020년 전이면 같은 값 + 업타임으로 **다시 설정**. 이미지 `xc5-ios-rtc3-console.tar`
     (xc5pmic 감시는 뺌). 볼 것: 부팅 후 `XC5 RTC: ...; calendar now ...` 줄과 잠금화면 날짜.
+  - **rtc3 결과(영상 182822)**: `XC5 RTC: 2022-01-01 12:01:42 is not a date to trust (CTRL 02 raw 2a 01 4c 01 01 16);
+    calendar now 70 (uptime 70 s)` → 읽기는 정상, **PMIC 시계가 DT의 init_time(2022-01-01 12:00)에서 돌고 있음**(안드로이드가
+    더는 네트워크 시간으로 맞춰 주지 않음; Scion S9의 2018-01-01과 같은 상황).
+  - 조치(커밋 5b9aba2, xnu CI 42360462965): `mkimage.sh`가 `xc5epoch=<PC 시각>`을 자동으로 넣음. RTC가 무효이거나 xc5epoch보다
+    뒤면 달력 = xc5epoch + 업타임, 그리고 그 시각을 **RTC에 씀**(SEC..YEAR + UPDATE |= WUDR(비트 1), 삼성 드라이버 방식;
+    `xc5rtcwrite=0`이면 안 씀). 다음 부팅부터는 RTC가 맞는 시각을 갖고 있어 새 이미지 없이도 유지(PMIC가 재부팅 때 시계를
+    지우지 않는다면). 오차: 이미지를 만든 뒤 부팅까지 걸린 시간만큼 늦음. 이미지 `xc5-ios-rtc4-console.tar`.
+    볼 것: `XC5 RTC: written 2026-..`, `... not valid; xc5epoch ...: using ...; RTC written`, 잠금화면 날짜. 그리고 **한 번 더
+    재부팅**했을 때 `the PMIC's clock said 2026-..`가 나오는지(시계가 유지되는지).
 - **Wi-Fi 조사**: 칩은 Exynos 850 내장 Samsung SCSC "WLBT"(`scsc_wifibt@119C0000`, 예약 메모리 `wifibt_if` 12 MB,
   인터럽트 MBOX/ALIVE/CFG_REQ/WDOG, syscon: wlbt_remap 0x14C50000, boot_cfg 0x14C60000, BAAW들). Broadcom이 아니라서
   S9(brcmfmac)·y2sios 하드웨어 드라이버는 못 씀. iOS 쪽 층(en0 + 가짜 IO80211Controller + apple80211 ioctl, y2sios
