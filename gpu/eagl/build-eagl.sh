@@ -22,7 +22,7 @@ OBJ=$(mktemp -d)
 python3 "$HERE/tools/gen_gl_stubs.py" > "$OBJ/gl_stubs.c"
 CF="-O2 -g -fvisibility=hidden -Wall -Wno-deprecated-declarations -Wno-unused-function -I$HERE/src -I$MESA_INC"
 $CC $CF -c "$OBJ/gl_stubs.c" -o "$OBJ/gl_stubs.o"
-for f in gl_resolve gl_unimpl osm macro_ctx macro_slots hero_log hero_backboardd hero_prof xc5_pbreset; do
+for f in gl_resolve gl_unimpl osm macro_ctx macro_slots hero_log hero_backboardd hero_prof xc5_pbreset xc5_posterretry; do
   $CC $CF -c "$HERE/src/$f.c" -o "$OBJ/$f.o"
 done
 $CC $CF -fno-objc-arc -fobjc-exceptions -DEAGL_INJECT -c "$HERE/src/eagl.m" -o "$OBJ/eagl.o"
@@ -38,7 +38,7 @@ python3 "$HG/mkeagl.py" "$HG/src/eagl_slots.txt" "$MESA_INC/../src/mapi/glapi/re
 $CC -O2 -g -w -I"$OBJ" -I"$HG/src" -I"$HG/include" -c "$HG/src/eagl.c" -o "$OBJ/hg_eagl.o"
 $CC -O2 -g -Wall -I"$HG/src" -c "$HG/src/gl_hero.c" -o "$OBJ/hg_gl_hero.o"
 $CC -O2 -g -Wall -c "$HG/src/ca_hooks.c" -o "$OBJ/hg_ca_hooks.o"
-$CC -dynamiclib -o "$OUT/lib/libxc5eagl.dylib" "$OBJ"/{hg_eagl,hg_gl_hero,hg_ca_hooks,hero_log,hero_backboardd,hero_prof,xc5_pbreset}.o \
+$CC -dynamiclib -o "$OUT/lib/libxc5eagl.dylib" "$OBJ"/{hg_eagl,hg_gl_hero,hg_ca_hooks,hero_log,hero_backboardd,hero_prof,xc5_pbreset,xc5_posterretry}.o \
   -install_name @rpath/libxc5eagl.dylib \
   -framework CoreFoundation -framework IOKit -framework IOSurface -lobjc \
   -L "$OUT/lib" -lOSMesa.8 -Wl,-rpath,$RPATH -Wl,-undefined,error
