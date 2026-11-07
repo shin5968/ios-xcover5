@@ -260,7 +260,13 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   헤더 {id, receiver 0, sender 0xC001, fw_ref} + vif + spare 12) + headroom(248) 뒤 데이터. TX ctrl 영역 첫 2 KiB 슬롯
   (공유 메모리 0x34a000)에 만들어 q0에 넣고 AP->R4 비트 5. q3에서 응답(MLME-GET.confirm 0x2101)을
   읽고 q5로 돌려줌, q2 따라감. RX 512 KiB(0x35a000-0x3da000, 매핑 안). heartbeat: `XC5 hip ... | q0 wN rN q2 wN q3 wN rN q5 wN rN`,
-  `XC5 mlme sent= got= id= siglen= len= data ...`. 이미지 `xc5-ios-wifi10-console.tar`(커밋 920f99a, xnu CI 42372891680, 드롭 그대로 1794053226).
+  `XC5 mlme sent= got= id= siglen= len= data ...`. 결과는 아래 wifi10. 이미지 `xc5-ios-wifi10-console.tar`(커밋 920f99a, xnu CI 42372891680, 드롭 그대로 1794053226).
+- **wifi10 결과(영상 20261107_214038): HIP4 왕복 성공.** `XC5 hip mib=4350 cfm=0x2 ver=4 ... | q0 w1 r1 q2 w1 q3 w8 r8 q5 w8 r8`,
+  `XC5 mlme sent=1 got=8 id=0x2101 siglen=24 len=(화면 밖에서 잘림) data 00000000 ...`, sr0 0xc30000(to-AP 비트 7 = HIP).
+  → 펌웨어가 우리 요청을 가져가고(q0 r1) 버퍼를 돌려주고(q2 w1) TH ctrl로 신호 8개를 보냄, 마지막이 **MLME-GET.confirm**.
+  데이터 6워드는 0 → len이 0이거나 데이터가 체인 mbulk에 있음(미확인). 조치(커밋 2585702): 짧은 줄로 `XC5 mlme sent= got= len=
+  sig=`, `XC5 ids <마지막 신호 8개 id>`, `XC5 mb <confirm mbulk 헤더 5워드>`, `XC5 md <데이터 6워드>`, `XC5 mc <체인 다음 세그먼트
+  데이터>`. 이미지 `xc5-ios-wifi11-console.tar`(xnu CI 42373806596, 드롭 그대로).
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
