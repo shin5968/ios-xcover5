@@ -49,6 +49,8 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
 | `xc5ext=0` | AMFI 서비스·0x60·질의 응답 끄기(기본 켜짐) |
 | `xc5lsreset=1`, `xc5lsrestore=1` | LaunchServices 저장소 옮기기/되돌리기(70에서 한 번 씀, 지금 폰은 새 저장소 사용 중) |
 | `xc5conrows=40` | 화면 아래 40줄만 콘솔 |
+| `xc5metal=1` | XC5GPU 아래에 `IOAcceleratorES`("sgx") 공개. Metal 속성 두 개는 비어 있고, 프로세스가 `IORegistryEntrySetCFProperties`로 넣고 뺌(빈 문자열 = 지움). 콘솔 `XC5 metal: ...` |
+| `xc5mtl=1/2` | chronod에 `libxc5mtl.dylib`(`gpu/metal/xc5_mtl.c`): main 전에 속성을 넣고 6초 뒤 Metal 장치·버퍼·명령 버퍼 시험, 단계마다 `gl: mtl[pid] step N ...`. 1은 끝나면 속성 지움, 2는 둠. `xc5metal=1` 필요 |
 
 ## 지금 상태 (2026-11-07)
 
@@ -68,13 +70,23 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   - `air_metal.c`: IOSurface 가져오기를 `herodrm_surface_import`(대리 fd)로. y2sios는 surface ID를 fd 자리에 그대로 넣었음.
   - `_MTLDevice`(Metal 비공개 클래스)는 `-Wl,-U`로 실행 때 찾게 함.
 
+- **M3 빌드 완료(커밋 feb36fa, xnu CI 42339376775 + mesa-ios CI 42339376773, 폰 시험 대기)**:
+  - 커널: `XC5GPU.cpp`에 `IOAcceleratorES`(y2sios 방식, 두 키·문자열만 받음), `xc5_drop.c` 주입 표에 chronod
+    (`/ChronoCore.framework/Support/chronod`, `xc5mtl`), XPB_MAX 24.
+  - 번들 위치: Metal이 `/System/Library/Extensions/` + 이름 + `.bundle`을 만드므로 이름을
+    `../../../private/var/xc5/metal/RedwoodMetal`로 줌(공유 캐시로 확인 안 함, 폰에서 확인). `mkdrop.py`가 산출물
+    `metal/` 디렉터리를 `/private/var/xc5/metal/`에 넣음.
+  - 시험 이미지: `xc5-ios-mtl1-console.tar` = 기준 + `xc5metal=1 xc5mtl=1`, 드롭 1794026793.
+
 ## 다음 행동
 
-1. M3: 커널에 `xc5metal=1` → `IOAcceleratorES`에 `MetalPluginName`, `MetalPluginClassName=RedwoodMetalDevice`.
-   Metal은 `/System/Library/Extensions/<이름>.bundle`을 연다. 드롭 존은 `/private/var/xc5`만 쓰므로 후보:
-   (가) `MetalPluginName=../../../private/var/xc5/metal/RedwoodMetal` (경로를 그대로 붙이는지 공유 캐시에서 확인 필요),
-   (나) 커널/드롭이 루트에 심볼릭 링크를 만들기. `mkdrop.py`는 지금 `lib/*.dylib`만 넣으니 `metal/` 디렉터리도 넣게 고칠 것.
-   확인용으로 y2sios `metal_props.c`(서비스 속성 읽기)와 `metal_drv_test.m`을 작은 테스트로 빌드.
+1. 사용자가 `xc5-ios-mtl1-console.tar`를 플래시하고 콘솔 영상을 보내 주면 `XC5 metal:`, `XC5 PB: chronod`,
+   `gl: mtl[...] step N`, `gl: metal ...`(드라이버 m2m 기록), `CRASH chronod` 줄을 읽기.
+   - step 3에서 device가 nil이면: 번들 경로(`..`가 받아들여지는지), NSBundle 로드/클래스 찾기, 서명. 대안은 루트
+     `/System/Library/Extensions/RedwoodMetal.bundle` 심볼릭 링크(루트는 launchd가 rw로 다시 마운트함).
+   - abort면 `STR` 줄의 assert 문장과 `dsc.py`로 위치.
+   - backboardd/SpringBoard가 IOAcceleratorES를 보고 동작이 바뀌는지(배경화면, 잠금 해제) 확인.
+2. M3 다음: Metal 컴퓨트 한 번(셰이더가 들어간 metallib, CI의 Xcode `xcrun metal`로 만들기) → M4 chronod 위젯.
 
 ## 분석 도구 (`tools/xcover5/dev/`)
 
