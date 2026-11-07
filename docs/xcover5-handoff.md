@@ -276,6 +276,13 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
 - **다음 = Wi-Fi 3d(검색)**: 삼성 순서대로 MLME-ADD-VIF.request(가상 인터페이스, MAC 주소는 우리가 정함 — efs 대신 고정/임의
   로컬 주소) → MLME-ADD-SCAN.request → MLME-SCAN.indication(찾은 AP 비콘/프로브 응답, 데이터 큐 또는 ctrl) →
   MLME-SCAN-DONE.indication. 응답 데이터는 체인 mbulk까지 따라가 읽어야 함. 그다음 iOS 쪽(en0, apple80211).
+- **Wi-Fi 3d 구현(커밋 130c0db, xnu CI 42374958927)**: GET confirm 뒤 **MLME-ADD-VIF.request 0x2007** {vif 1, 주소 02:58:43:35:00:01(로컬), type 2
+  station, device 주소 같음} → confirm 0x2107 result 0이면 **MLME-ADD-SCAN.request 0x2005** {vif 0, scan_id 0x100, type 2 full,
+  device 주소, report_mode 4 real-time}, 데이터 = SSID 원소 길이 0 + 스캔 타이밍 원소(dd 11 00 16 32 01 01, 0) + 채널 목록 원소
+  (dd 2c 00 16 32 01 02 + 2.4 GHz 1-13채널 {u16 2×MHz, u8 0}). MLME-SCAN.indication 0x2300 {vif, channel_frequency 2×MHz,
+  rssi}의 데이터 = 비콘/프로브 응답 프레임(체인 mbulk까지 모음) → SSID(24+12바이트 뒤 원소 0), BSSID(+16). 6개까지 기억.
+  TH data(q4)도 읽음. 송신은 TX ctrl 32칸 순환. heartbeat: `XC5 mlme sent= got= rfb= ids ...`, `XC5 chip a700 plat 77 build N`,
+  `XC5 vif <결과> scan <결과> ind <수> done <수> aps <수>`, `XC5 ap <MHz> <dBm> <SSID>`. 이미지 `xc5-ios-wifi12-console.tar`.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
