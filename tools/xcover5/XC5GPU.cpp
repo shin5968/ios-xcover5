@@ -640,6 +640,94 @@ OSDefineMetaClassAndStructors(XC5GPUUserClient, IOUserClient);
 
 static void selftest(void *arg, wait_result_t wr);
 
+/*
+ * Metal's device discovery (after y2sios MiniIOMobileFramebuffer.cpp, MIT): MTLRegisterDevices
+ * enumerates IOServiceMatching("IOAcceleratorES"), reads "MetalPluginName" off each service,
+ * opens "/System/Library/Extensions/" + it + ".bundle" with NSBundle and makes the class
+ * "MetalPluginClassName" names (or the bundle's principal class) with -initWithAcceleratorPort:.
+ *
+ * Boot-arg xc5metal=1 publishes the service with neither property, so nothing finds a Metal
+ * device until a process sets them (IORegistryEntrySetCFProperties, e.g. libxc5mtl.dylib):
+ * Metal's conditions on a device are asserts, and a daemon that aborts on them is restarted by
+ * launchd in a loop, so the properties exist only while somebody wants them. An empty string
+ * removes one. Only those two keys, only strings.
+ */
+#define kXC5MetalNameKey  "MetalPluginName"
+#define kXC5MetalClassKey "MetalPluginClassName"
+
+class IOAcceleratorES : public IOService {
+	OSDeclareDefaultStructors(IOAcceleratorES);
+
+public:
+	IOReturn setProperties(OSObject *properties) APPLE_KEXT_OVERRIDE;
+};
+
+OSDefineMetaClassAndStructors(IOAcceleratorES, IOService);
+
+IOReturn
+IOAcceleratorES::setProperties(OSObject *properties)
+{
+	OSDictionary *dict = OSDynamicCast(OSDictionary, properties);
+	char who[MAXCOMLEN + 1];
+
+	proc_selfname(who, sizeof(who));
+	if (dict == NULL || dict->getCount() == 0) {
+		return kIOReturnBadArgument;
+	}
+	OSCollectionIterator *it = OSCollectionIterator::withCollection(dict);
+	if (it == NULL) {
+		return kIOReturnNoMemory;
+	}
+	OSSymbol *key;
+	IOReturn ret = kIOReturnSuccess;
+	while ((key = OSDynamicCast(OSSymbol, it->getNextObject())) != NULL) {
+		if (!key->isEqualTo(kXC5MetalNameKey) && !key->isEqualTo(kXC5MetalClassKey)) {
+			printf("XC5 metal: %s: refused key %s\n", who, key->getCStringNoCopy());
+			ret = kIOReturnUnsupported;
+		} else if (OSDynamicCast(OSString, dict->getObject(key)) == NULL) {
+			printf("XC5 metal: %s: %s is not a string\n", who, key->getCStringNoCopy());
+			ret = kIOReturnBadArgument;
+		}
+	}
+	it->release();
+	if (ret != kIOReturnSuccess) {
+		return ret;
+	}
+	it = OSCollectionIterator::withCollection(dict);
+	if (it == NULL) {
+		return kIOReturnNoMemory;
+	}
+	while ((key = OSDynamicCast(OSSymbol, it->getNextObject())) != NULL) {
+		OSString *value = OSDynamicCast(OSString, dict->getObject(key));
+		if (value->getLength() == 0) {
+			removeProperty(key);
+			printf("XC5 metal: %s removed by %s\n", key->getCStringNoCopy(), who);
+		} else {
+			setProperty(key, value);
+			printf("XC5 metal: %s = %s, set by %s\n", key->getCStringNoCopy(),
+			    value->getCStringNoCopy(), who);
+		}
+	}
+	it->release();
+	return kIOReturnSuccess;
+}
+
+static void
+publish_accelerator(IOService *provider)
+{
+	int metal = 0;
+	if (!PE_parse_boot_argn("xc5metal", &metal, sizeof(metal)) || metal == 0) {
+		return;
+	}
+	IOAcceleratorES *acc = OSTypeAlloc(IOAcceleratorES);
+	if (acc != NULL && acc->init() && acc->attach(provider)) {
+		acc->setName("sgx");
+		acc->registerService();
+		printf("XC5 metal: IOAcceleratorES published (xc5metal=%d)\n", metal);
+	}
+	OSSafeReleaseNULL(acc);
+}
+
 bool
 XC5GPU::start(IOService *provider)
 {
@@ -659,6 +747,7 @@ XC5GPU::start(IOService *provider)
 	setProperty("GPU", "Mali-G52 MP1");
 	registerService();
 	IOLog("XC5GPU: registered\n");
+	publish_accelerator(this);
 	thread_t thread;
 	if (kernel_thread_start(selftest, NULL, &thread) == KERN_SUCCESS) {
 		thread_deallocate(thread);

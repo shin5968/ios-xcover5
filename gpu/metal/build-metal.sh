@@ -34,3 +34,9 @@ codesign -s - -f "$B/RedwoodMetal"
 echo "RedwoodMetal: $(nm -gU "$B/RedwoodMetal" | grep -c 'RedwoodMetal') RedwoodMetal* symbols"
 nm -u "$B/RedwoodMetal" | grep -i 'MTLDevice' || true
 otool -L "$B/RedwoodMetal"
+
+# libxc5mtl.dylib: chronod asks Metal for the device (xc5_mtl.c; boot-args xc5metal=1 xc5mtl=1)
+$CC -O2 -g -Wall -c "$HERE/xc5_mtl.c" -o "$OBJ/xc5_mtl.o"
+$CC -dynamiclib -o "$OUT/lib/libxc5mtl.dylib" "$OBJ/xc5_mtl.o" -install_name @rpath/libxc5mtl.dylib \
+  -framework CoreFoundation -framework IOKit -lobjc -Wl,-undefined,error
+codesign -s - -f "$OUT/lib/libxc5mtl.dylib"

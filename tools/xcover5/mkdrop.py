@@ -35,7 +35,12 @@ def pack(items):
                 dirs.add(d)
                 entries.append((d, 0, b''))
         data = Path(src).read_bytes()
-        mode = 0o755 if os.access(src, os.X_OK) or dest.endswith('.dylib') else 0o644
+        if dest.endswith('.dylib') or dest.endswith('.bundle/RedwoodMetal'):
+            mode = 0o755
+        elif dest.endswith('.plist') or '/_CodeSignature/' in dest or dest.endswith('.png'):
+            mode = 0o644
+        else:
+            mode = 0o755 if os.access(src, os.X_OK) else 0o644
         entries.append((PREFIX + dest, mode, data))
     payload = bytearray()
     for path, mode, data in entries:
@@ -74,6 +79,10 @@ def main():
         items += [(f'lib/{p.name}', str(p)) for p in sorted((mesa / 'lib').glob('*.dylib'))]
         if (mesa / 'osmesa-test').exists():
             items.append(('osmesa-test', str(mesa / 'osmesa-test')))
+        # the Metal driver bundle (gpu/metal/build-metal.sh): metal/RedwoodMetal.bundle/...
+        if (mesa / 'metal').is_dir():
+            items += [(p.relative_to(mesa).as_posix(), str(p))
+                      for p in sorted((mesa / 'metal').rglob('*')) if p.is_file()]
     if not items:
         ap.error('nothing to pack')
     blob, entries, ident = pack(items)

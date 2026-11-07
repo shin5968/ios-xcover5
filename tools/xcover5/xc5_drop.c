@@ -340,7 +340,7 @@ uint64_t xc5_gl_dyld_flags(void);
  * skipped, as HakiOS's inject_media.c does, so the daemon stays up to decode the
  * stock wallpaper's HEIC pictures for everybody). Same table, same pid list.
  */
-#define XPB_MAX         12
+#define XPB_MAX         24
 static int xpb_pids[XPB_MAX];
 static int xpb_count;
 
@@ -357,6 +357,10 @@ static const struct {
 	/* xc5wall=1: a still picture as the wallpaper (gpu/eagl/src/xc5_sb.c, after herolte's herosb.c) */
 	{ "/SpringBoard.app/SpringBoard", "xc5wall", "/private/var/xc5/lib/libxc5sb.dylib",
 	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5sb.dylib", "SpringBoard" },
+	/* xc5mtl=1/2: Metal M3, chronod (the widgets' renderer) asks Metal for a device with
+	 * RedwoodMetal.bundle named on IOAcceleratorES (gpu/metal/xc5_mtl.c; needs xc5metal=1) */
+	{ "/ChronoCore.framework/Support/chronod", "xc5mtl", "/private/var/xc5/lib/libxc5mtl.dylib",
+	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5mtl.dylib", "chronod" },
 };
 
 static int
