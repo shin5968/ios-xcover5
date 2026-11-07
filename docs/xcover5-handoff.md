@@ -141,10 +141,25 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
     aw8896 앰프)·카메라 펌웨어도 있음.
   - 규모: SCSC 코어 + 무선 드라이버 합쳐 원본 약 4.5 MB(GPL, 사실만 참고). 단계: (1) 펌웨어를 예약 메모리에 넣고 WLBT를
     리셋 해제해 메일박스 응답 받기, (2) MX 관리 채널, (3) HIP(데이터 경로)와 MLME(검색·접속), (4) iOS 쪽 en0/apple80211.
+- **Wi-Fi 1단계(커밋 f262938, xnu CI 42362014245)**: `tools/xcover5/xc5_wlbt.c`, 부팅 인자 `xc5wifi=1`. WLBT 코어를 켜고
+  (PMU 0x11860000: CTRL_S.START, OPTION.DATA, TOP_OUT.PWRRGTON_CP, VGPIO_TX_MONITOR(0x11A50000+0x1700)[29] 대기,
+  CONFIGURATION.LOCAL_PWR_CFG, STATUS[0] 대기, CTRL_NS), CFG_REQ(SPI 0xE6, GIC 보류 비트로 감시) 뒤 SMC 0x82000710(1<<32),
+  WLBT_REMAP+0x400, DBUS BAAW(0x14C20000) 창 0 = WLBT 0x80000000-0x80C00000 → 공유 메모리, PBUS BAAW(0x14C30000) 창 0/1
+  (메일박스), BOOT_CFG(0x14C60000) KA 패치 + CFG_ACK. 펌웨어는 공유 메모리(**물리 0x880000000, 12 MiB**: 로더·XNU가 안 쓰는
+  상위 뱅크) 맨 앞, AP2WLBT 메일박스(0x119C0000) ISSR0 = 진입점(헤더 +40, mx140은 0x1a9), ISSR1 = 0(mxconf 아직 없음),
+  ISSR2 = 0xbcdeedcb, ISSR3 = 0. 그 뒤 20초 동안 PMU WLBT_STATES/STATUS, 메일박스 INTSR/ISSR, SPI(MBOX/ALIVE/CFG/WDOG) 보류,
+  펌웨어 panic record(헤더 +176 오프셋) 출력. 출처: 삼성 SCSC 드라이버(A21s 커널 platform_mif_3830.c 등, GPL, 사실만).
+  펌웨어와 KA 패치(8051 코드 57워드)는 저장소에 넣지 않고 `tools/xcover5/dev/wlbtfw.sh`가 로컬에서 만듦
+  (`shim/xcover5/out/wifi/`), 드롭 `/private/var/xc5/wifi/mx140.bin`, `ka.bin`. 이미지 `xc5-ios-wifi1-console.tar`
+  (드롭 1794046067). mxconf(관리 채널 설정)가 없으니 펌웨어는 곧 panic할 것으로 예상: 1단계 목표는 "코어가 펌웨어를
+  실행한다"는 증거(STATES 변화, 메일박스 인터럽트, panic record).
 
 ## 다음 행동
 
-- **우선 RTC2 실기기 확인**: 부팅 초기 `XC5 RTC2: entered`, `ACPM`, `raw`, `before/requested/readback`을 촬영. raw 실패와 달력 설정 실패를 구분하고, readback이 정상인데 잠금화면 날짜가 틀리면 이후 시간 재설정 경로를 조사. 반복 플래시만으로 원인 확정하지 말 것.
+- **Wi-Fi 1단계 결과 읽기**: 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
+  `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
+  mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
+- (끝남) RTC: rtc4에서 날짜 해결.
 
 0. **전원 키**(보류): pmic1 콘솔에서 `XC5 PMIC: ACPM initdata ...`, `channel 2: ...`, `top block register 0 ...`, `pmic 00: ...` 덤프,
    그리고 전원 키를 누를 때 `XC5 PMIC: pmic RR: AA -> BB` 줄. 바뀌는 레지스터/비트를 찾아 `xc5pmic=2 xc5pwrreg=0xRR
