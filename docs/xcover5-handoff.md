@@ -212,7 +212,12 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   비트 to-AP 7(INTMR0 unmask) / AP->R4 5. 그 뒤 `SM_MSG_START_REQ {1, 0, 0x400000}`. `xc5wlan=0`이면 3a(NULL).
   heartbeat 새 줄: `XC5 hip cfm=<START_CFM 받은 서비스 비트마스크, WLAN이면 0x2> ver=<펌웨어가 고른 HIP 버전 4/5> compat= mlme=
   ma= build= patch= room=head/tail scb=.. q0 r/w q3 r/w mib=4496`. 기대: cfm=0x2, ver≠0, build≠0. 이미지 `xc5-ios-wifi6-console.tar`
-  (드롭 새로 필요: hcf 두 개 추가).
+  (76,083,200 B, 드롭 패키지 1794051101: hcf 두 개 추가; 인자 `xc5gpu=4 xc5gl=2 xc5wall=1 xc5metal=1 xc5ckpt=1 xc5wifi=1`).
+- **wifi6 결과(영상 20261107_203333): 패닉.** MM_START_IND 직후 `kmem_alloc(..., 4194304, 0x100...) failed with 3 @vm_kern.c:178`
+  → 두 번째 4 MiB `ml_io_map_wcomb`도 커널 맵에 자리가 없음(wifi1과 같은 종류). 조치(커밋 027a3b6): HIP를 이미 매핑된 앞
+  4 MiB 안 `HIP_OFF 0x240000`(mxconf 힙 끝 뒤)으로 옮김 → 제어 0x240000, MIB 0x242000, TX 0x24a000, RX 0x35a000-0x45a000
+  (RX 뒷부분은 매핑 밖, 펌웨어가 쓰는 곳이라 지금은 상관없음; 나중에 작은 매핑으로 읽기). START_REQ ref = 0x240000.
+  이미지 `xc5-ios-wifi7-console.tar`(같은 인자, 같은 드롭).
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
