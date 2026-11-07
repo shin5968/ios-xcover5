@@ -118,6 +118,16 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
      scion-installer(TWRP 설치 zip 빌더). `docs/ru/notes.md` 2007-2235: fairplayd.H2는 거기서도 **해결 안 됨**(10 ms 만에 exit 0,
      IOKit도 안 부름, FairPlayIOKit 드라이버 스텁은 소용없음 판명). 대처는 클라이언트에서 FairPlay 질문에 대신 답하기.
      checkpointd·사진 앱 기록은 없음 → 우리 checkpointd 시간 제한 방식이 같은 방향.
+   - herolte(wardevsa/ios-a5xelte 브랜치 herolte, S7): `tools/herolte-disabled.list` 맨 위가 `com.apple.fairplayd.H2`,
+     `gpu/eagl/test/hero-run.c`가 root로 `/private/var/db/com.apple.xpc.launchd/disabled.plist`를 씀(CPU 낭비 때문).
+     fairplayd.H2 job은 KeepAlive이고 포트가 `com.apple.fairplayd`, `.versioned`, **host special port 17 `com.apple.unfreed`**
+     (FairPlay 클라이언트는 이걸로 찾음). 끄면 포트가 없어 클라이언트가 바로 실패함.
+     → (커밋 4766ad4) 드롭 패키지에 `/private/var/xc5/launchd-disabled.plist`가 있으면 커널이 launchd의 disabled.plist로 복사
+     (원본은 한 번만 `/private/var/xc5/launchd-disabled.orig.plist`로 보관, 없었으면 빈 파일). 내용은
+     `tools/xcover5/launchd-disabled.plist`(fairplayd.H2만). **다음 부팅부터** 적용. 되돌리려면 orig 내용을 같은 이름으로 다시 패키징.
+     이미지 `xc5-ios-photo7-console.tar`(xnu CI 42348421220, 드롭 1794034425 = photo6 + 이 plist): **두 번 부팅**해야 함
+     (첫 부팅 설치 `XC5 DROP: .../disabled.plist: 788 bytes ... (next boot)`, 두 번째 부팅에 fairplayd 없음 → `exec fairplayd.H2`
+     줄이 사라져야 함). xc5ckpt·샘플러도 그대로 들어 있음.
 1. M4 위젯: chronod가 Metal로 그리는 것이 무엇인지(어떤 위젯/요소) 확인. 사진 위젯은 사진 앱(assetsd/photolibraryd)부터. 위젯 확장이 스냅샷을 못 주는지, chronod가
    그리다 막히는지. 다음 영상에서 홈 화면 오래 두고 `CRASH`, `metal E ...`, `chronod` 줄 확인. 필요하면 확장 프로세스를
    `xc5metalfor`에 추가(쉼표 목록). `gpuAddress 0`(Mesa 버퍼 경로에서 GPU 주소를 안 알려줌)도 확인할 것.
