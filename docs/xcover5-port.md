@@ -209,6 +209,28 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   잠금화면(4:02)과 홈 화면(위젯 2개, 사진·App Store·설정, 독) 표시. 배경화면은 검정, 위젯은 "Waiting…".
   GPU 5단계 완료. 남은 것: 배경화면(S7처럼 ASTC/P3 문제일 가능성), 프레임 속도 측정, 6단계.
 
+### 배경화면 (부팅 59-77, 2026-11-06~07)
+
+- 59-60: AMFI 0x60 응답(herolte 0306), AMFI 서비스·`security.mac.amfi` sysctl·질의 응답(ios-topaz 0147/0150/0151) 추가.
+  PosterBoard는 `!_stateLock_switcherConfiguration`(PBFPosterExtensionDataStore.m:3431) 어서션으로 계속 죽음.
+- 61-63: `xc5pbreset`으로 PosterBoard 저장 상태 정리 시도 → 저장 상태는 원래 없었음(원인 아님).
+- 64-66: PosterBoard 후킹(`xc5pbhook`, `libxc5pb.dylib`): 지연 getter가 먼저 만든 switcher 설정을 비우고 첫 설정 실행 → 통과.
+  다음은 `selectedLockPath` 어서션. 오른쪽 하얀 점선은 축소 블릿의 오른쪽 여백(19열 중 18열만 지움) 문제로 수정.
+- 67-69: 진단 결과 확장 목록이 비어 있음(`initialExtensionsLoaded=0`, NSExtension 조회 0개).
+- 70: `xc5lsreset`으로 LaunchServices 저장소(`InternalDaemon/EC937E0E-…/Library/Caches/com.apple.LaunchServices-4035-v2.csstore`)를
+  옮겨 다시 만들게 함. 71부터 확장 등록, CollectionsPoster 등 포스터 확장 실행. 그러나 CollectionsPoster는 5초 체크인
+  제한(`ns 7 code 0x3`)에 걸리고, 잠금 해제가 안 됨(이후 72-74 모두).
+- 72: `xc5media`(HakiOS inject_media.c 방식, mediaserverd 인물사진 prewarm 건너뜀) 적용 확인.
+- 73: S9 `poster_retry.c` 방식(`xc5posterretry`, PosterBoard/chronod 재시작) → SpringBoard가 abort를 반복해 잠금화면 없음.
+- 74: 예외 확인: `NSInternalInconsistencyException: Invalid parameter not satisfying: extensionBundleURL != nil`
+  (PosterKit +0x3d324, SpringBoard 배경화면 코드 +0x342678에서). 저장된 CollectionsPoster 설정의 확장 번들 URL이 nil.
+- 75: `libxc5sb.dylib`(SpringBoard, `xc5wall=1`)가 PosterKit의 `…extensionBundleURL` 인자 메서드를 감싸 nil이면 메인 번들
+  URL을 넣음 → SpringBoard가 더 이상 죽지 않음. 잠금화면은 안 뜸.
+- 76: 잠금화면에 **iOS 기본 배경화면(CollectionsPoster)** 표시, 1~2초 뒤 검게 됨. 같은 시점에
+  `A5XELTE FB: display-off request ignored (a5fb_keep_on)`: SpringBoard 유휴 타이머가 바로 화면을 꺼서 포스터를 내림.
+- 77: SpringBoard 시작 시 `SBDisableAutoDim`, `SBDontDimOrLockOnAC`를 켬 → **배경화면이 유지됨**(사용자 확인).
+  남은 것: 잠금 해제 후 홈 화면, 위젯(chronod/RenderBox는 Metal 필요 가능성), 전원 키 없음.
+
 ## S8 포트와 다른 점
 
 | 항목 | Galaxy S8 (dreamlte) | XCover5 (이 포트) |
