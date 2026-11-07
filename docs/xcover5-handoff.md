@@ -360,6 +360,14 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   0x100+SCError 실패, 0x1ff SC 함수 못 찾음. iOS SDK가 SCDynamicStore API를 iOS 사용 불가로 표시 → dlsym으로 호출.
   콘솔 `XC5GPU client: ... xc5net: ...`, heartbeat `XC5 w net <비트> dns <서버>`. 이미지 `xc5-ios-wifi19-console.tar`(인자 + `xc5net=1`,
   **새 드롭 1794065387**). 첫 부팅은 드롭 설치가 configd 시작보다 늦어 주입 안 될 수 있음 → 한 번 재부팅.
+- **wifi19 결과(영상 20261108_003117): Wi-Fi 4d 성공 — 이름 풀이(DNS)까지 동작.** 콘솔: `xc5net: in configd (pid 36), waiting for
+  kern.xc5wifi` → `xc5net: en0 10.168.19.211/255.255.255.0 router 10.168.19.1 dns 10.168.19.73` → `service XC5WIFI published` →
+  (몇 번 `no global IPv4 yet`) → `global IPv4 primary interface en0` → **`www.apple.com is 23.60.105.29`** → `done, state 0xf`.
+  heartbeat `XC5 w net 0xf dns 10.168.19.73`, `ping 10/10`. 즉 configd(IPMonitor)가 en0을 기본 인터페이스로 삼고 DNS 설정을
+  resolver에 넘겼고, 시스템 resolver(mDNSResponder 경유 getaddrinfo)가 인터넷 이름을 풀었음. 같은 부팅에서 locationd·
+  WirelessRadioManager가 반복 크래시(“Too many corpses”, sig 5) — 네트워크가 생기며 깨어난 듯(Apple Wi-Fi 드라이버/IO80211 없음 추정, 미확인).
+- **다음 후보**: Safari 등 앱으로 실제 페이지 열기 확인(사용자), WPA2, 설정 앱 Wi-Fi(IO80211 흉내), WirelessRadioManager/locationd 크래시,
+  10 ms 폴링 → 인터럽트, SSID/비밀번호 드롭 파일.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
