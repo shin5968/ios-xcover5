@@ -264,6 +264,21 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   `FigCheckpointSupport`(EmbeddedMedia, mediaserverd 쪽), 키보드 정보, FairPlay 인증서로 다시 만듦("rebuilding checkpoint").
   다른 포트(y2sios, A32, S9+)에 checkpointd 기록 없음. 다음(커밋 fdaa729): `xc5photos=1`이 checkpointd에도 샘플러를 넣고
   데몬은 모든 스레드를 3초마다 찍음(`xc5poster: #N tK pc ...`).
+- 82 (`xc5-ios-photo4-console.tar`, xnu CI 42344322122, 드롭 1794031007): `XC5 PB: checkpointd (pid 254) ... inserted`.
+  checkpointd t1이 매번 `pc 1c2611030`(mach_msg2_trap) ← mach_msg ← **checkpointd 자신의 코드**
+  `+10046b6d8 +1004839f8 +100485d48 +10046fd08 +10046a33c` ← MobileSystemServices(1d2002cf4, 요청 처리기).
+  `tools/xcover5/dev/machslide.py`로 슬라이드 0x468000(유일하게 모든 복귀 주소가 호출 뒤) → 0x1000036d8 등.
+  0x1000036d4: `mach_msg(msg, SEND|RCV, 0x18, 0x3c, reply, timeout 0)` = MIG 요청, 위쪽은 난독화된 FairPlay 코드
+  (테이블 간접 호출). 즉 checkpointd는 **FairPlay(fairplayd.H2)의 답을 영원히 기다림**. fairplayd.H2는 영상마다
+  `exec fairplayd.H2`가 반복(시작하자마자 끝나는 것으로 보임, CRASH 없음).
+  - **같은 사례**: S9+ 포트 `core/docs/ru/notes.md` 151-172, 1990-2035와 y2sios `userland/src/inject_fairplay.c`: appstored의
+    AMS 스레드가 `_AMSFairPlayGetDeviceType`의 Mach 호출에서 멈춤, `fairplayd.H2`는 "Service only ran for 0 seconds",
+    exit(0), 10초마다 재시작(34회), IOKit도 안 부르고 스스로 나감. 해결은 fairplayd를 살리는 게 아니라 **클라이언트에서
+    그 질문 하나에 답하기**(`-[AMSUserAgent _sharedComponentFairPlayDeviceType]` 교체).
+  - 사진 쪽: PhotoLibraryServicesCore(func 0x19b201d9c, PLAssetFormats)는 `dlsym(libMobileCheckpoint, "MCCopyCheckpointValue")
+    (@"ImageSpecifications")`, NULL이면 `/System/Library/CoreServices/Checkpoint.xml`에서 직접 읽음(대체 경로 있음).
+  - 조치(커밋 1b0f769): `xc5ckpt=1` → checkpointd에 `libxc5ckpt.dylib`(mach_msg interpose, send+receive에 3초 제한).
+    `xc5_drop.c`: 꺼진 항목이 검색을 끝내지 않게(같은 프로그램에 항목 둘).
 
 ## S8 포트와 다른 점
 

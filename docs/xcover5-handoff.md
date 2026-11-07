@@ -104,6 +104,12 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
      mesa-ios CI 42344322131, 드롭 1794031007): checkpointd 모든 스레드 3초마다 `xc5poster: #N tK pc ... bt ...`,
      `sweetscan`에 checkpointd·mediaserverd. 볼 것: checkpointd가 뜨는지(`XC5 PB: checkpointd ... inserted`), 어디서 막히는지
      (FigCheckpointSupport → mediaserverd? FairPlay?), 죽는지. 우회 후보: 막는 쪽 고치기, 또는 Checkpoint.plist 미리 두기.
+   - **부팅 82 결과: checkpointd가 FairPlay(fairplayd.H2) MIG 호출에서 영원히 기다림**(port.md 82). S9+/y2sios의 App Store와
+     같은 모양(fairplayd.H2는 시작하자마자 exit 0). 다음 이미지 `xc5-ios-photo5-console.tar`(xnu CI 42345626657, mesa-ios CI
+     42345626740, 드롭 1794032165) = photo4 + `xc5ckpt=1`: checkpointd에 `libxc5ckpt.dylib`(mach_msg 수신 3초 제한).
+     볼 것: `xc5ckpt: loaded in checkpointd`, `xc5ckpt: ... mach_msg id ... limited`, `answered 0x10004003 (no reply in time)`,
+     그 뒤 사진 앱이 그려지는지. 사진 앱 다음 벽은 Metal일 수 있음(PXG는 Metal 렌더러만, `xc5metalfor`에 MobileSlideShow 넣어 둠).
+     같은 FairPlay 대기는 App Store 등 다른 곳에도 있을 것(S9+는 AMS 메서드 교체로 해결).
 1. M4 위젯: chronod가 Metal로 그리는 것이 무엇인지(어떤 위젯/요소) 확인. 사진 위젯은 사진 앱(assetsd/photolibraryd)부터. 위젯 확장이 스냅샷을 못 주는지, chronod가
    그리다 막히는지. 다음 영상에서 홈 화면 오래 두고 `CRASH`, `metal E ...`, `chronod` 줄 확인. 필요하면 확장 프로세스를
    `xc5metalfor`에 추가(쉼표 목록). `gpuAddress 0`(Mesa 버퍼 경로에서 GPU 주소를 안 알려줌)도 확인할 것.
