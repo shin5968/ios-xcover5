@@ -194,6 +194,61 @@ xdrop_file(struct xdrop_reader *r, const char *path, int mode, uint64_t data, ui
 	return error;
 }
 
+/* The whole of a small file (up to max bytes) into buf; its length, or -1. */
+static int
+xdrop_read_small(const char *path, void *buf, int max, vfs_context_t ctx)
+{
+	vnode_t vp = NULLVP;
+	int resid = 0;
+	if (vnode_open(path, FREAD, 0, 0, &vp, ctx) != 0) {
+		return -1;
+	}
+	int error = vn_rdwr(UIO_READ, vp, (caddr_t)buf, max, 0, UIO_SYSSPACE, 0, vfs_context_ucred(ctx), &resid,
+	    vfs_context_proc(ctx));
+	vnode_close(vp, FREAD, ctx);
+	return error ? -1 : max - resid;
+}
+
+/*
+ * launchd's list of disabled jobs, after herolte (wardevsa/ios-a5xelte, branch herolte: hero-run.c writes
+ * /private/var/db/com.apple.xpc.launchd/disabled.plist; tools/herolte-disabled.list has com.apple.fairplayd.H2
+ * first). Boots 81-83: fairplayd.H2 starts and exits at once, so launchd keeps its port and every FairPlay client
+ * (checkpointd, and through it the Photos app) waits for ever. A disabled job has no port, so the client's lookup
+ * fails at once instead. The package carries the file as /private/var/xc5/launchd-disabled.plist; it is copied over
+ * launchd's own, whose first contents are kept once as /private/var/xc5/launchd-disabled.orig.plist (an empty file
+ * if there was none). launchd reads the list when it starts: it takes effect from the NEXT boot.
+ */
+#define XDROP_LD_SRC    "/private/var/xc5/launchd-disabled.plist"
+#define XDROP_LD_ORIG   "/private/var/xc5/launchd-disabled.orig.plist"
+#define XDROP_LD_DIR    "/private/var/db/com.apple.xpc.launchd"
+#define XDROP_LD_DST    "/private/var/db/com.apple.xpc.launchd/disabled.plist"
+#define XDROP_LD_MAX    65536
+
+static void
+xdrop_launchd_disabled(vfs_context_t ctx)
+{
+	char *buf = kalloc_data(XDROP_LD_MAX, Z_WAITOK);
+	if (buf == NULL) {
+		return;
+	}
+	int n = xdrop_read_small(XDROP_LD_SRC, buf, XDROP_LD_MAX, ctx);
+	if (n > 0 && n < XDROP_LD_MAX) {
+		if (xdrop_read_small(XDROP_LD_ORIG, buf + n, 1, ctx) < 0) {      /* no backup yet */
+			char *old = kalloc_data(XDROP_LD_MAX, Z_WAITOK);
+			int m = old ? xdrop_read_small(XDROP_LD_DST, old, XDROP_LD_MAX, ctx) : -1;
+			int e = xdrop_write(XDROP_LD_ORIG, 0644, old, m > 0 ? (size_t)m : 0, ctx);
+			printf("XC5 DROP: launchd's disabled.plist (%d bytes) kept as %s: %d\n", m, XDROP_LD_ORIG, e);
+			if (old) {
+				kfree_data(old, XDROP_LD_MAX);
+			}
+		}
+		(void)xdrop_mkdir(XDROP_LD_DIR, ctx);
+		int e = xdrop_write(XDROP_LD_DST, 0644, buf, (size_t)n, ctx);
+		printf("XC5 DROP: %s: %d bytes from the package: %d (next boot)\n", XDROP_LD_DST, n, e);
+	}
+	kfree_data(buf, XDROP_LD_MAX);
+}
+
 static uint64_t
 xdrop_installed_id(vfs_context_t ctx)
 {
@@ -273,6 +328,7 @@ xdrop_apply(void)
 		}
 	}
 	if (failed == 0) {
+		xdrop_launchd_disabled(ctx);
 		(void)xdrop_write(XDROP_ID_PATH, 0644, &h.id, sizeof(h.id), ctx);
 	}
 	printf("XC5 DROP: package %llu: %u entries written, %u failed\n", h.id, files, failed);

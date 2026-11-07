@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- XCover5 (after herolte's tools/herolte-disabled.list): fairplayd.H2 starts and exits at once on this phone
+	     (KeepAlive brings it back), while launchd keeps its ports (com.apple.fairplayd, .versioned, and host special
+	     port 17 "com.apple.unfreed"), so FairPlay clients such as checkpointd wait for ever. Disabled, the ports are
+	     not there and the clients fail at once. Packed by mkdrop.py as /private/var/xc5/launchd-disabled.plist; the
+	     kernel copies it over /private/var/db/com.apple.xpc.launchd/disabled.plist (xc5_drop.c). -->
+	<key>com.apple.fairplayd.H2</key>
+	<true/>
+</dict>
+</plist>
