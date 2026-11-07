@@ -368,6 +368,11 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   WirelessRadioManager가 반복 크래시(“Too many corpses”, sig 5) — 네트워크가 생기며 깨어난 듯(Apple Wi-Fi 드라이버/IO80211 없음 추정, 미확인).
 - **다음 후보**: Safari 등 앱으로 실제 페이지 열기 확인(사용자), WPA2, 설정 앱 Wi-Fi(IO80211 흉내), WirelessRadioManager/locationd 크래시,
   10 ms 폴링 → 인터럽트, SSID/비밀번호 드롭 파일.
+- **사용자(wifi19)**: Safari를 열면 **페이지 영역이 검고, 스크롤하면 흰 화면**이 나옴(UI는 정상). 네트워크인지 그리기(WebKit의 WebContent/GPU
+  프로세스 렌더링)인지 가르려고(커밋 f5dfb72, mesa-ios CI 42387543765): libxc5net이 DNS 뒤 **`http://captive.apple.com/hotspot-detect.html`**
+  을 TCP로 요청(iOS 자체의 인터넷 확인과 같은 것) → 콘솔 `xc5net: HTTP <바이트> bytes: HTTP/1.x 200 OK, Success`, xc5netstat 비트 0x10.
+  성공이면 Safari 검은 화면은 렌더링 문제(다음: Safari 열 때 콘솔에 WebContent/GPU 프로세스 크래시가 있는지 영상으로). 이미지
+  `xc5-ios-wifi20-console.tar`(**새 드롭 1794066219**, 인자 wifi19와 같음, 첫 부팅 뒤 재부팅 권장).
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
