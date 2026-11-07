@@ -1603,10 +1603,14 @@ print('wrote bsd/dev/xc5_drop.c')
 (tree / 'bsd/dev/xc5_pmic.c').write_text(
     (Path(__file__).resolve().parent / 'xc5_pmic.c').read_text())
 print('wrote bsd/dev/xc5_pmic.c')
+# Wi-Fi step 1: start the SCSC WLBT core with Samsung's firmware (bsd/dev/xc5_wlbt.c, boot-arg xc5wifi).
+(tree / 'bsd/dev/xc5_wlbt.c').write_text(
+    (Path(__file__).resolve().parent / 'xc5_wlbt.c').read_text())
+print('wrote bsd/dev/xc5_wlbt.c')
 edit('bsd/conf/files', [
     ('bsd/dev/a5xelte_emmc.c\t\t\tstandard\n',
      'bsd/dev/a5xelte_emmc.c\t\t\tstandard\nbsd/dev/xc5_drop.c\t\t\tstandard\n'
-     'bsd/dev/xc5_pmic.c\t\t\tstandard\n', 1),
+     'bsd/dev/xc5_pmic.c\t\t\tstandard\nbsd/dev/xc5_wlbt.c\t\t\tstandard\n', 1),
 ])
 edit('bsd/dev/a5xelte_emmc.c', [
     ('\tif ((uint64_t)lba < emmc_first_lba ||\n'
@@ -1662,6 +1666,10 @@ edit('bsd/kern/bsd_init.c', [
      '\t\textern void xc5_pmic_start(void) __attribute__((weak));\n'
      '\t\tif (xc5_pmic_start) {\n'
      '\t\t\txc5_pmic_start();   /* the PMIC power key (xc5pmic) */\n'
+     '\t\t}\n'
+     '\t\textern void xc5_wlbt_start(void) __attribute__((weak));\n'
+     '\t\tif (xc5_wlbt_start) {\n'
+     '\t\t\txc5_wlbt_start();   /* Wi-Fi core (xc5wifi) */\n'
      '\t\t}\n'
      '\t}\n'
      '#endif\n'
