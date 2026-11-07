@@ -10,12 +10,14 @@
 // Reported through XC5GPU's Log selector (no libOSMesa in SpringBoard).
 #include <CoreFoundation/CoreFoundation.h>
 #include <dispatch/dispatch.h>
+#include <mach-o/dyld.h>
 #include <mach/mach.h>
 #include <objc/message.h>
 #include <objc/runtime.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -118,8 +120,129 @@ static void look_at_windows(void *unused) {
             look_at_windows);
 }
 
+/*
+ * Boots 73-74: SpringBoard aborts at start, every time, with
+ *   NSInternalInconsistencyException: 'Invalid parameter not satisfying: extensionBundleURL != nil'
+ * thrown in PosterKit (+0x3d324 of the 16.7.16 cache: the assertion string sits with "timeFontConfiguration != nil" in
+ * PRTimeFontConfiguration.m) from SpringBoard's wallpaper code (+0x342678, near SBWallpaperOrientationSourceDescription).
+ * The saved poster (CollectionsPoster, set up in boot 64) is described with no URL for its extension bundle, and every
+ * PosterKit entry that takes one asserts. The time font configuration is the font of the lock screen's clock:
+ * -[PRTimeFontConfiguration initWithFont:extensionBundleURL:], +configurationWithTimeFontConfiguration:extensionBundleURL:
+ * and -[UIView pr_set...extensionBundleURL:]. With a nil URL, each of those is now given the main bundle's URL in its
+ * place (the font is a system one; the URL only says where a custom font would be looked up), so the lock screen comes up
+ * and our picture goes behind it. The first three are logged. This is done whatever xc5wall says (it is what lets
+ * SpringBoard live at all now); the picture is still only with xc5wall=1.
+ */
+static unsigned nil_urls;
+
+static id main_bundle_url(void) {
+    id bundle = send0((id)objc_getClass("NSBundle"), "mainBundle");
+    return bundle ? send0(bundle, "bundleURL") : nil;
+}
+
+static void note_nil(const char *what) {
+    if (nil_urls++ < 3) say("xc5sb: %s with a nil extensionBundleURL: the main bundle's given instead", what);
+}
+
+/* Every method of PosterKit's classes (PR...) and UIView/UILabel whose selector has an argument labelled
+ * ...extensionBundleURL, objects only, up to six arguments (x2-x7): that argument is replaced when nil. */
+typedef id (*objs6_t)(id, SEL, id, id, id, id, id, id);
+#define MAX_WRAPPED 48
+static struct { Class cls; SEL sel; IMP orig; int urlarg; } wrapped[MAX_WRAPPED];
+static int nwrapped;
+
+static IMP find_orig(id self, SEL cmd, int *urlarg) {
+    for (Class c = object_getClass(self); c != Nil; c = class_getSuperclass(c))
+        for (int i = 0; i < nwrapped; i++)
+            if (wrapped[i].sel == cmd && wrapped[i].cls == c) {
+                *urlarg = wrapped[i].urlarg;
+                return wrapped[i].orig;
+            }
+    return NULL;
+}
+
+static id my_url_arg(id self, SEL cmd, id a, id b, id c, id d, id e, id f) {
+    int k = -1;
+    IMP orig = find_orig(self, cmd, &k);
+    id *args[] = { &a, &b, &c, &d, &e, &f };
+    if (k >= 0 && k < 6 && *args[k] == nil) {
+        note_nil(sel_getName(cmd));
+        *args[k] = main_bundle_url();
+    }
+    return orig ? ((objs6_t)orig)(self, cmd, a, b, c, d, e, f) : nil;
+}
+
+/* Which argument (0-based) of SEL is labelled ...extensionBundleURL / ...ExtensionBundleURL; -1 if none. */
+static int url_arg(const char *sel) {
+    int k = 0;
+    const char *start = sel;
+    for (const char *p = sel; *p; p++) {
+        if (*p != ':') continue;
+        size_t len = (size_t)(p - start);
+        if (len >= 18 && (strncmp(p - 18, "extensionBundleURL", 18) == 0 || strncmp(p - 18, "ExtensionBundleURL", 18) == 0))
+            return k;
+        k++;
+        start = p + 1;
+    }
+    return -1;
+}
+
+static void wrap_class(Class cls) {
+    unsigned count = 0;
+    Method *methods = class_copyMethodList(cls, &count);
+    for (unsigned i = 0; i < count && nwrapped < MAX_WRAPPED; i++) {
+        SEL sel = method_getName(methods[i]);
+        const char *name = sel_getName(sel), *types = method_getTypeEncoding(methods[i]);
+        int k = url_arg(name), n = 0;
+        if (k < 0 || types == NULL) continue;
+        for (const char *p = name; *p; p++) n += *p == ':';
+        if (n > 6) continue;
+        /* objects only, and an object back: '@' for the return, self and each argument (':' is _cmd) */
+        int objs = 0, others = 0;
+        for (const char *p = types; *p; p++) {
+            if (*p == '@') objs++;
+            else if (*p >= 'A' && *p <= 'z' && *p != '@') others++;
+        }
+        if (objs != n + 2 || others != 0) continue;
+        wrapped[nwrapped].cls = cls;
+        wrapped[nwrapped].sel = sel;
+        wrapped[nwrapped].urlarg = k;
+        wrapped[nwrapped].orig = method_setImplementation(methods[i], (IMP)my_url_arg);
+        nwrapped++;
+    }
+    free(methods);
+}
+
+static bool guarded;
+
+static void guard_poster_kit(void) {
+    Class cls = objc_getClass("PRTimeFontConfiguration");
+    if (guarded || cls == Nil) return;
+    guarded = true;
+    int classes = objc_getClassList(NULL, 0);
+    Class *list = calloc((size_t)classes, sizeof(Class));
+    classes = objc_getClassList(list, classes);
+    for (int i = 0; i < classes; i++) {
+        const char *name = class_getName(list[i]);
+        if (strncmp(name, "PR", 2) != 0 && strcmp(name, "UIView") != 0 && strcmp(name, "UILabel") != 0) continue;
+        wrap_class(list[i]);
+        wrap_class(object_getClass((id)list[i]));
+    }
+    free(list);
+    say("xc5sb: PosterKit guarded: %d methods taking an extensionBundleURL", nwrapped);
+    for (int i = 0; i < nwrapped && i < 6; i++)
+        say("xc5sb:   %c[%s %s]", class_isMetaClass(wrapped[i].cls) ? '+' : '-', class_getName(wrapped[i].cls),
+            sel_getName(wrapped[i].sel));
+}
+
+static void image_added(const struct mach_header *header, intptr_t image_slide) {
+    (void)header; (void)image_slide;
+    guard_poster_kit();         /* once PosterKit's classes are there */
+}
+
 __attribute__((constructor)) static void xc5_sb_start(void) {
     if (strcmp(getprogname(), "SpringBoard") != 0) return;
+    _dyld_register_func_for_add_image(image_added);         /* also called for every image already loaded */
     if (access(DROP_DIR "wallpaper.off", F_OK) == 0) {
         say("xc5sb: wallpaper.off: left alone");
         return;
