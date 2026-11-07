@@ -267,6 +267,15 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   데이터 6워드는 0 → len이 0이거나 데이터가 체인 mbulk에 있음(미확인). 조치(커밋 2585702): 짧은 줄로 `XC5 mlme sent= got= len=
   sig=`, `XC5 ids <마지막 신호 8개 id>`, `XC5 mb <confirm mbulk 헤더 5워드>`, `XC5 md <데이터 6워드>`, `XC5 mc <체인 다음 세그먼트
   데이터>`. 이미지 `xc5-ios-wifi11-console.tar`(xnu CI 42373806596, 드롭 그대로).
+- **wifi11 결과(영상 20261107_215418): Wi-Fi 3c 성공 — 펌웨어가 MIB 값을 돌려줌.** `XC5 mb 00000000 010001c5 001c0000
+  001c0000 00392000` = confirm mbulk: flag 0xc5(신호|상대 소유|CHAIN_HEAD|CHAIN), class 1(HOSTIO), sig_bufsz 28, len 0, head 28,
+  **chain_next 0x392000** → 데이터는 체인 다음 세그먼트에 있음(md 0인 이유). `XC5 mc 000307e6 0000a782 00020941 07e57781` =
+  MIB 응답 `{psid 0x07E6 len 3: 82 a7 00}` → **unifiChipVersion 0xA700**, `{0x0941 len 2: 81 77}` → **unifiHardwarePlatform
+  0x77**, 그다음 `{0x07E5 ...}`(FirmwareBuildId, 16바이트에서 잘림). MIB 정수 = 첫 바이트 0x80|길이, 그 뒤 빅엔디언(mib.c
+  slsi_mib_decode_uint32). 즉 **FAPI MLME 요청/응답이 HIP4로 완전히 동작**.
+- **다음 = Wi-Fi 3d(검색)**: 삼성 순서대로 MLME-ADD-VIF.request(가상 인터페이스, MAC 주소는 우리가 정함 — efs 대신 고정/임의
+  로컬 주소) → MLME-ADD-SCAN.request → MLME-SCAN.indication(찾은 AP 비콘/프로브 응답, 데이터 큐 또는 ctrl) →
+  MLME-SCAN-DONE.indication. 응답 데이터는 체인 mbulk까지 따라가 읽어야 함. 그다음 iOS 쪽(en0, apple80211).
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
