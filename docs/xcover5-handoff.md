@@ -58,6 +58,8 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
 | `xc5mtl=1` | chronod에 `libxc5mtl.dylib`(`gpu/metal/xc5_mtl.c`): 6초 뒤 Metal 장치·버퍼·명령 버퍼 시험, 단계마다 `gl: mtl[pid] step N ...`. 속성을 못 읽을 때만 직접 넣음(옛 커널용). `xc5metal=1` 필요 |
 ## 지금 상태 (2026-11-07)
 
+- **RTC2 진단 이미지 완료**: 커밋 d90f1584, xnu CI 42355742720 성공. `shim/xcover5/out/xc5-ios-rtc2-console.tar` (74,506,240 bytes), SHA256 `c42d042a9bd844c933ac623d4fd593b96c8f9387f33f0bd9ac2d9566a2595cf4`. boot.img + 기존 cache.img만 포함(USERDATA 없음). 명시적 `xc5rtc=1`, 기존 wall2/metal/ckpt/pmic 설정 유지. `XC5 RTC2`가 진입/ACPM/원시 레지스터/설정 전·요청·readback 시간을 출력. PMIC 쓰기와 날짜 변환 변경 없음. 호스트 정상·읽기 실패·잘못된 날짜 및 별도 복사본 롤백 시험 통과; 실기기 RTC 교정 성공은 아직 미확인. 165706 영상의 launchd 날짜는 1969-12-31이며 이전 RTC 시작 로그는 확인되지 않음.
+
 - **기준 이미지(부팅 77)**: `xc5-ios-wall2-console.tar` = `xc5gpu=4 xc5gl=2 xc5wall=1`, 커널은 xnu CI 42315969905 산출물,
   드롭 1794022820. CoreAnimation을 Mali로 그리고, 잠금화면에 iOS 기본 배경화면(CollectionsPoster), 잠금 해제 후 홈 화면.
 - 안 되는 것: 위젯(chronod/RenderBox, Metal 필요로 추정), 전원 키(드라이버 없음), 셀룰러/카메라 등.
@@ -113,6 +115,8 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
     리셋 해제해 메일박스 응답 받기, (2) MX 관리 채널, (3) HIP(데이터 경로)와 MLME(검색·접속), (4) iOS 쪽 en0/apple80211.
 
 ## 다음 행동
+
+- **우선 RTC2 실기기 확인**: 부팅 초기 `XC5 RTC2: entered`, `ACPM`, `raw`, `before/requested/readback`을 촬영. raw 실패와 달력 설정 실패를 구분하고, readback이 정상인데 잠금화면 날짜가 틀리면 이후 시간 재설정 경로를 조사. 반복 플래시만으로 원인 확정하지 말 것.
 
 0. **전원 키**(보류): pmic1 콘솔에서 `XC5 PMIC: ACPM initdata ...`, `channel 2: ...`, `top block register 0 ...`, `pmic 00: ...` 덤프,
    그리고 전원 키를 누를 때 `XC5 PMIC: pmic RR: AA -> BB` 줄. 바뀌는 레지스터/비트를 찾아 `xc5pmic=2 xc5pwrreg=0xRR
