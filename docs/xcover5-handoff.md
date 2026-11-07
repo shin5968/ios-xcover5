@@ -316,6 +316,12 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   **MLME-ADD-INFO-ELEMENTS.request 0x2004**(vif 1, purpose 0x0010 assoc req) + AP의 rate 원소(1, 50) → CONFIRM 0x2104 → CONNECT 다시. (커밋 b131bab, xnu CI 42380750766)
   heartbeat `XC5 req <길이> ids <n>: ...`, `XC5 req rates <n>: ...`, `XC5 resp <길이> status <AP status> try <0-2> info <결과>`.
   이미지 `xc5-ios-wifi15-console.tar`.
+- **wifi15 결과(영상 20261107_232547)**: 하트비트 블록이 ~25줄로 길어져 앞줄(선택한 AP, 요청, 결과)이 촬영 전에 화면 밖으로 밀림 →
+  읽을 수 있었던 것은 `XC5 req rates 0 ...`, `XC5 resp 0 status 65535 try 0 info ffff`뿐(그 시점엔 연결 과정 시작 전 또는 AP 못 찾음,
+  미확정). 조치(커밋 d0173e2, xnu CI 42381910066): Wi-Fi 하트비트를 6줄로 줄이고 중요한 줄을 맨 뒤로: `XC5 wlbt pwr st issr0 mgmt log fwN: <마지막 펌웨어
+  로그>`, `XC5 w cfm vif scan ind done aps got`, `XC5 w ap <SSID> <MHz> <dBm> o|s`(선택 전엔 `ap?` 3개), `XC5 w req <길이> ids ... r
+  <rate 8개>`, `XC5 w join cfm ind st <AP status> try info disc`, `XC5 w data tx cfm rx dhcp offer ip`. 연결할 AP가 없으면 8초 뒤 재검색.
+  이미지 `xc5-ios-wifi16-console.tar`.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
