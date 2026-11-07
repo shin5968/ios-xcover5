@@ -291,6 +291,51 @@ rtc_thread(__unused void *arg, __unused wait_result_t wr_unused)
 	}
 }
 
+/*
+ * Set the RTC to t (seconds since 1970, UTC), as Samsung's driver writes the time (s2m_tm_to_data, s2m_rtc_set_time,
+ * read for the facts): SEC 0x05, MIN 0x06, HOUR 0x07 (24-hour value, bit 6 PM when 12 or later), WEEK 0x08 (1 << day
+ * of the week, Sunday 0), DAY 0x09, MONTH 0x0A (1-12), YEAR 0x0B (since 2000), binary; then UPDATE (0x02) |= WUDR
+ * (bit 1) moves them into the counters. 0, or -1.
+ */
+static int
+rtc_write(uint64_t t)
+{
+	uint64_t days = t / 86400, rest = t % 86400;
+	uint32_t wday = (uint32_t)((days + 4) % 7);            /* 1 January 1970 was a Thursday */
+	uint32_t y = 1970;
+	for (;;) {
+		uint32_t len = ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0) ? 366 : 365;
+		if (days < len) {
+			break;
+		}
+		days -= len;
+		y++;
+	}
+	static const uint8_t mdays[12] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+	uint32_t m = 0;
+	for (; m < 12; m++) {
+		uint32_t len = mdays[m] + (m == 1 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0));
+		if (days < len) {
+			break;
+		}
+		days -= len;
+	}
+	uint32_t hour = (uint32_t)(rest / 3600), min = (uint32_t)(rest % 3600 / 60), sec = (uint32_t)(rest % 60);
+	uint32_t v[7] = { sec, min, hour | (hour >= 12 ? 0x40u : 0u), 1u << wday, (uint32_t)days + 1, m + 1, y - 2000 };
+	for (uint32_t i = 0; i < 7; i++) {
+		if (pmic_write(BLK_RTC, 0x05 + i, v[i]) != 0) {
+			return -1;
+		}
+	}
+	int u = pmic_read(BLK_RTC, 0x02);
+	if (u < 0 || pmic_write(BLK_RTC, 0x02, (uint32_t)u | 0x02u) != 0) {
+		return -1;
+	}
+	delay(2000);
+	printf("XC5 RTC: written %u-%02u-%02u %02u:%02u:%02u UTC\n", y, m + 1, (uint32_t)days + 1, hour, min, sec);
+	return 0;
+}
+
 static void
 rtc_sync(void)
 {
@@ -329,26 +374,55 @@ rtc_sync(void)
 	if (!(r[0] & 2) && (r[7] & 0x40) && hour < 12) {
 		hour += 12;                     /* 12-hour mode, PM */
 	}
-	if (sec > 59 || min > 59 || hour > 23 || day < 1 || day > 31 || mon < 1 || mon > 12 || year < 2024 || year > 2099) {
-		snprintf(rtc_msg, sizeof(rtc_msg), "XC5 RTC: %u-%02u-%02u %02u:%02u:%02u is not a date to trust (CTRL %02x "
-		    "raw %02x %02x %02x %02x %02x %02x)", year, mon, day, hour, min, sec, r[0], r[5], r[6], r[7], r[9], r[10],
-		    r[11]);
-		printf("%s: calendar left alone\n", rtc_msg);
-		return;
-	}
-	uint64_t t = days_secs(year, mon, day, hour, min, sec), up_ns;
+	uint64_t up_ns;
 	absolutetime_to_nanoseconds(mach_absolute_time(), &up_ns);
-	uint64_t up = up_ns / NSEC_PER_SEC, add = latch ? 0 : ((up >= 2 && up < 600) ? up - 1 : 0);
+	uint64_t up = up_ns / NSEC_PER_SEC, add = latch ? 0 : ((up >= 2 && up < 600) ? up - 1 : 0), t = 0;
+	bool rtc_ok = !(sec > 59 || min > 59 || hour > 23 || day < 1 || day > 31 || mon < 1 || mon > 12 || year < 2024 ||
+	    year > 2099);
+	/*
+	 * rtc3 (video 182822): "2022-01-01 12:01:42 is not a date to trust (CTRL 02 raw 2a 01 4c 01 01 16)" -- the clock
+	 * runs from the device tree's init_time (2022-01-01 12:00), which Samsung's driver puts in a reset RTC; Android
+	 * then set it from the network, and Android no longer runs. (Scion's S9 found the same: 2018-01-01.) So the
+	 * image carries the host's time (xc5epoch=, tools/xcover5/dev/mkimage.sh), as y2sios's and Scion's epoch= does:
+	 * a clock that is invalid or behind it is not believed; the calendar starts at xc5epoch + uptime, and that time
+	 * is written into the RTC (xc5rtcwrite=0: not) so that the next boot, without a new image, reads it back.
+	 */
+	uint64_t epoch = 0;
+	uint32_t wr_rtc = 1;
+	(void)PE_parse_boot_argn("xc5epoch", &epoch, sizeof(epoch));
+	(void)PE_parse_boot_argn("xc5rtcwrite", &wr_rtc, sizeof(wr_rtc));
+	if (rtc_ok) {
+		t = days_secs(year, mon, day, hour, min, sec) + add;
+	}
+	if (!rtc_ok || (epoch != 0 && t < epoch)) {
+		char was[120];
+		snprintf(was, sizeof(was), "%u-%02u-%02u %02u:%02u:%02u (CTRL %02x raw %02x %02x %02x %02x %02x %02x)",
+		    year, mon, day, hour, min, sec, r[0], r[5], r[6], r[7], r[9], r[10], r[11]);
+		if (epoch == 0) {
+			snprintf(rtc_msg, sizeof(rtc_msg), "XC5 RTC: %s is not a date to trust and there is no xc5epoch", was);
+			printf("%s: calendar left alone\n", rtc_msg);
+			return;
+		}
+		t = epoch + up;
+		int w = wr_rtc ? rtc_write(t) : 1;
+		snprintf(rtc_msg, sizeof(rtc_msg), "XC5 RTC: the PMIC's clock said %s, %s xc5epoch %llu: using %llu; "
+		    "RTC %s", was, rtc_ok ? "behind" : "not valid;", epoch, t,
+		    w == 0 ? "written" : w == 1 ? "not written (xc5rtcwrite=0)" : "write FAILED");
+		year = mon = day = hour = min = sec = 0;
+		add = 0;
+	}
 	clock_sec_t before, after; clock_usec_t usec;
 	clock_get_calendar_microtime(&before, &usec);
-	clock_set_calendar_microtime((clock_sec_t)(t + add), 0);
+	clock_set_calendar_microtime((clock_sec_t)t, 0);
 	clock_get_calendar_microtime(&after, &usec);
 	printf("XC5 RTC2: before=%llu requested=%llu readback=%llu usec=%u\n",
-	    (unsigned long long)before, t + add, (unsigned long long)after, (unsigned)usec);
-	rtc_secs = t + add;
+	    (unsigned long long)before, t, (unsigned long long)after, (unsigned)usec);
+	rtc_secs = t;
 	rtc_up_ns = uptime_ns();
-	snprintf(rtc_msg, sizeof(rtc_msg), "XC5 RTC: the PMIC's clock said %u-%02u-%02u %02u:%02u:%02u UTC at uptime %llu s; "
-	    "set %llu, read back %lu", year, mon, day, hour, min, sec, up, t + add, (unsigned long)after);
+	if (year != 0) {
+		snprintf(rtc_msg, sizeof(rtc_msg), "XC5 RTC: the PMIC's clock said %u-%02u-%02u %02u:%02u:%02u UTC at uptime "
+		    "%llu s; set %llu, read back %lu", year, mon, day, hour, min, sec, up, t, (unsigned long)after);
+	}
 	printf("%s\n", rtc_msg);
 }
 

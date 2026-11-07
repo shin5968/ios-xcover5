@@ -17,7 +17,8 @@ export XC5_DRAM=0x8a2800000:0x40000000      # 1 GiB above 4 GiB (the user chose 
 A="debug=0xc serial=3 keepsyms=1 -enable_kprintf_spam -noprogress rd=emmcroot0 emmcroot=USERDATA emmcwrite=1 rootrw=1 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin launchd_unsecure_cache=1 wdt=-1 a5touchprobe=0 a5fb_keep_on=1 cpus=8 sweetfb_hz=24"
 K=xnu/out/kernel.development.a5xelte; O=shim/xcover5/out
 rm -f "$O/xc5-ios-$NAME-console.tar"
-bash tools/xcover5/make-boot.sh $K ../boot_phone.img "$O/xc5-ios-$NAME-console.img" $A "$@" xc5conrows=40 2>&1 | grep -iE "error|traceback" || true
+# xc5epoch: this machine's time, for the kernel's calendar when the PMIC's RTC is not set (xc5_pmic.c rtc_sync)
+bash tools/xcover5/make-boot.sh $K ../boot_phone.img "$O/xc5-ios-$NAME-console.img" $A "$@" xc5conrows=40 xc5epoch=$(date -u +%s) 2>&1 | grep -iE "error|traceback" || true
 python3 - "$O/xc5-ios-$NAME-console.tar" "$O/xc5-drop-mesa.tar" <<'PY'
 import sys, tarfile, io, struct
 boot, drop = sys.argv[1], sys.argv[2]
