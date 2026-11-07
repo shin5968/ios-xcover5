@@ -114,6 +114,10 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
      mesa-ios CI 42347265677, 드롭 1794033462): checkpointd에 libxc5ckpt + libxc5poster(모든 스레드 3초마다), mach_msg 처음
      12번 모두 `xc5ckpt: mach_msg #N option ... id ...`. 볼 것: mach_msg 줄이 나오는지(안 나오면 interpose 미적용 →
      다른 방법: fishhook식 GOT 덮어쓰기), 스레드가 어디서 멈췄는지.
+   - 참고 저장소: Scion-Project/scion-kernel(HakiOS 계열 S9 포트, 2026-11-06 커밋 7359383; 앞서 본 ios-s9plus-exynos와 같은 줄기)과
+     scion-installer(TWRP 설치 zip 빌더). `docs/ru/notes.md` 2007-2235: fairplayd.H2는 거기서도 **해결 안 됨**(10 ms 만에 exit 0,
+     IOKit도 안 부름, FairPlayIOKit 드라이버 스텁은 소용없음 판명). 대처는 클라이언트에서 FairPlay 질문에 대신 답하기.
+     checkpointd·사진 앱 기록은 없음 → 우리 checkpointd 시간 제한 방식이 같은 방향.
 1. M4 위젯: chronod가 Metal로 그리는 것이 무엇인지(어떤 위젯/요소) 확인. 사진 위젯은 사진 앱(assetsd/photolibraryd)부터. 위젯 확장이 스냅샷을 못 주는지, chronod가
    그리다 막히는지. 다음 영상에서 홈 화면 오래 두고 `CRASH`, `metal E ...`, `chronod` 줄 확인. 필요하면 확장 프로세스를
    `xc5metalfor`에 추가(쉼표 목록). `gpuAddress 0`(Mesa 버퍼 경로에서 GPU 주소를 안 알려줌)도 확인할 것.
