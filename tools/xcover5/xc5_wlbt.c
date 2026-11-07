@@ -631,6 +631,8 @@ static const uint8_t q_layout[6][2] = {         /* [queue][write, read] */
 	{ 0, 64 }, { 1, 65 }, { 66, 2 }, { 67, 3 }, { 68, 4 }, { 5, 69 }
 };
 static uint32_t mlme_sent, mlme_got, mlme_id, mlme_siglen, mlme_len, mlme_data[6], fh_rfb;
+static uint32_t mlme_mb[5], mlme_chain[4];
+static uint16_t mlme_ids[8];
 static bool mlme_asked;
 
 static inline volatile uint8_t *
@@ -713,8 +715,19 @@ hip_poll(void)
 			uint8_t *m = shm + ref;
 			uint16_t sigbuf = *(uint16_t *)(m + 10), len = *(uint16_t *)(m + 12), head = *(uint16_t *)(m + 14);
 			uint8_t *sig = m + 20 + 4;
-			mlme_got++;
 			mlme_id = *(uint16_t *)sig;
+			mlme_ids[mlme_got % 8] = (uint16_t)mlme_id;
+			mlme_got++;
+			memcpy(mlme_mb, m, sizeof(mlme_mb));
+			bzero(mlme_chain, sizeof(mlme_chain));
+			uint32_t cref = *(uint32_t *)(m + 16);
+			if (cref >= HIP_OFF && cref + 64 < SHMEM_MAP) {     /* chained: the next segment's data */
+				uint8_t *c = shm + cref;
+				uint16_t clen = *(uint16_t *)(c + 12), chead = *(uint16_t *)(c + 14);
+				if (cref + 20u + chead + 16u < SHMEM_MAP) {
+					memcpy(mlme_chain, c + 20 + chead, MIN((size_t)clen, sizeof(mlme_chain)));
+				}
+			}
 			mlme_siglen = sigbuf >= 4 ? sigbuf - 4u : 0;
 			mlme_len = len;
 			bzero(mlme_data, sizeof(mlme_data));
@@ -954,9 +967,14 @@ xc5_wlbt_heartbeat(void)
 		printf("XC5 hip mib=%u cfm=%#x ver=%u mlme=%#x ls=%u log %u bad %u | q0 w%u r%u q2 w%u q3 w%u r%u q5 w%u r%u\n",
 		    hip_mib, hb_cfm, in->conf_ver, h->sap_mlme, ls_sz, log_recs, log_bad, *scb(0, 0), *scb(0, 1), *scb(2, 0),
 		    *scb(3, 0), *scb(3, 1), *scb(5, 0), *scb(5, 1));
-		printf("XC5 mlme sent=%u got=%u id=%#x siglen=%u len=%u data %08x %08x %08x %08x %08x %08x\n", mlme_sent, mlme_got,
-		    mlme_id, mlme_siglen, mlme_len, mlme_data[0], mlme_data[1], mlme_data[2], mlme_data[3], mlme_data[4],
-		    mlme_data[5]);
+		/* wifi10: the line was cut at the screen's edge -- short lines now */
+		printf("XC5 mlme sent=%u got=%u len=%u sig=%u\n", mlme_sent, mlme_got, mlme_len, mlme_siglen);
+		printf("XC5 ids %x %x %x %x %x %x %x %x\n", mlme_ids[0], mlme_ids[1], mlme_ids[2], mlme_ids[3], mlme_ids[4],
+		    mlme_ids[5], mlme_ids[6], mlme_ids[7]);
+		printf("XC5 mb %08x %08x %08x\n   %08x %08x\n", mlme_mb[0], mlme_mb[1], mlme_mb[2], mlme_mb[3], mlme_mb[4]);
+		printf("XC5 md %08x %08x %08x\n   %08x %08x %08x\n", mlme_data[0], mlme_data[1], mlme_data[2], mlme_data[3],
+		    mlme_data[4], mlme_data[5]);
+		printf("XC5 mc %08x %08x %08x %08x\n", mlme_chain[0], mlme_chain[1], mlme_chain[2], mlme_chain[3]);
 	}
 	/* the firmware's last log lines, oldest first */
 	for (uint32_t k = log_recs >= LOGN ? log_recs - LOGN + 1 : 1; k != 0 && k <= log_recs; k++) {
