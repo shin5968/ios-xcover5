@@ -247,8 +247,10 @@ static void
 rtc_sync(void)
 {
 	int r[12];
+	printf("XC5 RTC2: reading RTC block 2 registers 00-0b\n");
 	for (uint32_t i = 0; i < 12; i++) {
 		r[i] = pmic_read(BLK_RTC, i);
+		printf("XC5 RTC2: raw[%02x]=%d\n", i, r[i]);
 		if (r[i] < 0) {
 			printf("XC5 RTC: register %#x not readable: calendar left alone\n", i);
 			return;
@@ -270,7 +272,12 @@ rtc_sync(void)
 	uint64_t t = days_secs(year, mon, day, hour, min, sec), up_ns;
 	absolutetime_to_nanoseconds(mach_absolute_time(), &up_ns);
 	uint64_t up = up_ns / NSEC_PER_SEC, add = (up >= 2 && up < 600) ? up - 1 : 0;
+	clock_sec_t before, after; clock_usec_t usec;
+	clock_get_calendar_microtime(&before, &usec);
 	clock_set_calendar_microtime((clock_sec_t)(t + add), 0);
+	clock_get_calendar_microtime(&after, &usec);
+	printf("XC5 RTC2: before=%llu requested=%llu readback=%llu usec=%u\n",
+	    (unsigned long long)before, t + add, (unsigned long long)after, (unsigned)usec);
 	printf("XC5 RTC: the PMIC's clock says %u-%02u-%02u %02u:%02u:%02u UTC (%llu); uptime %llu s, +%llu: calendar set\n",
 	    year, mon, day, hour, min, sec, t, up, add);
 }
@@ -338,7 +345,10 @@ xc5_pmic_start(void)
 {
 	int mode = 0, rtc = 1;
 	(void)PE_parse_boot_argn("xc5rtc", &rtc, sizeof(rtc));
-	if (rtc && acpm_open()) {
+	printf("XC5 RTC2: entered xc5rtc=%d\n", rtc);
+	int connected = rtc ? acpm_open() : 0;
+	printf("XC5 RTC2: ACPM=%d enabled=%d\n", connected, rtc);
+	if (rtc && connected) {
 		rtc_sync();             /* before launchd: everything after starts at the right date */
 	}
 	if (!PE_parse_boot_argn("xc5pmic", &mode, sizeof(mode)) || mode == 0) {
