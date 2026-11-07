@@ -245,6 +245,12 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
     `...<MTLDepthStencilState>; not in this pro...`). SpringBoard 재시작 뒤 잠금화면·홈 화면은 정상.
   - 조치(커밋 cc29e71): 커널이 처음부터 두 속성을 갖되 `xc5metalfor`(기본 `chronod`)에 든 프로세스에게만 보여 줌
     (`copyProperty`/`serializeProperties` 재정의). 시험 라이브러리는 이제 속성을 넣거나 빼지 않음. 장치 이름 Mali-G52 MP1로.
+- 79 (`xc5-ios-mtl2-console.tar`, xnu CI 42340653744, 드롭 1794027784): `mtl[133] xc5mtl=1: MetalPluginName reads here (set 0)`
+  (커널이 준 속성을 chronod가 읽음) → step 5 `contents 0x1034e8000` → `step 8: command buffer status 4`(Completed) → `done`.
+  **chronod가 위젯을 우리 Metal로 그림**: `metal W PERF slow draw: 10.2 ms plane_color`, `metal I PSO blend ...`,
+  `submits are synchronous`. **홈 화면에 배터리 위젯(100%, 원 4개)이 처음으로 나옴**. 사진 위젯 자리는 흰 칸에 "대기 중...".
+  본 프레임에서는 SpringBoard·chronod CRASH 없음(영상 전체를 다 읽지는 않음). `CRASH locationd`, `CRASH WirelessRadioMan`
+  (sig 5, 같은 pc 0x1d3038894)은 Metal과 무관해 보임. 잠금화면·홈 화면 정상.
 
 ## S8 포트와 다른 점
 
