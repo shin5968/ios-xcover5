@@ -225,6 +225,16 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   wifi6이 드롭 설치 전에 패닉 → 새 드롭(hcf 포함)은 이번 부팅에 설치됐는데(`drop state=3 written=27`), make_hip은 그보다
   먼저 돌았을 가능성이 큼. 다음: 같은 이미지로 **재부팅만** 해서 mib=4496인지, 그때 cfm=0x2가 오는지 확인.
   (안 오면: MIB 없이 펌웨어가 WLAN 시작을 보류/실패하는지 mxlog 해독이 필요.)
+- **wifi7 재부팅(영상 20261107_205202)**: 결과 같음. `XC5 hip cfm=0 ver=4 compat=0 mlme=0xe07`, `last=10b10000 ... sent=1
+  out r1 log w194`가 끝까지 그대로 → START_CFM 없음, 펌웨어 로그가 194에서 멈춤(NULL 서비스 때는 198까지 감). mib 값은
+  줄이 화면 밖으로 잘려 못 읽음. 추정: 펌웨어가 WLAN 시작 중 멈추거나 실패.
+- **조치(커밋 4443e04)**: (1) hcf를 최대 90초 기다림. (2) **mxlog 해독**: 같은 빌드(10344, 2024-07-03)의
+  `vendor/etc/wifi/mx140/debug/common/log-strings.bin`(867 KB, 드롭 `wifi/log-strings.bin`, wlbtfw.sh)을 커널이 읽고, 링의
+  레코드(헤더 sync 0x9669=phase 5: 길이 워드 수, timestamp, 문자열 오프셋, 32비트 인자; 0xA55A=phase 4 문자 그대로)를 풀어
+  콘솔 `XC5 FW n: <timestamp> <문장>`, heartbeat에 마지막 5줄 `XC5 fw<n> ...`. 스레드는 0.5초마다 계속 로그·관리 링을 읽음.
+  (3) heartbeat 줄 `XC5 hip mib=.. cfm=.. ver=.. mlme=.. build=.. scb=.. q0 r/w q3 r/w ls=<log-strings 크기> log <레코드 수> bad <깨진 헤더>`,
+  펌웨어 panic record가 0이 아니면 `XC5 wlbt PANIC ...`. 이미지 `xc5-ios-wifi8-console.tar`(76,953,600 B, xnu CI 42370479102, 드롭 패키지 1794053226 = log-strings 포함, 인자 wifi7과 같음).
+  첫 부팅에서 드롭 설치가 60초보다 늦으면 로그가 해독 없이(`fmt@오프셋`) 나옴 → 그럴 땐 재부팅 한 번.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
