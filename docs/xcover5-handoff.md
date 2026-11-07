@@ -204,6 +204,15 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   msgs=2 first=10b10000 last=00010001 ff000000 sent=1 out r1 w1 log w198` → 두 번째 메시지 바이트 `01 00 01 00` = 채널 1,
   서비스 0, **SM_MSG_START_CFM** (NULL 서비스 시작 확인). 우리 요청을 펌웨어가 읽음(out r1 w1, to-AP 비트 1). 즉 AP↔펌웨어 관리
   채널 양방향 동작.
+- **Wi-Fi 3b(커밋 575658d, xnu CI 42368012766)**: MM_START_IND 뒤 NULL 대신 **WLAN 서비스(1)** 시작. 공유 메모리 +4 MiB
+  (`HIP_OFF 0x400000`, 별도 4 MiB 매핑)에 hip4_hip_control(hip4.h 레이아웃): init {0xcaaa0400, conf_hip4_ver(펌웨어가 씀),
+  v4 ref 0x4000a0, v5 ref 0x400020} · config v5(120 B, @32) · v4(227 B, @160), 둘 다 magic 0xcaba0401, cache line 64,
+  host_buf(TX) 0x40a000 1.06 MiB, fw_buf(RX) 0x51a000 1 MiB, MIB @+0x2000 = 스톡 `mx140_wlan.hcf`+`mx140_wlan_sw.hcf`
+  (드롭 `wifi/wlan.hcf`, `wifi/wlan_sw.hcf`, wlbtfw.sh가 만듦), scoreboard @448, 큐 6개×(u32[256]+인덱스 3 B, 1088 B) @1472,
+  비트 to-AP 7(INTMR0 unmask) / AP->R4 5. 그 뒤 `SM_MSG_START_REQ {1, 0, 0x400000}`. `xc5wlan=0`이면 3a(NULL).
+  heartbeat 새 줄: `XC5 hip cfm=<START_CFM 받은 서비스 비트마스크, WLAN이면 0x2> ver=<펌웨어가 고른 HIP 버전 4/5> compat= mlme=
+  ma= build= patch= room=head/tail scb=.. q0 r/w q3 r/w mib=4496`. 기대: cfm=0x2, ver≠0, build≠0. 이미지 `xc5-ios-wifi6-console.tar`
+  (드롭 새로 필요: hcf 두 개 추가).
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
