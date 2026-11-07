@@ -255,6 +255,15 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   **하얀 화면(상태 막대만)에서 멈춤, 1분 동안 그대로**. `CRASH MobileSlideShow`/`assetsd`/`STR` 없음. 앱 화면이 콘솔을 덮어
   앱 시작 순간의 `exec` 줄은 안 보임. 그동안 `CRASH locationd[...] sig 5`(같은 pc 0x21bb2c894, 몇 초마다 재시작)만 반복.
   다음: `xc5photos=1`(커밋 f09f473)로 사진 앱에 `libxc5poster.dylib`를 넣어 메인 스레드 위치를 1초마다 찍음.
+- 81 (`xc5-ios-photo3-console.tar`, 80 + `xc5photos=1 xc5metalfor=chronod,MobileSlideShow`): 여전히 하얀 화면. 사진 앱 메인 스레드는
+  매 샘플 같은 곳(`xc5poster: #7..#24 pc 1c261187c`): `__psynch_cvwait` ← libsystem_pthread ← MobileSystemServices
+  `MOXPCTransportReceiveMessage` ← libMobileCheckpoint `MCCopyCheckpointValue`/`MCCopyCheckpoint` ← PhotoLibraryServicesCore
+  (func 0x7ed9c, `PLPlatformMobileCheckpointSupported` 근처) ← libdispatch. 즉 **`checkpointd`(com.apple.mobilecheckpoint.checkpointd,
+  /usr/libexec/checkpointd)의 XPC 답을 영원히 기다림**. Metal은 원인이 아니었음(그 단계까지 가지도 못함).
+  checkpointd는 `/var/mobile/Library/Caches/Checkpoint.plist`를 `/System/Library/CoreServices/Checkpoint.xml`, Celestial의
+  `FigCheckpointSupport`(EmbeddedMedia, mediaserverd 쪽), 키보드 정보, FairPlay 인증서로 다시 만듦("rebuilding checkpoint").
+  다른 포트(y2sios, A32, S9+)에 checkpointd 기록 없음. 다음(커밋 fdaa729): `xc5photos=1`이 checkpointd에도 샘플러를 넣고
+  데몬은 모든 스레드를 3초마다 찍음(`xc5poster: #N tK pc ...`).
 
 ## S8 포트와 다른 점
 

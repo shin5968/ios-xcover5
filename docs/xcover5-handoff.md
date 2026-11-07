@@ -99,6 +99,11 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
      (`PXGMetalRenderer`, `PXGMetalRenderDestination`, ...; `tools/xcover5/dev/dsgrep.sh`로 확인). Metal 장치가 없으면 아무것도
      안 그려져 하얀 화면일 가능성이 큼. → `xc5-ios-photo3-console.tar` = photo2 + `xc5metalfor=chronod,MobileSlideShow`
      (커널 재빌드 없음). 사진 앱이 그려지면 확인, 죽으면 `STR`/`metal E` 줄로 원인.
+   - **부팅 81 결과: 원인은 Metal이 아니라 checkpointd**. 사진 앱 메인 스레드가 `MCCopyCheckpointValue`(libMobileCheckpoint)로
+     `checkpointd`의 XPC 답을 계속 기다림(port.md 81). 다음 이미지 `xc5-ios-photo4-console.tar`(xnu CI 42344322122,
+     mesa-ios CI 42344322131, 드롭 1794031007): checkpointd 모든 스레드 3초마다 `xc5poster: #N tK pc ... bt ...`,
+     `sweetscan`에 checkpointd·mediaserverd. 볼 것: checkpointd가 뜨는지(`XC5 PB: checkpointd ... inserted`), 어디서 막히는지
+     (FigCheckpointSupport → mediaserverd? FairPlay?), 죽는지. 우회 후보: 막는 쪽 고치기, 또는 Checkpoint.plist 미리 두기.
 1. M4 위젯: chronod가 Metal로 그리는 것이 무엇인지(어떤 위젯/요소) 확인. 사진 위젯은 사진 앱(assetsd/photolibraryd)부터. 위젯 확장이 스냅샷을 못 주는지, chronod가
    그리다 막히는지. 다음 영상에서 홈 화면 오래 두고 `CRASH`, `metal E ...`, `chronod` 줄 확인. 필요하면 확장 프로세스를
    `xc5metalfor`에 추가(쉼표 목록). `gpuAddress 0`(Mesa 버퍼 경로에서 GPU 주소를 안 알려줌)도 확인할 것.
