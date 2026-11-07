@@ -983,10 +983,10 @@ index ba647a8..979c83f 100644
  	int log_contacts = 0;
 diff --git a/bsd/dev/xc5_drop.c b/bsd/dev/xc5_drop.c
 new file mode 100644
-index 0000000..54d1437
+index 0000000..114cb13
 --- /dev/null
 +++ b/bsd/dev/xc5_drop.c
-@@ -0,0 +1,532 @@
+@@ -0,0 +1,533 @@
 +/*
 + * XCover5 drop zone: files for the iOS root from the CACHE partition, so the
 + * Mesa libraries reach the phone without reflashing the 12 GB root image.
@@ -1354,7 +1354,8 @@ index 0000000..54d1437
 +	 * fairplayd.H2 starts and exits at once, so the call waited forever and so did the Photos app).
 +	 * Before the xc5photos entry: one library per process, the first entry that is on wins. */
 +	{ "/usr/libexec/checkpointd", "xc5ckpt", "/private/var/xc5/lib/libxc5ckpt.dylib",
-+	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5ckpt.dylib", "checkpointd" },
++	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5ckpt.dylib:/private/var/xc5/lib/libxc5poster.dylib",
++	  "checkpointd" },
 +	/* boot 81: Photos' main thread waits on checkpointd (MCCopyCheckpointValue); its threads sampled too */
 +	{ "/usr/libexec/checkpointd", "xc5photos", "/private/var/xc5/lib/libxc5poster.dylib",
 +	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5poster.dylib", "checkpointd" },

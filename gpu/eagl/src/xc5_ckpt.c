@@ -60,6 +60,13 @@ static void say(const char *fmt, ...) {
 static mach_msg_return_t my_mach_msg(mach_msg_header_t *msg, mach_msg_option_t option, mach_msg_size_t send_size,
                                      mach_msg_size_t rcv_size, mach_port_name_t rcv_name, mach_msg_timeout_t timeout,
                                      mach_port_name_t notify) {
+    static int seen;
+    /* boot 83: no "limited" line at all, so every call is said once now (the first 12), whatever its options */
+    if (seen < 12) {
+        seen++;
+        say("xc5ckpt: mach_msg #%d option %#x id %d send %u rcv %u timeout %u", seen, option,
+            msg ? msg->msgh_id : -1, send_size, rcv_size, timeout);
+    }
     if ((option & MACH_SEND_MSG) && (option & MACH_RCV_MSG) && !(option & MACH_RCV_TIMEOUT) && msg != NULL) {
         mach_msg_id_t id = msg->msgh_id;
         if (said < 20) {

@@ -365,7 +365,8 @@ static const struct {
 	 * fairplayd.H2 starts and exits at once, so the call waited forever and so did the Photos app).
 	 * Before the xc5photos entry: one library per process, the first entry that is on wins. */
 	{ "/usr/libexec/checkpointd", "xc5ckpt", "/private/var/xc5/lib/libxc5ckpt.dylib",
-	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5ckpt.dylib", "checkpointd" },
+	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5ckpt.dylib:/private/var/xc5/lib/libxc5poster.dylib",
+	  "checkpointd" },
 	/* boot 81: Photos' main thread waits on checkpointd (MCCopyCheckpointValue); its threads sampled too */
 	{ "/usr/libexec/checkpointd", "xc5photos", "/private/var/xc5/lib/libxc5poster.dylib",
 	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5poster.dylib", "checkpointd" },
