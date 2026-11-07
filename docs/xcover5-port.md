@@ -251,6 +251,10 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   `submits are synchronous`. 홈 화면 배터리 위젯은 **전부터 나오던 것**(사용자 확인)이라 Metal 덕은 아님. 사진 위젯은 흰 칸에 "대기 중..."; 사진 앱 자체도 제대로 안 됨(사용자) → 사진 라이브러리 쪽(assetsd/photolibraryd) 문제일 가능성.
   본 프레임에서는 SpringBoard·chronod CRASH 없음(영상 전체를 다 읽지는 않음). `CRASH locationd`, `CRASH WirelessRadioMan`
   (sig 5, 같은 pc 0x1d3038894)은 Metal과 무관해 보임. 잠금화면·홈 화면 정상.
+- 80 (`xc5-ios-photo1-console.tar`, 79 + `sweetscan=...,MobileSlideShow,assetsd,photoanalysisd,mediaanalysisd`): 사진 앱을 열면
+  **하얀 화면(상태 막대만)에서 멈춤, 1분 동안 그대로**. `CRASH MobileSlideShow`/`assetsd`/`STR` 없음. 앱 화면이 콘솔을 덮어
+  앱 시작 순간의 `exec` 줄은 안 보임. 그동안 `CRASH locationd[...] sig 5`(같은 pc 0x21bb2c894, 몇 초마다 재시작)만 반복.
+  다음: `xc5photos=1`(커밋 f09f473)로 사진 앱에 `libxc5poster.dylib`를 넣어 메인 스레드 위치를 1초마다 찍음.
 
 ## S8 포트와 다른 점
 

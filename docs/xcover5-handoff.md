@@ -87,6 +87,10 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
    assetsd,photoanalysisd,mediaanalysisd`(이 프로세스들이 SIGABRT/SIGTRAP로 죽으면 커널이 `STR` 줄로 힙 문자열을 찍음).
    사용자가 사진 앱을 열고 콘솔 영상을 보냄 → `exec MobileSlideShow`/`assetsd`, `CRASH ...`, `STR ...` 읽기. 사진 앱은
    `/Applications/MobileSlideShow.app`, 라이브러리 데몬 `AssetsLibrary.framework/Support/assetsd`, 위젯 `PhotosReliveWidget.appex`.
+   - 부팅 80 결과: 하얀 화면에서 멈춤, 크래시·STR 없음(자세한 것은 port.md). 다음 이미지 `xc5-ios-photo2-console.tar`
+     (xnu CI 42342598615, 위 + `xc5photos=1`): 사진 앱에 `libxc5poster.dylib` → 콘솔 `XC5 PB: MobileSlideShow (pid) ... inserted`,
+     `xc5poster: loaded in MobileSlideShow`, 1초마다 `xc5poster: #N pc ... bt ...`(40초). 주소는 `dsc.py`(슬라이드는 이미 뺌 → `dsc.py 0 주소...`)로.
+     이 줄이 안 나오면 앱 프로세스가 아예 안 뜬 것(FrontBoard/RunningBoard 쪽).
 1. M4 위젯: chronod가 Metal로 그리는 것이 무엇인지(어떤 위젯/요소) 확인. 사진 위젯은 사진 앱(assetsd/photolibraryd)부터. 위젯 확장이 스냅샷을 못 주는지, chronod가
    그리다 막히는지. 다음 영상에서 홈 화면 오래 두고 `CRASH`, `metal E ...`, `chronod` 줄 확인. 필요하면 확장 프로세스를
    `xc5metalfor`에 추가(쉼표 목록). `gpuAddress 0`(Mesa 버퍼 경로에서 GPU 주소를 안 알려줌)도 확인할 것.
