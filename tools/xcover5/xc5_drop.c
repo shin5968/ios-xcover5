@@ -354,6 +354,9 @@ static const struct {
 	/* xc5poster=1: CollectionsPoster's start sampled (gpu/eagl/src/xc5_poster.c, boots 71-72's check-in timeout) */
 	{ "/CollectionsPoster.appex/CollectionsPoster", "xc5poster", "/private/var/xc5/lib/libxc5poster.dylib",
 	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5poster.dylib", "CollectionsPoster" },
+	/* xc5wall=1: a still picture as the wallpaper (gpu/eagl/src/xc5_sb.c, after herolte's herosb.c) */
+	{ "/SpringBoard.app/SpringBoard", "xc5wall", "/private/var/xc5/lib/libxc5sb.dylib",
+	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5sb.dylib", "SpringBoard" },
 };
 
 static int

@@ -59,8 +59,13 @@ $CC -O2 -g -Wall -fno-objc-arc -c "$HERE/src/xc5_poster.c" -o "$OBJ/xc5_poster.o
 $CC -dynamiclib -o "$OUT/lib/libxc5poster.dylib" "$OBJ/xc5_poster.o" \
   -install_name @rpath/libxc5poster.dylib -framework CoreFoundation -framework IOKit -Wl,-undefined,error
 
+# libxc5sb.dylib: a still picture as SpringBoard's wallpaper (src/xc5_sb.c, after herolte's herosb.c), xc5wall=1.
+$CC -O2 -g -Wall -fno-objc-arc -c "$HERE/src/xc5_sb.c" -o "$OBJ/xc5_sb.o"
+$CC -dynamiclib -o "$OUT/lib/libxc5sb.dylib" "$OBJ/xc5_sb.o" \
+  -install_name @rpath/libxc5sb.dylib -framework CoreFoundation -framework IOKit -lobjc -Wl,-undefined,error
+
 for f in "$OUT/lib/libxc5eagl.dylib" "$OUT/lib/libxc5eagl-b.dylib" "$OUT/lib/libxc5pb.dylib" "$OUT/lib/libxc5media.dylib" \
-    "$OUT/lib/libxc5poster.dylib"; do
+    "$OUT/lib/libxc5poster.dylib" "$OUT/lib/libxc5sb.dylib"; do
   codesign -s - -f "$f"
   otool -L "$f"
 done

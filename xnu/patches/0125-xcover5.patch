@@ -983,10 +983,10 @@ index ba647a8..979c83f 100644
  	int log_contacts = 0;
 diff --git a/bsd/dev/xc5_drop.c b/bsd/dev/xc5_drop.c
 new file mode 100644
-index 0000000..3124aba
+index 0000000..f1b4e54
 --- /dev/null
 +++ b/bsd/dev/xc5_drop.c
-@@ -0,0 +1,513 @@
+@@ -0,0 +1,516 @@
 +/*
 + * XCover5 drop zone: files for the iOS root from the CACHE partition, so the
 + * Mesa libraries reach the phone without reflashing the 12 GB root image.
@@ -1343,6 +1343,9 @@ index 0000000..3124aba
 +	/* xc5poster=1: CollectionsPoster's start sampled (gpu/eagl/src/xc5_poster.c, boots 71-72's check-in timeout) */
 +	{ "/CollectionsPoster.appex/CollectionsPoster", "xc5poster", "/private/var/xc5/lib/libxc5poster.dylib",
 +	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5poster.dylib", "CollectionsPoster" },
++	/* xc5wall=1: a still picture as the wallpaper (gpu/eagl/src/xc5_sb.c, after herolte's herosb.c) */
++	{ "/SpringBoard.app/SpringBoard", "xc5wall", "/private/var/xc5/lib/libxc5sb.dylib",
++	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5sb.dylib", "SpringBoard" },
 +};
 +
 +static int
