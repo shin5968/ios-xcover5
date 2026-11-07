@@ -173,6 +173,12 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   fwconfig)를 공유 메모리(4 MiB 매핑 안, 펌웨어 런타임 0x233df0 뒤)에 만들고 ISSR1 = 그 오프셋. mxmgmt 전송은
   mifstream(cpacket_buffer 링 + 메일박스 인덱스 + 인터럽트 비트, mxmgmt_transport.c, mifstream.c, cpacket_buffer.c,
   mifintrbit.c, mifmboxman.c). 목표: 펌웨어가 `MM_START_IND`(mxman.c 528/852) 보냄. 필요하면 매핑을 2 MiB 단위로 늘림.
+- **Wi-Fi 2단계 구현(커밋 ea9ee60, xnu CI 42364390385)**: `xc5_wlbt.c`가 mxconf(240 B, magic 0x79828486, 0.5)를 펌웨어 런타임 뒤
+  (4 KiB 정렬)에 만들고 ISSR1 = 그 오프셋. 스트림(transports_init 순서와 같은 인터럽트 비트): mgmt to-AP 512 B(128 B×4,
+  read bit 1 / write bit 0), from-AP(1/2), gdb R4(2 KiB, 3/2 · 3/0), gdb M4(1/4 · 5/0), mxlog 16 KiB(4/6), gdb M4_1 미사용(0).
+  to-AP 버퍼는 0xff로 채움. INTMR0 비트 16-22 unmask. 실행 중 mgmt 링을 읽어 `XC5 WLBT: mgmt message: channel ...`
+  (채널 0, 메시지 0 = MM_START_IND), mxlog 쓰기 인덱스 변화, 끝나면 20초마다 3분간 `XC5 WLBT summary: ...` 반복.
+  이미지 `xc5-ios-wifi3-console.tar`(드롭 1794046067 그대로).
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
