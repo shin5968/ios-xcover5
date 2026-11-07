@@ -194,6 +194,12 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   (d) MLME로 MAC 주소 받기·검색(scan) → 그다음 iOS 쪽(en0 + IO80211 흉내 + apple80211 ioctl, y2sios/Scion 방식).
   참고 소스(같은 A21s 커널): `drivers/misc/samsung/scsc/srvman*.c`, `scsc_service.c`, `drivers/net/wireless/scsc/`(hip4.c,
   mlme.c, mgt.c, fapi.h).
+- **Wi-Fi 3a(커밋 6ebf421, xnu CI 42366767227)**: MM_START_IND를 받으면 채널 1(SERVICE_MANAGEMENT)로
+  `sm_msg_packet { service 0 (NULL), SM_MSG_START_REQ 0, optional_data 0 }`(packed 6 B, servman_messages.h)을 from-AP 링에 쓰고
+  write bit 2를 INTGR1로 울림(삼성 client_test.c가 NULL 서비스를 이렇게 시작). 기대 응답: 채널 1, `{0, SM_MSG_START_CFM 1}` →
+  heartbeat `last=..010001`(바이트 01 00 01 ..). heartbeat 줄 형식: `XC5 wlbt ... msgs=N first=.. last=.. .. sent=N out rN wN log wN`.
+  이미지 `xc5-ios-wifi5-console.tar`. 그다음 3b: WLAN 서비스(1)는 HIP4 설정 구조의 ref가 필요(`drivers/net/wireless/scsc/hip4.c`
+  hip4_init → scsc_mx_service_start(service, hip control ref)).
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
