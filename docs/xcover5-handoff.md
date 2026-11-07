@@ -351,6 +351,15 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
 - **다음 후보**: (a) DNS(configd에 resolver 등록: SCDynamicStore `State:/Network/Service/<id>/DNS` + Global/IPv4 PrimaryInterface,
   또는 /etc/resolv.conf 흉내) → Safari 등 앱 인터넷, (b) WPA2(커널 PSK·4-way handshake + MLME-SETKEYS), (c) 설정 앱 Wi-Fi 목록용
   IO80211/apple80211 흉내, (d) 수신 인터럽트(10 ms 폴링 대신 to-AP 비트 7), (e) 핫스팟 SSID/비밀번호를 드롭 파일로.
+- **4d 구현(커밋 f34c966, xnu CI 42385981516, mesa-ios CI 42385981442)**: 커널이 DHCP 결과를 sysctl `kern.xc5wifi`("up <if> <주소>
+  <마스크> <라우터> <dns>")로 내보내고, `kern.xc5netstat`(쓰기 가능 int)로 결과를 받음. **libxc5net.dylib**(gpu/eagl/src/xc5_net.c)이
+  `xc5net=1`로 configd에 주입(xc5_drop.c 대상 `/usr/libexec/configd`) → kern.xc5wifi를 기다렸다가 SCDynamicStore에
+  `State:/Network/Service/XC5WIFI/IPv4 {Addresses, SubnetMasks, Router, InterfaceName}`, `.../DNS {ServerAddresses}`,
+  `State:/Network/Interface/en0/Link {Active}` 씀 → IPMonitor가 순위 매김 → `State:/Network/Global/IPv4` PrimaryInterface와
+  `State:/Network/Global/DNS` 확인, `getaddrinfo www.apple.com`. 결과 비트: 1 씀, 2 en0 primary, 4 global DNS, 8 이름 풀림,
+  0x100+SCError 실패, 0x1ff SC 함수 못 찾음. iOS SDK가 SCDynamicStore API를 iOS 사용 불가로 표시 → dlsym으로 호출.
+  콘솔 `XC5GPU client: ... xc5net: ...`, heartbeat `XC5 w net <비트> dns <서버>`. 이미지 `xc5-ios-wifi19-console.tar`(인자 + `xc5net=1`,
+  **새 드롭 1794065387**). 첫 부팅은 드롭 설치가 configd 시작보다 늦어 주입 안 될 수 있음 → 한 번 재부팅.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
