@@ -228,8 +228,10 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   URL을 넣음 → SpringBoard가 더 이상 죽지 않음. 잠금화면은 안 뜸.
 - 76: 잠금화면에 **iOS 기본 배경화면(CollectionsPoster)** 표시, 1~2초 뒤 검게 됨. 같은 시점에
   `A5XELTE FB: display-off request ignored (a5fb_keep_on)`: SpringBoard 유휴 타이머가 바로 화면을 꺼서 포스터를 내림.
-- 77: SpringBoard 시작 시 `SBDisableAutoDim`, `SBDontDimOrLockOnAC`를 켬 → **배경화면이 유지됨**(사용자 확인).
-  남은 것: 잠금 해제 후 홈 화면, 위젯(chronod/RenderBox는 Metal 필요 가능성), 전원 키 없음.
+- 77: SpringBoard 시작 시 `SBDisableAutoDim`, `SBDontDimOrLockOnAC`를 켬 → **배경화면이 유지되고 잠금 해제로 홈 화면까지
+  감**(사용자 확인). 72-74의 잠금 해제 실패는 SpringBoard가 배경화면 쪽에서 막히거나 죽던 것과 같은 원인이었던 것으로 보임.
+  남은 것: 위젯(chronod/RenderBox는 Metal 필요 가능성), 전원 키 없음.
+  기준 이미지: `xc5-ios-wall2-console.tar`(부팅 인자 `xc5gpu=4 xc5gl=2 xc5wall=1 xc5conrows=40`, 드롭 1794022820).
 
 ## S8 포트와 다른 점
 
