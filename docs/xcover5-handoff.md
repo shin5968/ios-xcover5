@@ -322,6 +322,11 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   로그>`, `XC5 w cfm vif scan ind done aps got`, `XC5 w ap <SSID> <MHz> <dBm> o|s`(선택 전엔 `ap?` 3개), `XC5 w req <길이> ids ... r
   <rate 8개>`, `XC5 w join cfm ind st <AP status> try info disc`, `XC5 w data tx cfm rx dhcp offer ip`. 연결할 AP가 없으면 8초 뒤 재검색.
   이미지 `xc5-ios-wifi16-console.tar`.
+- **wifi16 결과(영상 20261107_233929, 짧은 하트비트로 읽힘)**: `XC5 w ap S24 2437 -22 o`, `XC5 w req 114 ids 0 1 24 21 2d 46 r c 12 18
+  24 30 48 60 6c`, `XC5 w join cfm 1 ind ffff st 18 try 2 info 0`. → 펌웨어의 association request rate가 **6-54 Mb/s(OFDM)뿐, 1/2/5.5/11
+  없음**(P2P 방식) → AP 기본 rate(1/2/5.5/11) 불충족 → 상태 18. 재시도(ADD_INFO_ELEMENTS 0, CONNECT cfm 1)는 효과 없음.
+  **원인: ADD_VIF의 device_address** — 드라이버는 station이면 FF:FF:FF:FF:FF:FF(cfg80211_ops.c slsi_connect, P2P일 때만 실제 주소),
+  우리는 우리 주소를 넣음. 조치(커밋 f459cfa, xnu CI 42383026520): FF로. rate 재시도는 `xc5wretry=1`일 때만. 이미지 `xc5-ios-wifi17-console.tar`.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
