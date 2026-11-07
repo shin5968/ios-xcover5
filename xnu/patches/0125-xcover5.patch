@@ -1585,10 +1585,10 @@ index 0000000..540539b
 +#endif /* XCOVER5 */
 diff --git a/bsd/dev/xc5_pmic.c b/bsd/dev/xc5_pmic.c
 new file mode 100644
-index 0000000..82ae1d2
+index 0000000..a032252
 --- /dev/null
 +++ b/bsd/dev/xc5_pmic.c
-@@ -0,0 +1,269 @@
+@@ -0,0 +1,352 @@
 +/*
 + * XCover5: the S2MPU12 PMIC through the Exynos 850's ACPM (the always-on power processor owns the PMIC's
 + * SPEEDY bus; the AP asks it in a shared-SRAM queue). First user: the power key, which is the PMIC's own
@@ -1608,7 +1608,8 @@ index 0000000..82ae1d2
 + * No line of either is copied. THIS FILE ONLY READS the PMIC.
 + *
 + * Boot-args:
-+ *   xc5pmic=1   find the channel, dump the PMIC block's registers 0x00-0x2f and the RTC block's 0x00-0x1f once,
++ *   xc5rtc=0    do not set the calendar from the PMIC's RTC (default: set it at start-up, rtc_sync below)
++ *   xc5pmic=1  find the channel, dump the PMIC block's registers 0x00-0x2f and the RTC block's 0x00-0x1f once,
 + *               then every 100 ms read the PMIC block's 0x00-0x2f and print each register that changes (press
 + *               the power key: the one that follows it is the key's register) -- for 10 minutes
 + *   xc5pmic=2   the power key: read register xc5pwrreg (PMIC block) every 30 ms; bit xc5pwrbit set (or clear
@@ -1617,6 +1618,7 @@ index 0000000..82ae1d2
 +#include <kern/clock.h>
 +#include <kern/thread.h>
 +#include <libkern/libkern.h>
++#include <mach/mach_time.h>
 +#include <mach/mach_types.h>
 +#include <pexpert/pexpert.h>
 +#include <sys/systm.h>
@@ -1784,14 +1786,91 @@ index 0000000..82ae1d2
 +	}
 +}
 +
++static int acpm_ready = -1;            /* -1 not tried, 0 no, 1 yes */
++
++static bool
++acpm_open(void)
++{
++	if (acpm_ready < 0) {
++		mbox = (volatile uint8_t *)ml_io_map(ACPM_MBOX_PA, 0x1000);
++		sram = (volatile uint8_t *)ml_io_map(ACPM_SRAM_PA, ACPM_SRAM_SIZE);
++		acpm_ready = find_channel() == 0;
++		if (!acpm_ready) {
++			printf("XC5 PMIC: no usable ACPM channel %u\n", CH_PMIC);
++		}
++	}
++	return acpm_ready == 1;
++}
++
++/*
++ * The date: the S2MPU12's RTC block (2), read at start-up, sets the kernel's calendar (it started at 1970: the lock
++ * screen said 31 December). Layout as Scion documents the S2MPS18's (drivers/power/hakios.s2mps18_rtc.c, from
++ * Samsung's rtc-s2mp.h; the S2MPU12's is checked against the first boot's dump): 0x00 CTRL (bit 0 BCD, bit 1 24 h),
++ * 0x02 UPDATE, 0x03 CAPSEL, 0x04 MSEC, 0x05 SEC, 0x06 MIN, 0x07 HOUR [4:0] (bit 6 PM), 0x08 WEEK, 0x09 DAY,
++ * 0x0A MONTH (1-12), 0x0B YEAR (since 2000), binary. What is read is what was last latched; S-Boot latches on every
++ * boot, early, so the time since then (the generic timer counts from S-Boot) is added. Nothing is written (no RUDR).
++ * Android kept this clock on network time, in UTC. Boot-arg xc5rtc=0 leaves the calendar alone.
++ */
++extern void clock_set_calendar_microtime(clock_sec_t secs, clock_usec_t microsecs);
++
++static uint64_t
++days_secs(uint32_t y, uint32_t mo, uint32_t d, uint32_t h, uint32_t mi, uint32_t s)
++{
++	static const uint16_t before[12] = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
++	uint64_t days = 0;
++	for (uint32_t year = 1970; year < y; year++) {
++		days += ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0) ? 366 : 365;
++	}
++	days += before[mo - 1] + (d - 1);
++	if (mo > 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0)) {
++		days++;
++	}
++	return days * 86400 + (uint64_t)h * 3600 + (uint64_t)mi * 60 + s;
++}
++
++static uint32_t
++bcd(uint32_t v, bool is_bcd)
++{
++	return is_bcd ? (v >> 4) * 10 + (v & 0xf) : v;
++}
++
++static void
++rtc_sync(void)
++{
++	int r[12];
++	for (uint32_t i = 0; i < 12; i++) {
++		r[i] = pmic_read(BLK_RTC, i);
++		if (r[i] < 0) {
++			printf("XC5 RTC: register %#x not readable: calendar left alone\n", i);
++			return;
++		}
++	}
++	printf("XC5 RTC: CTRL %02x UPDATE %02x CAPSEL %02x MSEC %02x SEC %02x MIN %02x HOUR %02x WEEK %02x DAY %02x "
++	    "MONTH %02x YEAR %02x\n", r[0], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11]);
++	bool b = r[0] & 1;
++	uint32_t sec = bcd(r[5] & 0x7f, b), min = bcd(r[6] & 0x7f, b), hour = bcd(r[7] & 0x3f, b);
++	uint32_t day = bcd(r[9] & 0x3f, b), mon = bcd(r[10] & 0x1f, b), year = 2000 + bcd(r[11] & 0x7f, b);
++	if (!(r[0] & 2) && (r[7] & 0x40) && hour < 12) {
++		hour += 12;                     /* 12-hour mode, PM */
++	}
++	if (sec > 59 || min > 59 || hour > 23 || day < 1 || day > 31 || mon < 1 || mon > 12 || year < 2024 || year > 2099) {
++		printf("XC5 RTC: %u-%02u-%02u %02u:%02u:%02u is not a date to trust: calendar left alone\n",
++		    year, mon, day, hour, min, sec);
++		return;
++	}
++	uint64_t t = days_secs(year, mon, day, hour, min, sec), up_ns;
++	absolutetime_to_nanoseconds(mach_absolute_time(), &up_ns);
++	uint64_t up = up_ns / NSEC_PER_SEC, add = (up >= 2 && up < 600) ? up - 1 : 0;
++	clock_set_calendar_microtime((clock_sec_t)(t + add), 0);
++	printf("XC5 RTC: the PMIC's clock says %u-%02u-%02u %02u:%02u:%02u UTC (%llu); uptime %llu s, +%llu: calendar set\n",
++	    year, mon, day, hour, min, sec, t, up, add);
++}
++
 +static void
 +pmic_thread(__unused void *arg, __unused wait_result_t wr_unused)
 +{
 +	int mode = (int)xcover5_pmic_state[0];
-+	mbox = (volatile uint8_t *)ml_io_map(ACPM_MBOX_PA, 0x1000);
-+	sram = (volatile uint8_t *)ml_io_map(ACPM_SRAM_PA, ACPM_SRAM_SIZE);
-+	if (find_channel() != 0) {
-+		printf("XC5 PMIC: no usable ACPM channel %u: stopping\n", CH_PMIC);
++	if (!acpm_open()) {
 +		return;
 +	}
 +	int id = pmic_read(0, 0);
@@ -1848,7 +1927,11 @@ index 0000000..82ae1d2
 +void
 +xc5_pmic_start(void)
 +{
-+	int mode = 0;
++	int mode = 0, rtc = 1;
++	(void)PE_parse_boot_argn("xc5rtc", &rtc, sizeof(rtc));
++	if (rtc && acpm_open()) {
++		rtc_sync();             /* before launchd: everything after starts at the right date */
++	}
 +	if (!PE_parse_boot_argn("xc5pmic", &mode, sizeof(mode)) || mode == 0) {
 +		return;
 +	}
