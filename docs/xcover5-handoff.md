@@ -301,6 +301,13 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   확인용으로 커널이 DHCP를 직접 함(DISCOVER 4초마다 → OFFER → REQUEST → ACK). heartbeat: `XC5 ap <MHz> <dBm> o|s <SSID>`,
   `XC5 join <SSID> cfm <x> ind <x> disc <reason>`, `XC5 data tx N cfm x rx N dhcp <0-3> offer a.b.c.d`, `XC5 ip a.b.c.d gw ...`.
   이미지 `xc5-ios-wifi13-console.tar`. 시험: 다른 폰 핫스팟을 **비밀번호 없이, 2.4 GHz**로.
+- **wifi13 결과(영상 20261107_225709, 핫스팟 = 개방형·2.4 GHz)**: `XC5 vif 0 scan 0 ind 5 done 1 aps 3`, `XC5 ap 2412 -77 s KT_GiGA_2G_..`,
+  `2412 -64 s olleh_WiFi_..`, `2437 -18 o S24` → `XC5 join S24 cfm 0 ind 8212 disc ffff`, data tx 0 dhcp 0. **CONNECT_IND 0x8212 =
+  ASSOC_FAILED_CODE(0x8200) + 802.11 상태 18**(AP의 기본 rate 집합을 다 지원하지 않음 → 연결 거부). 인증은 통과, association에서 거부.
+  추정: S24 핫스팟이 기본 rate에 BSS membership selector(HT/HE PHY 필수 등)를 넣었거나 펌웨어의 HT가 꺼져 있음. 조치(커밋 5c5a1e8, xnu CI 42379736030):
+  진단 출력 — `XC5 rates <개수> caps <1 HT|2 VHT|4 HE>: <rate 바이트들>`(0x80 비트 = 기본 rate, 0xff/0xfe/0xfa 등 = selector),
+  `XC5 fw ht <unifiHtActivated> vht <..> rates <unifiSupportedDataRates>`, `XC5 assoc <길이>: <CONNECT_IND 데이터 앞 16바이트>`.
+  이미지 `xc5-ios-wifi14-console.tar`. 같은 이미지로 핫스팟 "Wi-Fi 6" 옵션을 끄고 재부팅해 비교하면 좋음.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
