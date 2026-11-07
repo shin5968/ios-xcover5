@@ -91,6 +91,14 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
      (xnu CI 42342598615, 위 + `xc5photos=1`): 사진 앱에 `libxc5poster.dylib` → 콘솔 `XC5 PB: MobileSlideShow (pid) ... inserted`,
      `xc5poster: loaded in MobileSlideShow`, 1초마다 `xc5poster: #N pc ... bt ...`(40초). 주소는 `dsc.py`(슬라이드는 이미 뺌 → `dsc.py 0 주소...`)로.
      이 줄이 안 나오면 앱 프로세스가 아예 안 뜬 것(FrontBoard/RunningBoard 쪽).
+   - 비슷한 사례(2026-11-07 조사): HakiOS A32(같은 Mali-G52, GL 렌더러)는 사진 앱이 죽음("one corpse: MobileSlideShow",
+     `docs/gpu-a32.md`, 원인 미상), CPU 렌더링 10분 사용 기록에는 사진 앱 사용이 문제없이 들어 있음(`stability-a32.md`).
+     y2sios: assetsd가 볼륨 속성(getattrlist) 실패로 CacheDelete에서 예외(ramfs.c 주석), photoanalysisd는 계속 죽어서 막음
+     (`userland/mkjobs.py` DENY). S9+ 계열 노트: 사진 앱 첫 실행은 DB 스키마·인덱스 생성(CREATE INDEX 10번).
+   - **공유 캐시 확인**: 사진 앱 보관함 화면을 그리는 PhotosUICore의 PXG 엔진은 렌더러가 Metal뿐
+     (`PXGMetalRenderer`, `PXGMetalRenderDestination`, ...; `tools/xcover5/dev/dsgrep.sh`로 확인). Metal 장치가 없으면 아무것도
+     안 그려져 하얀 화면일 가능성이 큼. → `xc5-ios-photo3-console.tar` = photo2 + `xc5metalfor=chronod,MobileSlideShow`
+     (커널 재빌드 없음). 사진 앱이 그려지면 확인, 죽으면 `STR`/`metal E` 줄로 원인.
 1. M4 위젯: chronod가 Metal로 그리는 것이 무엇인지(어떤 위젯/요소) 확인. 사진 위젯은 사진 앱(assetsd/photolibraryd)부터. 위젯 확장이 스냅샷을 못 주는지, chronod가
    그리다 막히는지. 다음 영상에서 홈 화면 오래 두고 `CRASH`, `metal E ...`, `chronod` 줄 확인. 필요하면 확장 프로세스를
    `xc5metalfor`에 추가(쉼표 목록). `gpuAddress 0`(Mesa 버퍼 경로에서 GPU 주소를 안 알려줌)도 확인할 것.
