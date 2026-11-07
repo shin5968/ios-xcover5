@@ -57,7 +57,14 @@ extern vm_offset_t ml_io_map_wcomb(vm_offset_t phys_addr, vm_size_t size);
 #define MBOX_PA         0x119C0000UL    /* AP2WLBT */
 #define GICD_PA         0x12a01000UL
 #define SHMEM_PA        0x880000000UL
-#define SHMEM_SIZE      0xC00000UL
+#define SHMEM_SIZE      0xC00000UL      /* what the core is given (DBUS BAAW window 0) */
+/*
+ * wifi1 (video 191101): ml_io_map_wcomb of all 12 MiB panicked -- "kmem_alloc(..., 12582912, 0x100021) failed with 3
+ * @vm_kern.c:178" (no room in the kernel map for one piece that size; ml_io_map panics rather than fail). Step 1 needs
+ * the firmware (1.5 MiB), its run-time area (header +36: 0x233df0) and the panic record inside it, so only the first
+ * 4 MiB are mapped and cleared; the rest of the window is the core's to use later (step 2 places mxconf there).
+ */
+#define SHMEM_MAP       0x400000UL
 
 #define WLBT_CONFIGURATION 0x3100
 #define WLBT_STATUS     0x3104
@@ -173,9 +180,9 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 {
 	/* the firmware comes with the drop, which is written once launchd remounts / read-write */
 	int64_t fwlen = -1;
-	shm = (uint8_t *)ml_io_map_wcomb(SHMEM_PA, SHMEM_SIZE);
+	shm = (uint8_t *)ml_io_map_wcomb(SHMEM_PA, SHMEM_MAP);
 	for (int s = 0; s < 240 && fwlen < 0; s++) {
-		fwlen = read_file("/private/var/xc5/wifi/mx140.bin", shm, SHMEM_SIZE);
+		fwlen = read_file("/private/var/xc5/wifi/mx140.bin", shm, SHMEM_MAP);
 		if (fwlen < 0) {
 			delay(1000000);
 		}
@@ -192,7 +199,7 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 	    "build %.40s\n", fwlen, *(uint16_t *)(shm + 14), *(uint16_t *)(shm + 12), *(uint16_t *)(shm + 22),
 	    *(uint16_t *)(shm + 20), entry, runtime, panic_off, (const char *)(shm + 48));
 	(void)hdr_len;
-	bzero(shm + fwlen, SHMEM_SIZE - (size_t)fwlen);
+	bzero(shm + fwlen, SHMEM_MAP - (size_t)fwlen);
 
 	uint8_t ka[1024];
 	int64_t kalen = read_file("/private/var/xc5/wifi/ka.bin", ka, sizeof(ka));
@@ -296,7 +303,7 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 		}
 		delay(100000);
 	}
-	if (panic_off != 0 && panic_off + 64 < SHMEM_SIZE) {
+	if (panic_off != 0 && panic_off + 64 < SHMEM_MAP) {
 		uint32_t *p = (uint32_t *)(shm + panic_off);
 		printf("XC5 WLBT: panic record @%#x: %08x %08x %08x %08x %08x %08x %08x %08x\n", panic_off, p[0], p[1], p[2],
 		    p[3], p[4], p[5], p[6], p[7]);
