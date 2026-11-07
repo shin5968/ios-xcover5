@@ -936,9 +936,12 @@ edit('bsd/dev/a5xelte_keys.c', [
      ' * Volume Up GPA0-7, XCover key GPA0-5 (used as Power). Exynos 850 ALIVE\n'
      ' * banks: GPA0 0x000, GPA1 0x020; DAT at +4. Sample = GPA0 | GPA1 << 8;\n'
      ' * bit 31 is a constant 1 (released) for the absent Home key.\n'
+     ' * The real power key is the S2MPU12\'s: xc5_pmic.c polls it through ACPM\n'
+     ' * (xc5pmic=2) and its state pulls the Power bit (5) low as well.\n'
      ' */\n'
      'typedef uint32_t keys_t;\n'
-     '#define KEYS_SAMPLE() ((keys_t)((a5_keys_read(0x04) & 0xff) | (a5_keys_read(0x24) & 0xff) << 8 | 0x80000000u))\n'
+     'extern volatile int xc5_pwrkey_down;     /* bsd/dev/xc5_pmic.c */\n'
+     '#define KEYS_SAMPLE() ((keys_t)(((a5_keys_read(0x04) & 0xff) & ~(xc5_pwrkey_down ? 0x20u : 0u)) | (a5_keys_read(0x24) & 0xff) << 8 | 0x80000000u))\n'
      '#define KEYS_PINS { 5, 7, 8, 31 }\n'
      '#elif defined(DREAMLTE)\n/*\n * Galaxy S8 (mainline', 1),
     ('\t\t\t\tkeys_t bit = (keys_t)(1u << pins[key]);\n',
@@ -1596,9 +1599,14 @@ edit('iokit/KernelConfigTables.cpp', [
 (tree / 'bsd/dev/xc5_drop.c').write_text(
     (Path(__file__).resolve().parent / 'xc5_drop.c').read_text())
 print('wrote bsd/dev/xc5_drop.c')
+# The S2MPU12 PMIC through ACPM (bsd/dev/xc5_pmic.c): the power key (boot-arg xc5pmic).
+(tree / 'bsd/dev/xc5_pmic.c').write_text(
+    (Path(__file__).resolve().parent / 'xc5_pmic.c').read_text())
+print('wrote bsd/dev/xc5_pmic.c')
 edit('bsd/conf/files', [
     ('bsd/dev/a5xelte_emmc.c\t\t\tstandard\n',
-     'bsd/dev/a5xelte_emmc.c\t\t\tstandard\nbsd/dev/xc5_drop.c\t\t\tstandard\n', 1),
+     'bsd/dev/a5xelte_emmc.c\t\t\tstandard\nbsd/dev/xc5_drop.c\t\t\tstandard\n'
+     'bsd/dev/xc5_pmic.c\t\t\tstandard\n', 1),
 ])
 edit('bsd/dev/a5xelte_emmc.c', [
     ('\tif ((uint64_t)lba < emmc_first_lba ||\n'
@@ -1650,6 +1658,10 @@ edit('bsd/kern/bsd_init.c', [
      '\t\textern void xc5_drop_start(void) __attribute__((weak));\n'
      '\t\tif (xc5_drop_start) {\n'
      '\t\t\txc5_drop_start();\n'
+     '\t\t}\n'
+     '\t\textern void xc5_pmic_start(void) __attribute__((weak));\n'
+     '\t\tif (xc5_pmic_start) {\n'
+     '\t\t\txc5_pmic_start();   /* the PMIC power key (xc5pmic) */\n'
      '\t\t}\n'
      '\t}\n'
      '#endif\n'
