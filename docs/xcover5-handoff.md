@@ -218,6 +218,13 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   4 MiB 안 `HIP_OFF 0x240000`(mxconf 힙 끝 뒤)으로 옮김 → 제어 0x240000, MIB 0x242000, TX 0x24a000, RX 0x35a000-0x45a000
   (RX 뒷부분은 매핑 밖, 펌웨어가 쓰는 곳이라 지금은 상관없음; 나중에 작은 매핑으로 읽기). START_REQ ref = 0x240000.
   이미지 `xc5-ios-wifi7-console.tar`(같은 인자, 같은 드롭).
+- **wifi7 결과(영상 20261107_204718): 패닉 없음, 부팅·잠금화면 정상.** `XC5 hip cfm=0 ver=4 compat=0 mlme=0xe07 ma=0x..
+  build=0 patch=0 room=248/26 scb=00000000 q0 0/0 q3 0/0 mib=0`, `XC5 wlbt ... mgmt r1 w1 msgs=1 last=10b10000 sent=1 out r1 ...`.
+  → **펌웨어가 HIP4 설정을 읽고 v4를 골라 자기 칸을 채움**(conf_hip4_ver=4, SAP_MLME 0xe07, MA-UNITDATA headroom 248 /
+  tailroom 26). START_REQ도 읽음(out r1). 하지만 **START_CFM은 아직 없음**(msgs=1), 그리고 **mib=0**: hcf 두 파일을 못 읽음.
+  wifi6이 드롭 설치 전에 패닉 → 새 드롭(hcf 포함)은 이번 부팅에 설치됐는데(`drop state=3 written=27`), make_hip은 그보다
+  먼저 돌았을 가능성이 큼. 다음: 같은 이미지로 **재부팅만** 해서 mib=4496인지, 그때 cfm=0x2가 오는지 확인.
+  (안 오면: MIB 없이 펌웨어가 WLAN 시작을 보류/실패하는지 mxlog 해독이 필요.)
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
