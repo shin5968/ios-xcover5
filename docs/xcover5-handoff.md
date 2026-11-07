@@ -77,8 +77,9 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   - 문제: 속성이 켜진 몇 초 사이 SpringBoard도 장치를 잡고 SIGABRT(SiriUI 파이프라인, MPS 실패, `<MTLDepthStencilState>`). 재시작 후 정상.
   - 조치(커밋 cc29e71, xnu CI 42340653744 + mesa-ios CI 42340653689): 커널이 속성을 처음부터 두고 `xc5metalfor` 프로세스에게만 보여 줌.
 - **새 기준(부팅 79)**: `xc5-ios-mtl2-console.tar` = `xc5gpu=4 xc5gl=2 xc5wall=1 xc5metal=1 xc5mtl=1`, xnu CI 42340653744,
-  mesa-ios CI 42340653689, 드롭 1794027784. chronod만 Metal을 봄, 시험 step 8 status 4(Completed). **chronod가 위젯을 Metal로
-  그려 홈 화면에 배터리 위젯이 처음 나옴**. 사진 위젯은 "대기 중..."(흰 칸). SpringBoard 크래시는 본 프레임에서 없음.
+  mesa-ios CI 42340653689, 드롭 1794027784. chronod만 Metal을 봄, 시험 step 8 status 4(Completed). **chronod가 Metal로 무언가를
+  그림**(`metal W PERF slow draw ... plane_color`). 배터리 위젯은 전부터 나오던 것(Metal과 무관, 사용자 확인). 사진 위젯
+  "대기 중..."은 사진 앱도 제대로 안 되므로 사진 라이브러리(assetsd/photolibraryd) 쪽 문제일 가능성. SpringBoard 크래시는 본 프레임에서 없음.
 
 ## 다음 행동
 
