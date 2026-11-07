@@ -1,3 +1,10 @@
+# XCover5 (SM-G525N) — read this first
+
+This branch (`xcover5`, remote `xc5` = shin5968/ios-xcover5) is the Galaxy XCover5 port. **Start with
+`docs/xcover5-handoff.md`** (state, build flow, boot-args, next action, tools) and update its "지금 상태" and
+"다음 행동" sections at every milestone, then commit. Reply to the user in Korean. Keep device dumps, serials and
+Apple binaries out of git. Scripts for building and analysing are in `tools/xcover5/dev/`.
+
 # Working on the A5XELTE fork
 
 - For Samsung SM-A510F work, read `A5XELTE_PROGRESS.md` and `docs/a5xelte-migration-map.md` first. Record new device evidence in the former and commit completed changes. Keep private VM addresses, passwords, device dumps and downloaded Apple binaries out of git.
