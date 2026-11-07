@@ -50,8 +50,9 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
 | `xc5lsreset=1`, `xc5lsrestore=1` | LaunchServices 저장소 옮기기/되돌리기(70에서 한 번 씀, 지금 폰은 새 저장소 사용 중) |
 | `xc5conrows=40` | 화면 아래 40줄만 콘솔 |
 | `xc5metal=1` | XC5GPU 아래에 `IOAcceleratorES`("sgx") 공개. Metal 속성 두 개는 비어 있고, 프로세스가 `IORegistryEntrySetCFProperties`로 넣고 뺌(빈 문자열 = 지움). 콘솔 `XC5 metal: ...` |
-| `xc5mtl=1/2` | chronod에 `libxc5mtl.dylib`(`gpu/metal/xc5_mtl.c`): main 전에 속성을 넣고 6초 뒤 Metal 장치·버퍼·명령 버퍼 시험, 단계마다 `gl: mtl[pid] step N ...`. 1은 끝나면 속성 지움, 2는 둠. `xc5metal=1` 필요 |
-
+| `xc5metal=1` | XC5GPU 아래에 `IOAcceleratorES`("sgx") 공개, `MetalPluginName=../../../private/var/xc5/metal/RedwoodMetal`, `MetalPluginClassName=RedwoodMetalDevice`. 두 속성은 `xc5metalfor`에 든 프로세스에게만 보임. 콘솔 `XC5 metal: ...` |
+| `xc5metalfor=a,b` | Metal 속성을 볼 프로세스 이름(쉼표, 기본 `chronod`). 다른 프로세스는 Metal 장치가 없다고 봄(78에서 SpringBoard가 잡고 죽음) |
+| `xc5mtl=1` | chronod에 `libxc5mtl.dylib`(`gpu/metal/xc5_mtl.c`): 6초 뒤 Metal 장치·버퍼·명령 버퍼 시험, 단계마다 `gl: mtl[pid] step N ...`. 속성을 못 읽을 때만 직접 넣음(옛 커널용). `xc5metal=1` 필요 |
 ## 지금 상태 (2026-11-07)
 
 - **기준 이미지(부팅 77)**: `xc5-ios-wall2-console.tar` = `xc5gpu=4 xc5gl=2 xc5wall=1`, 커널은 xnu CI 42315969905 산출물,
@@ -69,24 +70,21 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   - dlopen 경로 `/private/var/xc5/lib/libredwoodair.dylib`. libredwoodair에 rpath `/private/var/xc5/lib` 추가(build-mesa.sh).
   - `air_metal.c`: IOSurface 가져오기를 `herodrm_surface_import`(대리 fd)로. y2sios는 surface ID를 fd 자리에 그대로 넣었음.
   - `_MTLDevice`(Metal 비공개 클래스)는 `-Wl,-U`로 실행 때 찾게 함.
-
-- **M3 빌드 완료(커밋 feb36fa, xnu CI 42339376775 + mesa-ios CI 42339376773, 폰 시험 대기)**:
-  - 커널: `XC5GPU.cpp`에 `IOAcceleratorES`(y2sios 방식, 두 키·문자열만 받음), `xc5_drop.c` 주입 표에 chronod
-    (`/ChronoCore.framework/Support/chronod`, `xc5mtl`), XPB_MAX 24.
-  - 번들 위치: Metal이 `/System/Library/Extensions/` + 이름 + `.bundle`을 만드므로 이름을
-    `../../../private/var/xc5/metal/RedwoodMetal`로 줌(공유 캐시로 확인 안 함, 폰에서 확인). `mkdrop.py`가 산출물
-    `metal/` 디렉터리를 `/private/var/xc5/metal/`에 넣음.
-  - 시험 이미지: `xc5-ios-mtl1-console.tar` = 기준 + `xc5metal=1 xc5mtl=1`, 드롭 1794026793.
+- M3 구성(커밋 feb36fa): `XC5GPU.cpp`의 `IOAcceleratorES`(y2sios 방식), `xc5_drop.c` 주입 표에 chronod
+  (`/ChronoCore.framework/Support/chronod`, `xc5mtl`), XPB_MAX 24, `mkdrop.py`가 산출물 `metal/`을 `/private/var/xc5/metal/`에 넣음.
+- **M3 폰에서 성공(부팅 78, `xc5-ios-mtl1-console.tar`)**: chronod에서 `RedwoodMetalDevice` 장치, 버퍼(contents 있음, gpuAddress 0),
+  명령 큐, 명령 버퍼 commit/wait, `done: Metal device works this far`. `..` 번들 경로가 통함. 자세한 것은 `docs/xcover5-port.md` "Metal".
+  - 문제: 속성이 켜진 몇 초 사이 SpringBoard도 장치를 잡고 SIGABRT(SiriUI 파이프라인, MPS 실패, `<MTLDepthStencilState>`). 재시작 후 정상.
+  - 조치(커밋 cc29e71, xnu CI 42340653744 + mesa-ios CI 42340653689): 커널이 속성을 처음부터 두고 `xc5metalfor` 프로세스에게만 보여 줌.
+    시험 이미지 `xc5-ios-mtl2-console.tar`(기준 + `xc5metal=1 xc5mtl=1`, 드롭 1794027784). 폰 시험 대기.
 
 ## 다음 행동
 
-1. 사용자가 `xc5-ios-mtl1-console.tar`를 플래시하고 콘솔 영상을 보내 주면 `XC5 metal:`, `XC5 PB: chronod`,
-   `gl: mtl[...] step N`, `gl: metal ...`(드라이버 m2m 기록), `CRASH chronod` 줄을 읽기.
-   - step 3에서 device가 nil이면: 번들 경로(`..`가 받아들여지는지), NSBundle 로드/클래스 찾기, 서명. 대안은 루트
-     `/System/Library/Extensions/RedwoodMetal.bundle` 심볼릭 링크(루트는 launchd가 rw로 다시 마운트함).
-   - abort면 `STR` 줄의 assert 문장과 `dsc.py`로 위치.
-   - backboardd/SpringBoard가 IOAcceleratorES를 보고 동작이 바뀌는지(배경화면, 잠금 해제) 확인.
-2. M3 다음: Metal 컴퓨트 한 번(셰이더가 들어간 metallib, CI의 Xcode `xcrun metal`로 만들기) → M4 chronod 위젯.
+1. `xc5-ios-mtl2-console.tar` 결과 읽기: `XC5 metal: IOAcceleratorES published ... for chronod`, `mtl[...] MetalPluginName reads here`,
+   step 3~`done`, 그리고 **SpringBoard CRASH가 없어야 함**. 장치 이름은 이제 `Mali-G52 MP1 (product 0x7212, XCover5)`.
+   - chronod 자신이 위젯을 Metal로 그리기 시작하면 chronod가 죽을 수 있음(`CRASH chronod`, `STR` 줄 확인).
+2. 다음 M3b: Metal 컴퓨트 한 번(셰이더 metallib을 CI의 Xcode `xcrun metal`로 만들어 드롭에 넣고, `xc5_mtl.c`에서 실행·결과 확인).
+3. M4: chronod 위젯 렌더링(RenderBox). 그 뒤 필요하면 `xc5metalfor`에 다른 프로세스 추가.
 
 ## 분석 도구 (`tools/xcover5/dev/`)
 

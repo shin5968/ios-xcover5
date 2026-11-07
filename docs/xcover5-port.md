@@ -233,6 +233,19 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   남은 것: 위젯(chronod/RenderBox는 Metal 필요 가능성), 전원 키 없음.
   기준 이미지: `xc5-ios-wall2-console.tar`(부팅 인자 `xc5gpu=4 xc5gl=2 xc5wall=1 xc5conrows=40`, 드롭 1794022820).
 
+### Metal (부팅 78~, 2026-11-07)
+
+- 78 (`xc5-ios-mtl1-console.tar`, 기준 + `xc5metal=1 xc5mtl=1`, xnu CI 42339376775, 드롭 1794026793): **chronod에서 Metal 장치가 만들어짐**.
+  `mtl[147] step 1: bundle ... is there` → `step 3: device ... class RedwoodMetalDevice name Mali-G77 MP11 (product 0x7212, Redwood)`
+  → `step 4/5: buffer ... contents 0x102d40000 gpuAddress 0` → `step 6/7` 명령 큐·명령 버퍼 → `done: Metal device works this far`.
+  드라이버 기록: `metal I DEV the compiler library Mali-G52 (Panfrost)`, `RedwoodMali client opened (0)`,
+  `MTLCommandBufferStatus ...`. `MetalPluginName=../../../private/var/xc5/metal/RedwoodMetal`(`..` 경로)이 통함.
+  - 부작용: 속성이 켜져 있던 몇 초 사이 **SpringBoard도 같은 장치를 잡고**(SiriUI `SiriSphereUniforms` 파이프라인,
+    `MPSImageGaussianBlur initWithDevice: Failed to get MPSDevice`) SIGABRT(`m2m-nodev: F CRASH signal 6 ... pthread_kill`,
+    `...<MTLDepthStencilState>; not in this pro...`). SpringBoard 재시작 뒤 잠금화면·홈 화면은 정상.
+  - 조치(커밋 cc29e71): 커널이 처음부터 두 속성을 갖되 `xc5metalfor`(기본 `chronod`)에 든 프로세스에게만 보여 줌
+    (`copyProperty`/`serializeProperties` 재정의). 시험 라이브러리는 이제 속성을 넣거나 빼지 않음. 장치 이름 Mali-G52 MP1로.
+
 ## S8 포트와 다른 점
 
 | 항목 | Galaxy S8 (dreamlte) | XCover5 (이 포트) |
