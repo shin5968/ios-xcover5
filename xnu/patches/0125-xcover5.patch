@@ -1585,10 +1585,10 @@ index 0000000..540539b
 +#endif /* XCOVER5 */
 diff --git a/bsd/dev/xc5_pmic.c b/bsd/dev/xc5_pmic.c
 new file mode 100644
-index 0000000..19a4d95
+index 0000000..93294a3
 --- /dev/null
 +++ b/bsd/dev/xc5_pmic.c
-@@ -0,0 +1,390 @@
+@@ -0,0 +1,440 @@
 +/*
 + * XCover5: the S2MPU12 PMIC through the Exynos 850's ACPM (the always-on power processor owns the PMIC's
 + * SPEEDY bus; the AP asks it in a shared-SRAM queue). First user: the power key, which is the PMIC's own
@@ -1847,6 +1847,41 @@ index 0000000..19a4d95
 +	return is_bcd ? (v >> 4) * 10 + (v & 0xf) : v;
 +}
 +
++/*
++ * Boots rtc1 and rtc2 (videos 165706, 180915): launchd still stamps 1969-12-31, and nothing of rtc_sync could be
++ * read -- at that point of the boot the screen shows the heartbeat block, not the log. So the outcome is kept here
++ * and said again every 20 s for three minutes by rtc_thread, which also sets the calendar again from the same
++ * reading (advanced by the uptime since) whenever it finds the calendar still before 2020.
++ */
++static char rtc_msg[200] = "XC5 RTC: never ran";
++static uint64_t rtc_secs, rtc_up_ns;           /* the date read, and the uptime when it was; 0: none */
++
++static uint64_t
++uptime_ns(void)
++{
++	uint64_t ns;
++	absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
++	return ns;
++}
++
++static void
++rtc_thread(__unused void *arg, __unused wait_result_t wr_unused)
++{
++	for (int i = 0; i < 9; i++) {
++		delay(20 * 1000 * 1000);
++		clock_sec_t now;
++		clock_usec_t us;
++		clock_get_calendar_microtime(&now, &us);
++		printf("%s; calendar now %lu (uptime %llu s)\n", rtc_msg, (unsigned long)now, uptime_ns() / NSEC_PER_SEC);
++		if (rtc_secs != 0 && now < 1577836800ul) {     /* before 2020: set again */
++			uint64_t t = rtc_secs + (uptime_ns() - rtc_up_ns) / NSEC_PER_SEC;
++			clock_set_calendar_microtime((clock_sec_t)t, 0);
++			clock_get_calendar_microtime(&now, &us);
++			printf("XC5 RTC: calendar was before 2020: set again to %llu, reads back %lu\n", t, (unsigned long)now);
++		}
++	}
++}
++
 +static void
 +rtc_sync(void)
 +{
@@ -1871,7 +1906,9 @@ index 0000000..19a4d95
 +		r[i] = pmic_read(BLK_RTC, i);
 +		printf("XC5 RTC2: raw[%02x]=%d\n", i, r[i]);
 +		if (r[i] < 0) {
-+			printf("XC5 RTC: register %#x not readable: calendar left alone\n", i);
++			snprintf(rtc_msg, sizeof(rtc_msg), "XC5 RTC: register %#x not readable (%llu reads, %llu failed)", i,
++			    xcover5_pmic_state[1], xcover5_pmic_state[2]);
++			printf("%s: calendar left alone\n", rtc_msg);
 +			return;
 +		}
 +	}
@@ -1884,8 +1921,10 @@ index 0000000..19a4d95
 +		hour += 12;                     /* 12-hour mode, PM */
 +	}
 +	if (sec > 59 || min > 59 || hour > 23 || day < 1 || day > 31 || mon < 1 || mon > 12 || year < 2024 || year > 2099) {
-+		printf("XC5 RTC: %u-%02u-%02u %02u:%02u:%02u is not a date to trust: calendar left alone\n",
-+		    year, mon, day, hour, min, sec);
++		snprintf(rtc_msg, sizeof(rtc_msg), "XC5 RTC: %u-%02u-%02u %02u:%02u:%02u is not a date to trust (CTRL %02x "
++		    "raw %02x %02x %02x %02x %02x %02x)", year, mon, day, hour, min, sec, r[0], r[5], r[6], r[7], r[9], r[10],
++		    r[11]);
++		printf("%s: calendar left alone\n", rtc_msg);
 +		return;
 +	}
 +	uint64_t t = days_secs(year, mon, day, hour, min, sec), up_ns;
@@ -1897,8 +1936,11 @@ index 0000000..19a4d95
 +	clock_get_calendar_microtime(&after, &usec);
 +	printf("XC5 RTC2: before=%llu requested=%llu readback=%llu usec=%u\n",
 +	    (unsigned long long)before, t + add, (unsigned long long)after, (unsigned)usec);
-+	printf("XC5 RTC: the PMIC's clock says %u-%02u-%02u %02u:%02u:%02u UTC (%llu); uptime %llu s, +%llu: calendar set\n",
-+	    year, mon, day, hour, min, sec, t, up, add);
++	rtc_secs = t + add;
++	rtc_up_ns = uptime_ns();
++	snprintf(rtc_msg, sizeof(rtc_msg), "XC5 RTC: the PMIC's clock said %u-%02u-%02u %02u:%02u:%02u UTC at uptime %llu s; "
++	    "set %llu, read back %lu", year, mon, day, hour, min, sec, up, t + add, (unsigned long)after);
++	printf("%s\n", rtc_msg);
 +}
 +
 +static void
@@ -1969,6 +2011,14 @@ index 0000000..19a4d95
 +	printf("XC5 RTC2: ACPM=%d enabled=%d\n", connected, rtc);
 +	if (rtc && connected) {
 +		rtc_sync();             /* before launchd: everything after starts at the right date */
++	} else if (rtc) {
++		snprintf(rtc_msg, sizeof(rtc_msg), "XC5 RTC: ACPM not usable at start-up");
++	}
++	if (rtc) {
++		thread_t rt;
++		if (kernel_thread_start(rtc_thread, NULL, &rt) == KERN_SUCCESS) {
++			thread_deallocate(rt);
++		}
 +	}
 +	if (!PE_parse_boot_argn("xc5pmic", &mode, sizeof(mode)) || mode == 0) {
 +		return;
