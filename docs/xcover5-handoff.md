@@ -108,6 +108,12 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
     y2sios/Scion은 RTC 없을 때 `epoch=` 부팅 인자/`/chosen/boot-epoch`로 PE의 시간 함수를 채움(`GenericARMPE.cpp`).
   - 조치(커밋 12d416e, xnu CI 42357159161): 우리도 RUDR 래치를 한 번 씀(`xc5rtclatch=0`이면 읽기만), 시 마스크 0x1f.
     시험 이미지 `xc5-ios-rtc2-console.tar`(rtc1 대체). 볼 것: `XC5 RTC: latched (UPDATE 0x.. | RUDR): 0` 다음 날짜.
+  - (Codex가 사이에 d90f158 `XC5 RTC2` 진단 줄 추가, 69fe4d4 문서. 내 12d416e는 그 위에 있음.)
+  - **rtc2 결과(영상 20261107_180915)**: launchd 시각 여전히 `1969-12-31 16:00:31`(PST) → 달력 안 맞음. 부팅 초기 RTC 줄은
+    화면이 heartbeat 블록이라 안 보임. `XC5 PMIC: pmic 01: 00 -> 10 / 10 -> 00`(xc5pmic=1 감시)이 계속 나와 **ACPM 읽기는 동작**.
+  - 조치(커밋 53fb077, xnu CI 42358950388): rtc_sync 결과를 저장하고 스레드가 **20초마다 3분간 다시 찍음**(거부 시 원시 값 포함,
+    설정 시 readback, 현재 달력 값). 달력이 아직 2020년 전이면 같은 값 + 업타임으로 **다시 설정**. 이미지 `xc5-ios-rtc3-console.tar`
+    (xc5pmic 감시는 뺌). 볼 것: 부팅 후 `XC5 RTC: ...; calendar now ...` 줄과 잠금화면 날짜.
 - **Wi-Fi 조사**: 칩은 Exynos 850 내장 Samsung SCSC "WLBT"(`scsc_wifibt@119C0000`, 예약 메모리 `wifibt_if` 12 MB,
   인터럽트 MBOX/ALIVE/CFG_REQ/WDOG, syscon: wlbt_remap 0x14C50000, boot_cfg 0x14C60000, BAAW들). Broadcom이 아니라서
   S9(brcmfmac)·y2sios 하드웨어 드라이버는 못 씀. iOS 쪽 층(en0 + 가짜 IO80211Controller + apple80211 ioctl, y2sios
