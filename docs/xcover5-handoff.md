@@ -200,6 +200,10 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   heartbeat `last=..010001`(바이트 01 00 01 ..). heartbeat 줄 형식: `XC5 wlbt ... msgs=N first=.. last=.. .. sent=N out rN wN log wN`.
   이미지 `xc5-ios-wifi5-console.tar`. 그다음 3b: WLAN 서비스(1)는 HIP4 설정 구조의 ref가 필요(`drivers/net/wireless/scsc/hip4.c`
   hip4_init → scsc_mx_service_start(service, hip control ref)).
+- **wifi5 결과(영상 20261107_201554): 3a 성공.** `XC5 wlbt pwr=1 cfg=1 smc=0 st=0x10 issr0=0x2222001b sr0=0x430000 mgmt r2 w2
+  msgs=2 first=10b10000 last=00010001 ff000000 sent=1 out r1 w1 log w198` → 두 번째 메시지 바이트 `01 00 01 00` = 채널 1,
+  서비스 0, **SM_MSG_START_CFM** (NULL 서비스 시작 확인). 우리 요청을 펌웨어가 읽음(out r1 w1, to-AP 비트 1). 즉 AP↔펌웨어 관리
+  채널 양방향 동작.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
