@@ -230,7 +230,8 @@ make_stream(struct mx_stream *s, uint32_t length, uint32_t packet, bool to_ap, u
 
 static struct mx_conf *conf;
 static uint32_t conf_off;
-static uint32_t hb_power, hb_cfg, hb_msgs, hb_first[4];
+static uint32_t hb_power, hb_cfg, hb_msgs, hb_first[4], hb_last[3], hb_sent;
+static bool started;                    /* MM_START_IND seen */
 static uint64_t hb_smc;
 
 static void
@@ -267,12 +268,56 @@ read_mgmt(void)
 		if (hb_msgs == 0) {
 			memcpy(hb_first, p, sizeof(hb_first));
 		}
+		memcpy(hb_last, p, sizeof(hb_last));
 		hb_msgs++;
+		if (p[0] == 0 && p[1] == 0) {
+			started = true;
+		}
 		printf("XC5 WLBT: mgmt message: channel %u, %02x %02x %02x %02x %02x %02x %02x %02x%s\n", p[0], p[1], p[2],
 		    p[3], p[4], p[5], p[6], p[7], p[8], p[0] == 0 && p[1] == 0 ? " = MM_START_IND" : "");
 		*ri = (*ri + 1) % b->num_packets;
 		wr(mbox, 0x01c, 1u << conf->mgmt.to_ap.read_bit);      /* INTGR1: told the core it was read */
 	}
+}
+
+/*
+ * Step 3a: one message to the firmware on the management transport (mxmgmt_transport_send: the channel byte, then the
+ * payload, in one 128-byte packet of the from-AP ring; then the ring's write bit to the R4 through INTGR1).
+ */
+static void
+send_mgmt(uint8_t channel, const void *payload, uint32_t len)
+{
+	struct mx_cbuf *b = &conf->mgmt.from_ap.buf;
+	volatile uint32_t *ri = (volatile uint32_t *)(shm + b->read_index_loc);
+	volatile uint32_t *wi = (volatile uint32_t *)(shm + b->write_index_loc);
+	uint32_t next = (*wi + 1) % b->num_packets;
+	if (next == *ri) {
+		printf("XC5 WLBT: management ring to the firmware is full\n");
+		return;
+	}
+	uint8_t *p = shm + b->buffer_loc + *wi * b->packet_size;
+	bzero(p, b->packet_size);
+	p[0] = channel;
+	memcpy(p + 1, payload, MIN(len, b->packet_size - 1));
+	__asm__ volatile ("dsb sy" ::: "memory");
+	*wi = next;
+	__asm__ volatile ("dsb sy" ::: "memory");
+	wr(mbox, 0x01c, 1u << conf->mgmt.from_ap.write_bit);   /* INTGR1 */
+	hb_sent++;
+}
+
+/*
+ * The service manager's start request (servman_messages.h: struct sm_msg_packet { u8 service_id; u8 msg; s32
+ * optional_data; } packed; SM_MSG_START_REQ 0, START_CFM 1) on channel 1 (MMTRANS_CHAN_ID_SERVICE_MANAGEMENT).
+ * Service 0 is the NULL service, which Samsung's own test client starts with no configuration (client_test.c):
+ * the answer, SM_MSG_START_CFM, proves the way to the firmware's service manager before WLAN (1) needs its HIP4.
+ */
+static void
+start_service(uint8_t id, uint32_t ref)
+{
+	uint8_t m[6] = { id, 0, (uint8_t)ref, (uint8_t)(ref >> 8), (uint8_t)(ref >> 16), (uint8_t)(ref >> 24) };
+	send_mgmt(1, m, sizeof(m));
+	printf("XC5 WLBT: SM_MSG_START_REQ for service %u (configuration %#x) sent\n", id, ref);
 }
 
 static void
@@ -397,8 +442,13 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 	/* 20 s of what it does */
 	uint32_t last_states = 0xffffffff, last_sr0 = 0xffffffff, last_sr1 = 0xffffffff;
 	uint32_t last_log = 0;
+	bool asked = false;
 	for (int t = 0; t < 200; t++) {
 		read_mgmt();
+		if (started && !asked) {
+			asked = true;
+			start_service(0, 0);            /* the NULL service */
+		}
 		uint32_t logw = *(volatile uint32_t *)(shm + conf->mxlog.buf.write_index_loc);
 		if (logw != last_log) {
 			printf("XC5 WLBT: mxlog write index %u (the firmware is logging)\n", logw);
@@ -443,11 +493,13 @@ xc5_wlbt_heartbeat(void)
 		return;
 	}
 	read_mgmt();
-	printf("XC5 wlbt pwr=%u cfg=%u smc=%#llx st=%#x issr0=%#x sr0=%#x msr0=%#x mgmt r%u w%u msgs=%u first=%08x %08x %08x "
-	    "log w%u\n", hb_power, hb_cfg, hb_smc, rd(pmu, WLBT_STATES), rd(mbox, ISSR(0)), rd(mbox, INTSR0),
-	    rd(mbox, INTMSR0), *(volatile uint32_t *)(shm + conf->mgmt.to_ap.buf.read_index_loc),
-	    *(volatile uint32_t *)(shm + conf->mgmt.to_ap.buf.write_index_loc), hb_msgs, hb_first[0], hb_first[1],
-	    hb_first[2], *(volatile uint32_t *)(shm + conf->mxlog.buf.write_index_loc));
+	printf("XC5 wlbt pwr=%u cfg=%u smc=%#llx st=%#x issr0=%#x sr0=%#x mgmt r%u w%u msgs=%u first=%08x last=%08x %08x "
+	    "sent=%u out r%u w%u log w%u\n", hb_power, hb_cfg, hb_smc, rd(pmu, WLBT_STATES), rd(mbox, ISSR(0)),
+	    rd(mbox, INTSR0), *(volatile uint32_t *)(shm + conf->mgmt.to_ap.buf.read_index_loc),
+	    *(volatile uint32_t *)(shm + conf->mgmt.to_ap.buf.write_index_loc), hb_msgs, hb_first[0], hb_last[0],
+	    hb_last[1], hb_sent, *(volatile uint32_t *)(shm + conf->mgmt.from_ap.buf.read_index_loc),
+	    *(volatile uint32_t *)(shm + conf->mgmt.from_ap.buf.write_index_loc),
+	    *(volatile uint32_t *)(shm + conf->mxlog.buf.write_index_loc));
 }
 
 void xc5_wlbt_start(void);
