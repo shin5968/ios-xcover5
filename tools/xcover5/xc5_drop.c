@@ -357,6 +357,10 @@ static const struct {
 	/* xc5wall=1: a still picture as the wallpaper (gpu/eagl/src/xc5_sb.c, after herolte's herosb.c) */
 	{ "/SpringBoard.app/SpringBoard", "xc5wall", "/private/var/xc5/lib/libxc5sb.dylib",
 	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5sb.dylib", "SpringBoard" },
+	/* xc5photos=1: the Photos app's main thread sampled (same libxc5poster.dylib); boot 80: it stays a white
+	 * screen with no crash, and its own start was hidden under that screen */
+	{ "/MobileSlideShow.app/MobileSlideShow", "xc5photos", "/private/var/xc5/lib/libxc5poster.dylib",
+	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5poster.dylib", "MobileSlideShow" },
 	/* xc5mtl=1/2: Metal M3, chronod (the widgets' renderer) asks Metal for a device with
 	 * RedwoodMetal.bundle named on IOAcceleratorES (gpu/metal/xc5_mtl.c; needs xc5metal=1) */
 	{ "/ChronoCore.framework/Support/chronod", "xc5mtl", "/private/var/xc5/lib/libxc5mtl.dylib",
