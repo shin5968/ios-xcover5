@@ -2106,10 +2106,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..c44e77a
+index 0000000..5d61bd6
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,1005 @@
+@@ -0,0 +1,1188 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -2742,10 +2742,20 @@ index 0000000..c44e77a
 +static const uint8_t q_layout[6][2] = {         /* [queue][write, read] */
 +	{ 0, 64 }, { 1, 65 }, { 66, 2 }, { 67, 3 }, { 68, 4 }, { 5, 69 }
 +};
-+static uint32_t mlme_sent, mlme_got, mlme_id, mlme_siglen, mlme_len, mlme_data[6], fh_rfb;
-+static uint32_t mlme_mb[5], mlme_chain[4];
++static uint32_t mlme_sent, mlme_got, fh_rfb, tx_slot;
 +static uint16_t mlme_ids[8];
 +static bool mlme_asked;
++/* what came back: MLME-GET values, ADD_VIF / ADD_SCAN results, scan results */
++static uint32_t mib_chip, mib_plat, mib_build, vif_res = 0xffff, scan_res = 0xffff, scan_inds, scan_done;
++#define APN 6
++static struct {
++	char ssid[33];
++	uint8_t bssid[6];
++	int16_t rssi;
++	uint16_t mhz;
++} aps[APN];
++static uint32_t ap_count;
++static const uint8_t vif_mac[6] = { 0x02, 0x58, 0x43, 0x35, 0x00, 0x01 };   /* locally administered: "XC5" */
 +
 +static inline volatile uint8_t *
 +scb(int q, int rw)
@@ -2774,38 +2784,234 @@ index 0000000..c44e77a
 +	return true;
 +}
 +
-+static void
-+send_mlme_get(void)
++static struct hip_cfg_head *
++fw_cfg(void)
 +{
-+	static const uint8_t keys[] = { 0xE6, 0x07, 0, 0, 0x41, 0x09, 0, 0, 0xE5, 0x07, 0, 0 };
 +	struct hip_init *in = (struct hip_init *)hip;
-+	struct hip_cfg_head *h = in->conf_ver == 4 ? &((struct hip_cfg_v4 *)(hip + HIP_V4))->h :
-+	    &((struct hip_cfg_v5 *)(hip + HIP_V5))->h;
-+	uint32_t moff = HIP_TX + 0x100000;      /* the first 2 KiB slot of the TX control area */
++	return in->conf_ver == 4 ? &((struct hip_cfg_v4 *)(hip + HIP_V4))->h : &((struct hip_cfg_v5 *)(hip + HIP_V5))->h;
++}
++
++/*
++ * One FAPI signal (sig: the signal from its id on, siglen bytes) with data, as hip4_skb_to_mbulk makes it, in the next
++ * of 32 slots of 2 KiB of the TX control area, into the FH control queue.
++ */
++static void
++send_sig(const uint8_t *sigp, uint32_t siglen, const uint8_t *data, uint32_t dlen)
++{
++	struct hip_cfg_head *h = fw_cfg();
++	uint32_t moff = HIP_TX + 0x100000 + (tx_slot++ % 32) * 2048;
 +	uint8_t *m = hip + moff;
-+	uint16_t sigbuf = (uint16_t)(((20 + 24 + 4 + 3) & ~3u) - 20);
-+	uint16_t head = (uint16_t)(sigbuf + h->headroom);
++	uint16_t sigbuf = (uint16_t)(((20 + siglen + 4 + 3) & ~3u) - 20);
++	uint16_t head = (uint16_t)(sigbuf + (dlen ? h->headroom : 0));
 +	bzero(m, 2048);
 +	m[4] = 1 | 4;                           /* signal, owned by the firmware now */
 +	m[5] = 5;                               /* MBULK_CLASS_FROM_HOST_CTL */
 +	m[6] = 1;                               /* MBULK_POOL_ID_CTRL */
-+	m[7] = 1;
-+	*(uint16_t *)(m + 8) = (uint16_t)(sizeof(keys) + h->headroom + h->tailroom);
++	m[7] = dlen ? 1 : 0;
++	*(uint16_t *)(m + 8) = (uint16_t)(dlen ? dlen + h->headroom + h->tailroom : 0);
 +	*(uint16_t *)(m + 10) = sigbuf;
-+	*(uint16_t *)(m + 12) = sizeof(keys);
++	*(uint16_t *)(m + 12) = (uint16_t)dlen;
 +	*(uint16_t *)(m + 14) = head;
-+	uint8_t *sig = m + 20 + 4;
-+	*(uint16_t *)(sig + 0) = 0x2001;        /* MLME_GET_REQ */
-+	*(uint16_t *)(sig + 4) = 0xC001;        /* sender: the driver's first process id */
-+	memcpy(m + 20 + head, keys, sizeof(keys));
++	memcpy(m + 20 + 4, sigp, siglen);
++	*(uint16_t *)(m + 20 + 4 + 4) = (uint16_t)(0xC001 + mlme_sent % 0x100);        /* sender process id */
++	if (dlen) {
++		memcpy(m + 20 + head, data, dlen);
++	}
 +	__asm__ volatile ("dsb sy" ::: "memory");
 +	if (q_put(0, HIP_OFF + moff)) {
 +		mlme_sent++;
-+		printf("XC5 WLBT: MLME-GET.request (chip version, platform, build id) in FH ctrl, mbulk %#x\n", HIP_OFF + moff);
++		printf("XC5 WLBT: signal %#x (%u + %u bytes) sent, mbulk %#x\n", *(const uint16_t *)sigp, siglen, dlen,
++		    HIP_OFF + moff);
 +	}
 +}
 +
-+/* Signals from the firmware (queue 3) and our buffers it gave back (queue 2) */
++static void
++send_mlme_get(void)
++{
++	static const uint8_t keys[] = { 0xE6, 0x07, 0, 0, 0x41, 0x09, 0, 0, 0xE5, 0x07, 0, 0 };
++	uint8_t s[24] = { 0x01, 0x20 };         /* MLME_GET_REQ, vif 0 */
++	send_sig(s, sizeof(s), keys, sizeof(keys));
++}
++
++/*
++ * Step 3d: a station interface and a scan, as the driver does them (mlme.c slsi_mlme_add_vif, slsi_mlme_add_scan,
++ * slsi_set_scan_params, slsi_mlme_append_channel_list; cfg80211_ops.c slsi_scan; facts only).
++ *   MLME-ADD-VIF.request 0x2007 {header; vif 1 (SLSI_NET_INDEX_WLAN); interface_address; type 2 (station);
++ *   device_address; 12 spare} -> MLME-ADD-VIF.confirm 0x2107 {header; vif; result_code (0 success)}.
++ *   MLME-ADD-SCAN.request 0x2005 {header; vif 0; scan_id 1 << 8 (vif 1, SLSI_SCAN_HW_ID 0); scan_type 2 (full);
++ *   device_address; report_mode 4 (real time); 12 spare}, data: an SSID element of length 0 (any network), the scan
++ *   timing element (dd 11 00 16 32 01 01, zeros), the channel list element (dd len 00 16 32 01 02, then per channel
++ *   {u16 2 x MHz, u8 policy 0}) for 2.4 GHz channels 1-13 -> MLME-ADD-SCAN.confirm 0x2105, then per network
++ *   MLME-SCAN.indication 0x2300 {header; vif; channel_frequency (2 x MHz); rssi; ...} with the received beacon or
++ *   probe response as data, and MLME-SCAN-DONE.indication 0x2301.
++ */
++static void
++send_add_vif(void)
++{
++	uint8_t s[38] = { 0x07, 0x20 };
++	s[10] = 1;                              /* vif */
++	memcpy(s + 12, vif_mac, 6);
++	s[18] = 2;                              /* FAPI_VIFTYPE_STATION */
++	memcpy(s + 20, vif_mac, 6);
++	send_sig(s, sizeof(s), NULL, 0);
++}
++
++static void
++send_add_scan(void)
++{
++	uint8_t s[36] = { 0x05, 0x20 };
++	s[12] = 0x00;
++	s[13] = 0x01;                           /* scan_id 0x100 */
++	s[14] = 2;                              /* FAPI_SCANTYPE_FULL_SCAN */
++	memcpy(s + 16, vif_mac, 6);
++	s[22] = 4;                              /* FAPI_REPORTMODE_REAL_TIME */
++	uint8_t d[2 + 19 + 7 + 13 * 3];
++	uint32_t n = 0;
++	d[n++] = 0;                             /* SSID element, wildcard */
++	d[n++] = 0;
++	static const uint8_t timing[19] = { 0xdd, 0x11, 0x00, 0x16, 0x32, 0x01, 0x01 };
++	memcpy(d + n, timing, sizeof(timing));
++	n += sizeof(timing);
++	static const uint8_t chl[7] = { 0xdd, 0x05 + 13 * 3, 0x00, 0x16, 0x32, 0x01, 0x02 };
++	memcpy(d + n, chl, sizeof(chl));
++	n += sizeof(chl);
++	for (int ch = 1; ch <= 13; ch++) {
++		uint16_t fw = (uint16_t)(2 * (2407 + 5 * ch));
++		d[n++] = (uint8_t)fw;
++		d[n++] = (uint8_t)(fw >> 8);
++		d[n++] = 0;
++	}
++	send_sig(s, sizeof(s), d, n);
++}
++
++/* The data of an mbulk and of the ones chained to it, up to max bytes */
++static uint32_t
++gather(uint32_t ref, uint8_t *out, uint32_t max)
++{
++	uint32_t n = 0;
++	for (int seg = 0; seg < 8 && ref >= HIP_OFF && ref + 20 < SHMEM_MAP && n < max; seg++) {
++		uint8_t *m = shm + ref;
++		uint16_t len = *(uint16_t *)(m + 12), head = *(uint16_t *)(m + 14);
++		if (ref + 20u + head + len > SHMEM_MAP) {
++			break;
++		}
++		uint32_t k = MIN((uint32_t)len, max - n);
++		memcpy(out + n, m + 20 + head, k);
++		n += k;
++		if (!(m[4] & 0x80)) {           /* MBULK_F_CHAIN */
++			break;
++		}
++		ref = *(uint32_t *)(m + 16);
++	}
++	return n;
++}
++
++/* MIB values of a GET confirm: {u16 psid, u16 length, value}..., a value 0x80|n then n bytes big-endian */
++static void
++mib_values(const uint8_t *d, uint32_t n)
++{
++	for (uint32_t p = 0; p + 4 <= n;) {
++		uint16_t psid = (uint16_t)(d[p] | d[p + 1] << 8), l = (uint16_t)(d[p + 2] | d[p + 3] << 8);
++		const uint8_t *v = d + p + 4;
++		uint32_t val = 0;
++		if (p + 4 + l <= n && l > 0) {
++			if (v[0] & 0x80) {
++				for (uint32_t i = 0; i < (uint32_t)(v[0] & 0x1f) && i + 1 < l; i++) {
++					val = val << 8 | v[1 + i];
++				}
++			} else {
++				val = v[0] & 0x7f;
++			}
++		}
++		if (psid == 0x07E6) {
++			mib_chip = val;
++		} else if (psid == 0x0941) {
++			mib_plat = val;
++		} else if (psid == 0x07E5) {
++			mib_build = val;
++		}
++		p += 4 + l + (l & 1);
++	}
++}
++
++static void
++scan_result(const uint8_t *sig, const uint8_t *f, uint32_t n)
++{
++	scan_inds++;
++	if (n < 36 + 2) {
++		return;
++	}
++	char ssid[33] = "";
++	for (uint32_t p = 36; p + 2 <= n; p += 2u + f[p + 1]) {         /* elements after the 24 + 12 fixed bytes */
++		if (f[p] == 0 && p + 2u + f[p + 1] <= n) {
++			uint32_t l = MIN((uint32_t)f[p + 1], 32u);
++			for (uint32_t i = 0; i < l; i++) {
++				ssid[i] = (f[p + 2 + i] >= 0x20 && f[p + 2 + i] < 0x7f) ? (char)f[p + 2 + i] : '?';
++			}
++			ssid[l] = 0;
++			break;
++		}
++	}
++	const uint8_t *bssid = f + 16;
++	uint32_t k;
++	for (k = 0; k < ap_count && k < APN; k++) {
++		if (memcmp(aps[k].bssid, bssid, 6) == 0) {
++			break;
++		}
++	}
++	if (k == ap_count) {
++		if (ap_count >= APN) {
++			return;
++		}
++		ap_count++;
++	}
++	snprintf(aps[k].ssid, sizeof(aps[k].ssid), "%s", ssid[0] ? ssid : "(hidden)");
++	memcpy(aps[k].bssid, bssid, 6);
++	aps[k].rssi = (int16_t)(sig[14] | sig[15] << 8);
++	aps[k].mhz = (uint16_t)((sig[12] | sig[13] << 8) / 2);
++	printf("XC5 WLBT: scan: %s %02x:%02x:%02x:%02x:%02x:%02x %u MHz %d dBm\n", aps[k].ssid, bssid[0], bssid[1],
++	    bssid[2], bssid[3], bssid[4], bssid[5], aps[k].mhz, aps[k].rssi);
++}
++
++static void
++on_signal(uint32_t ref)
++{
++	static uint8_t data[1024];
++	uint8_t *m = shm + ref;
++	uint8_t *sig = m + 20 + 4;
++	uint16_t id = *(uint16_t *)sig;
++	mlme_ids[mlme_got % 8] = id;
++	mlme_got++;
++	uint32_t n = gather(ref, data, sizeof(data));
++	switch (id) {
++	case 0x2101:                            /* MLME_GET_CFM */
++		mib_values(data, n);
++		if (vif_res == 0xffff) {
++			send_add_vif();
++		}
++		break;
++	case 0x2107:                            /* MLME_ADD_VIF_CFM */
++		vif_res = *(uint16_t *)(sig + 12);
++		if (vif_res == 0) {
++			send_add_scan();
++		}
++		break;
++	case 0x2105:                            /* MLME_ADD_SCAN_CFM */
++		scan_res = *(uint16_t *)(sig + 12);
++		break;
++	case 0x2300:                            /* MLME_SCAN_IND */
++		scan_result(sig, data, n);
++		break;
++	case 0x2301:                            /* MLME_SCAN_DONE_IND */
++		scan_done++;
++		break;
++	default:
++		break;
++	}
++	printf("XC5 WLBT: signal %#x from the firmware, %u data bytes\n", id, n);
++}
++
++/* Signals from the firmware (queues 3 and 4) and our buffers it gave back (queue 2) */
 +static void
 +hip_poll(void)
 +{
@@ -2820,43 +3026,21 @@ index 0000000..c44e77a
 +		*scb(2, 1) = (uint8_t)(*scb(2, 1) + 1);
 +		fh_rfb++;
 +	}
-+	for (int guard = 0; guard < 32 && *scb(3, 1) != *scb(3, 0); guard++) {
-+		uint8_t r = *scb(3, 1);
-+		uint32_t ref = qarr(3)[r];
-+		if (ref >= HIP_OFF && ref + 64 < SHMEM_MAP) {
-+			uint8_t *m = shm + ref;
-+			uint16_t sigbuf = *(uint16_t *)(m + 10), len = *(uint16_t *)(m + 12), head = *(uint16_t *)(m + 14);
-+			uint8_t *sig = m + 20 + 4;
-+			mlme_id = *(uint16_t *)sig;
-+			mlme_ids[mlme_got % 8] = (uint16_t)mlme_id;
-+			mlme_got++;
-+			memcpy(mlme_mb, m, sizeof(mlme_mb));
-+			bzero(mlme_chain, sizeof(mlme_chain));
-+			uint32_t cref = *(uint32_t *)(m + 16);
-+			if (cref >= HIP_OFF && cref + 64 < SHMEM_MAP) {     /* chained: the next segment's data */
-+				uint8_t *c = shm + cref;
-+				uint16_t clen = *(uint16_t *)(c + 12), chead = *(uint16_t *)(c + 14);
-+				if (cref + 20u + chead + 16u < SHMEM_MAP) {
-+					memcpy(mlme_chain, c + 20 + chead, MIN((size_t)clen, sizeof(mlme_chain)));
-+				}
++	for (int q = 3; q <= 4; q++) {
++		for (int guard = 0; guard < 64 && *scb(q, 1) != *scb(q, 0); guard++) {
++			uint8_t r = *scb(q, 1);
++			uint32_t ref = qarr(q)[r];
++			if (ref >= HIP_OFF && ref + 64 < SHMEM_MAP) {
++				on_signal(ref);
++			} else {
++				printf("XC5 WLBT: TH entry %#x outside the map\n", ref);
 +			}
-+			mlme_siglen = sigbuf >= 4 ? sigbuf - 4u : 0;
-+			mlme_len = len;
-+			bzero(mlme_data, sizeof(mlme_data));
-+			if (ref + 20u + head + MIN((uint32_t)len, 24u) < SHMEM_MAP) {
-+				memcpy(mlme_data, m + 20 + head, MIN((size_t)len, sizeof(mlme_data)));
-+			}
-+			printf("XC5 WLBT: TH ctrl signal %#x (signal %u bytes, data %u) mbulk %#x: %08x %08x %08x %08x\n", mlme_id,
-+			    mlme_siglen, len, ref, mlme_data[0], mlme_data[1], mlme_data[2], mlme_data[3]);
-+		} else {
-+			printf("XC5 WLBT: TH ctrl entry %#x outside the map\n", ref);
++			*scb(q, 1) = (uint8_t)(r + 1);
++			__asm__ volatile ("dsb sy" ::: "memory");
++			q_put(5, ref);          /* back to the firmware */
 +		}
-+		*scb(3, 1) = (uint8_t)(r + 1);
-+		__asm__ volatile ("dsb sy" ::: "memory");
-+		q_put(5, ref);                  /* back to the firmware */
 +	}
 +}
-+
 +static void
 +load_ls(void)
 +{
@@ -3079,15 +3263,14 @@ index 0000000..c44e77a
 +		printf("XC5 hip mib=%u cfm=%#x ver=%u mlme=%#x ls=%u log %u bad %u | q0 w%u r%u q2 w%u q3 w%u r%u q5 w%u r%u\n",
 +		    hip_mib, hb_cfm, in->conf_ver, h->sap_mlme, ls_sz, log_recs, log_bad, *scb(0, 0), *scb(0, 1), *scb(2, 0),
 +		    *scb(3, 0), *scb(3, 1), *scb(5, 0), *scb(5, 1));
-+		/* wifi10: the line was cut at the screen's edge -- short lines now */
-+		printf("XC5 mlme sent=%u got=%u len=%u sig=%u\n", mlme_sent, mlme_got, mlme_len, mlme_siglen);
-+		printf("XC5 ids %x %x %x %x %x %x %x %x\n", mlme_ids[0], mlme_ids[1], mlme_ids[2], mlme_ids[3], mlme_ids[4],
-+		    mlme_ids[5], mlme_ids[6], mlme_ids[7]);
-+		printf("XC5 mb %08x %08x %08x\n   %08x %08x\n", mlme_mb[0], mlme_mb[1], mlme_mb[2], mlme_mb[3], mlme_mb[4]);
-+		printf("XC5 md %08x %08x %08x\n   %08x %08x %08x\n", mlme_data[0], mlme_data[1], mlme_data[2], mlme_data[3],
-+		    mlme_data[4], mlme_data[5]);
-+		printf("XC5 mc %08x %08x %08x %08x\n", mlme_chain[0], mlme_chain[1], mlme_chain[2], mlme_chain[3]);
-+	}
++		/* wifi10: the line was cut at the screen's edge -- short lines */
++		printf("XC5 mlme sent=%u got=%u rfb=%u ids %x %x %x %x\n", mlme_sent, mlme_got, fh_rfb, mlme_ids[(mlme_got + 4) % 8],
++		    mlme_ids[(mlme_got + 5) % 8], mlme_ids[(mlme_got + 6) % 8], mlme_ids[(mlme_got + 7) % 8]);
++		printf("XC5 chip %x plat %x build %u\n", mib_chip, mib_plat, mib_build);
++		printf("XC5 vif %x scan %x ind %u done %u aps %u\n", vif_res, scan_res, scan_inds, scan_done, ap_count);
++		for (uint32_t k = 0; k < ap_count && k < APN; k++) {
++			printf("XC5 ap %u %d %.24s\n", aps[k].mhz, aps[k].rssi, aps[k].ssid);
++		}	}
 +	/* the firmware's last log lines, oldest first */
 +	for (uint32_t k = log_recs >= LOGN ? log_recs - LOGN + 1 : 1; k != 0 && k <= log_recs; k++) {
 +		printf("XC5 fw%u %s\n", k, loglines[k % LOGN]);
