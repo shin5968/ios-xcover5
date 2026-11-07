@@ -641,6 +641,7 @@ static uint32_t conn_len;
  * carries our association request), and a second try with rate elements given (MLME-ADD-INFO-ELEMENTS) */
 static uint8_t req_ids[12], req_rates[12], n_req_ids, n_req_rates;
 static uint32_t req_len, conn_try, info_res = 0xffff;
+static int rate_retry;
 static uint32_t mib_chip, mib_plat, mib_build, vif_res = 0xffff, scan_res = 0xffff, scan_inds, scan_done;
 #define APN 16
 static struct {
@@ -755,7 +756,12 @@ send_add_vif(void)
 	s[10] = 1;                              /* vif */
 	memcpy(s + 12, vif_mac, 6);
 	s[18] = 2;                              /* FAPI_VIFTYPE_STATION */
-	memcpy(s + 20, vif_mac, 6);
+	/*
+	 * device_address: all ones for a station (cfg80211_ops.c slsi_connect; the real one only for P2P). wifi16: with
+	 * our own address there the firmware's association request had OFDM rates only (no 1/2/5.5/11, as P2P does) and
+	 * the hotspot, whose basic rates are those, refused it with status 18.
+	 */
+	memset(s + 20, 0xff, 6);
 	send_sig(s, sizeof(s), NULL, 0);
 }
 
@@ -1168,7 +1174,7 @@ on_signal(uint32_t ref)
 		conn_ind = *(uint16_t *)(sig + 12);
 		conn_len = n;
 		memcpy(conn_data, data, MIN((size_t)n, sizeof(conn_data)));
-		if (conn_ind == 0x8212 && conn_try == 0 && ap_sel >= 0) {
+		if (conn_ind == 0x8212 && conn_try == 0 && ap_sel >= 0 && rate_retry) {    /* xc5wretry=1 (wifi16: no help) */
 			conn_try = 1;
 			/* MLME-ADD-INFO-ELEMENTS.request 0x2004 {vif 1; purpose 0x0010 association request}: the AP's rates */
 			uint8_t s[26] = { 0x04, 0x20 };
@@ -1530,6 +1536,7 @@ xc5_wlbt_start(void)
 	}
 	PE_parse_boot_argn("xc5wlan", &wlan_mode, sizeof(wlan_mode));
 	PE_parse_boot_argn("xc5ssid", want_ssid, sizeof(want_ssid) - 1);
+	PE_parse_boot_argn("xc5wretry", &rate_retry, sizeof(rate_retry));
 	thread_t thread;
 	if (kernel_thread_start(wlbt_thread, NULL, &thread) == KERN_SUCCESS) {
 		thread_deallocate(thread);
