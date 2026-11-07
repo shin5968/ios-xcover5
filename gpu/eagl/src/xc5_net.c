@@ -173,6 +173,48 @@ static int resolve(void) {
     return 8;
 }
 
+/*
+ * bit 4: an HTTP request over TCP through en0 gets its answer -- http://captive.apple.com/hotspot-detect.html, which
+ * says "Success" (what iOS itself asks to see whether a network reaches the internet). wifi19: names resolve, but
+ * Safari's page stays black (white when scrolled past): this tells the network from the drawing.
+ */
+static int fetch(void) {
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo("captive.apple.com", "80", &hints, &res) != 0 || res == NULL) {
+        say("xc5net: captive.apple.com does not resolve");
+        return 0;
+    }
+    int s = socket(AF_INET, SOCK_STREAM, 0);
+    struct timeval tv = { 10, 0 };
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    if (s < 0 || connect(s, res->ai_addr, res->ai_addrlen) != 0) {
+        say("xc5net: connect to captive.apple.com:80 failed");
+        if (s >= 0) close(s);
+        freeaddrinfo(res);
+        return 0;
+    }
+    freeaddrinfo(res);
+    static const char req[] = "GET /hotspot-detect.html HTTP/1.0\r\nHost: captive.apple.com\r\n"
+        "User-Agent: xc5net\r\n\r\n";
+    send(s, req, sizeof req - 1, 0);
+    char buf[1024];
+    size_t got = 0;
+    ssize_t n;
+    while (got < sizeof buf - 1 && (n = recv(s, buf + got, sizeof buf - 1 - got, 0)) > 0)
+        got += (size_t)n;
+    buf[got] = 0;
+    close(s);
+    int success = strstr(buf, "Success") != NULL;
+    char *eol = strchr(buf, '\r');
+    if (eol) *eol = 0;
+    say("xc5net: HTTP %zu bytes: %.60s%s", got, buf, success ? ", Success" : "");
+    return (got > 0 && strncmp(buf, "HTTP/1.", 7) == 0) ? 0x10 : 0;
+}
+
 static void *worker(void *arg) {
     (void)arg;
     char info[128], ifn[16], ip[16], mask[16], gw[16], dns[16];
@@ -225,9 +267,11 @@ static void *worker(void *arg) {
         int bits = check(st, ifn);
         if ((bits & 4) && !(stat & 8))
             bits |= resolve();
-        stat = 1 | bits | (stat & 8);
+        if ((bits & 8) || (stat & 8))
+            bits |= fetch();
+        stat = 1 | bits | (stat & 0x18);
         report(stat);
-        if ((stat & 0xe) == 0xe) break;
+        if ((stat & 0x1e) == 0x1e) break;
     }
     say("xc5net: done, state %#x", stat);
     return NULL;
