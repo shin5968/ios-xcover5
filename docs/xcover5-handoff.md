@@ -91,9 +91,30 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   S2MPU12를 ACPM으로 읽기(메일박스 0x11900000, SRAM 0x02039000, initdata 0x7000, 채널 2; 프로토콜은 y2sios/Scion 문서대로,
   코드 복사 없음, **읽기만**). 시험 이미지 `xc5-ios-pmic1-console.tar`(wall2 기준 + `xc5metal=1 xc5ckpt=1 xc5pmic=1`).
 
+- **전원 키는 이미 XCover 키가 대신함**(사용자: 그걸로 충분) → PMIC 전원 키(`xc5pmic=2`)는 보류.
+- **날짜(RTC)**: `xc5_pmic.c`가 부팅 때(launchd 전) PMIC RTC 블록 2의 0x00-0x0B를 ACPM으로 읽고(Scion이 정리한 S2MPS18
+  배치: CTRL, UPDATE, CAPSEL, MSEC, SEC, MIN, HOUR, WEEK, DAY, MONTH, YEAR(2000+), 이진) S-Boot가 잡아 둔 값에 업타임을
+  더해 `clock_set_calendar_microtime`. 2024-2099가 아니면 안 씀. 기본 켜짐(`xc5rtc=0`으로 끔). 커밋 b6f3524, xnu CI
+  42351773001. 시험 이미지 `xc5-ios-rtc1-console.tar`(+ `xc5pmic=1`이라 PMIC/RTC 레지스터 덤프도 찍힘). 볼 것:
+  `XC5 RTC: CTRL .. YEAR ..`, `XC5 RTC: the PMIC's clock says ...: calendar set`, 잠금화면 날짜.
+- **Wi-Fi 조사**: 칩은 Exynos 850 내장 Samsung SCSC "WLBT"(`scsc_wifibt@119C0000`, 예약 메모리 `wifibt_if` 12 MB,
+  인터럽트 MBOX/ALIVE/CFG_REQ/WDOG, syscon: wlbt_remap 0x14C50000, boot_cfg 0x14C60000, BAAW들). Broadcom이 아니라서
+  S9(brcmfmac)·y2sios 하드웨어 드라이버는 못 씀. iOS 쪽 층(en0 + 가짜 IO80211Controller + apple80211 ioctl, y2sios
+  `RedwoodWLAN.cpp`/`redwood_apple80211.c`, Scion `drivers/wifi/hakios.apple80211.c`)은 재사용 가능. 하드웨어 쪽 참고 소스:
+  GitHub `jameskdev/android_kernel_samsung_a21s-common`(Exynos 850 = S5E3830, GPL, 사실만 읽기)
+  `drivers/misc/samsung/scsc/platform_mif_3830.c`, `mif_reg_S5E3830.h`, `mxman.c`(SCSC 코어 약 1.4 MB), `drivers/net/wireless/scsc`
+  (약 3 MB). 펌웨어는 순정 AP tar의 vendor에서: `tools/xcover5/dev/stockfw.sh`(+ `lpunpack.py`) → WSL `~/xc5/stock/vendor`
+  (git에 넣지 않음).
+  - 추출 결과(2026-11-07): `vendor/wifi/mx140.bin`(1,573,842 B, 헤더 "smxf", WLBT 펌웨어), `mx140_t.bin`(다른 변형),
+    `mx140_wlan.hcf`/`mx140_bt.hcf` 등 설정, `hydra_config.sdb`, `slsi_reg_database.bin`, `platform.txt` =
+    `nacho_s612_xcover5_kor`, build_id `S612_E3830_R4-1_Y22W51A`(코어 이름 S612). `vendor/firmware`에 터치·오디오(ABOX,
+    aw8896 앰프)·카메라 펌웨어도 있음.
+  - 규모: SCSC 코어 + 무선 드라이버 합쳐 원본 약 4.5 MB(GPL, 사실만 참고). 단계: (1) 펌웨어를 예약 메모리에 넣고 WLBT를
+    리셋 해제해 메일박스 응답 받기, (2) MX 관리 채널, (3) HIP(데이터 경로)와 MLME(검색·접속), (4) iOS 쪽 en0/apple80211.
+
 ## 다음 행동
 
-0. **전원 키**: pmic1 콘솔에서 `XC5 PMIC: ACPM initdata ...`, `channel 2: ...`, `top block register 0 ...`, `pmic 00: ...` 덤프,
+0. **전원 키**(보류): pmic1 콘솔에서 `XC5 PMIC: ACPM initdata ...`, `channel 2: ...`, `top block register 0 ...`, `pmic 00: ...` 덤프,
    그리고 전원 키를 누를 때 `XC5 PMIC: pmic RR: AA -> BB` 줄. 바뀌는 레지스터/비트를 찾아 `xc5pmic=2 xc5pwrreg=0xRR
    xc5pwrbit=N (xc5pwrlow=1)`로 → keys 드라이버의 Power(비트 5)에 합쳐짐. 채널을 못 찾거나 읽기가 실패(`--`)하면 ACPM 레이아웃
    (initdata 오프셋, 첫 페이지 접근 불가 등)부터 확인. RTC 블록 덤프는 다음 작업(RTC 시간) 재료.
