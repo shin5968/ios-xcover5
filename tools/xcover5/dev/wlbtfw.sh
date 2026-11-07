@@ -4,7 +4,7 @@
 #   shim/xcover5/out/wifi/ka.bin     the PMU boot patch ("KA patch", an 8051 program), as little-endian words, taken
 #                                    from Samsung's GPL driver source (Galaxy A21s kernel, platform_mif_3830.c ka_patch[])
 # Then: python tools/xcover5/mkdrop.py ... wifi/mx140.bin=shim/xcover5/out/wifi/mx140.bin wifi/ka.bin=shim/xcover5/out/wifi/ka.bin \
-#   wifi/wlan.hcf=shim/xcover5/out/wifi/wlan.hcf wifi/wlan_sw.hcf=shim/xcover5/out/wifi/wlan_sw.hcf
+#   wifi/wlan.hcf=shim/xcover5/out/wifi/wlan.hcf wifi/wlan_sw.hcf=shim/xcover5/out/wifi/wlan_sw.hcf wifi/log-strings.bin=shim/xcover5/out/wifi/log-strings.bin
 set -e
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 OUT=$REPO/shim/xcover5/out/wifi; mkdir -p "$OUT"
@@ -12,6 +12,8 @@ cp ~/xc5/stock/vendor/wifi/mx140.bin "$OUT/mx140.bin"
 # the WLAN MIB the Samsung driver puts in the HIP4 (wlan.hcf + wlan_sw.hcf, firmware-prefixed on the phone)
 cp ~/xc5/stock/vendor/wifi/mx140_wlan.hcf "$OUT/wlan.hcf"
 cp ~/xc5/stock/vendor/wifi/mx140_wlan_sw.hcf "$OUT/wlan_sw.hcf"
+# the firmware log's format strings (same build as mx140.bin), for decoding mxlog in the kernel
+cp ~/xc5/stock/vendor/wifi/mx140/debug/common/log-strings.bin "$OUT/log-strings.bin"
 SRC=https://raw.githubusercontent.com/jameskdev/android_kernel_samsung_a21s-common/HEAD/drivers/misc/samsung/scsc/platform_mif_3830.c
 curl -sSfL "$SRC" -o "$OUT/.platform_mif_3830.c"
 python3 - "$OUT/.platform_mif_3830.c" "$OUT/ka.bin" <<'PY'

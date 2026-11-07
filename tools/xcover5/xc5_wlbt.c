@@ -233,6 +233,7 @@ static uint32_t conf_off;
 static uint32_t hb_power, hb_cfg, hb_msgs, hb_first[4], hb_last[3], hb_sent, hb_cfm;
 static bool started;                    /* MM_START_IND seen */
 static uint64_t hb_smc;
+static uint32_t hb_panic_off;
 
 static void
 make_conf(uint32_t runtime)
@@ -415,8 +416,17 @@ make_hip(void)
 	}
 	hip = shm + HIP_OFF;
 	bzero(hip, SHMEM_MAP - HIP_OFF);
-	/* the MIB: the stock files the Samsung driver loads (wlan.hcf, wlan_sw.hcf as mx140_*), whole, back to back */
-	int64_t a = read_file("/private/var/xc5/wifi/wlan.hcf", hip + HIP_MIB, HIP_MIB_SZ);
+	/*
+	 * the MIB: the stock files the Samsung driver loads (wlan.hcf, wlan_sw.hcf as mx140_*), whole, back to back.
+	 * wifi7 (video 204718): mib=0 on the boot that installed them -- they came with the drop after this ran; so wait.
+	 */
+	int64_t a = -1;
+	for (int s = 0; s < 90 && a <= 0; s++) {
+		a = read_file("/private/var/xc5/wifi/wlan.hcf", hip + HIP_MIB, HIP_MIB_SZ);
+		if (a <= 0) {
+			delay(1000000);
+		}
+	}
 	int64_t b = a > 0 ? read_file("/private/var/xc5/wifi/wlan_sw.hcf", hip + HIP_MIB + a, HIP_MIB_SZ - (size_t)a) : -1;
 	hip_mib = (uint32_t)((a > 0 ? a : 0) + (b > 0 ? b : 0));
 
@@ -446,6 +456,159 @@ make_hip(void)
 	return true;
 }
 
+/*
+ * The firmware's log (mxlog.c, mxlog_transport.c; facts only): the mxlog stream is a ring of 4-byte packets. A record is
+ * a header word (sync in [31:16]: 0x9669 phase 5, 0xA55A phase 4; level [15:8]; length [7:0], in words for phase 5,
+ * in characters for phase 4) and its payload. Phase 5: timestamp, the offset of the format string in log-strings.bin
+ * (the firmware's debug file of the same build: vendor/etc/wifi/mx140/debug/common/log-strings.bin, put in the drop as
+ * wifi/log-strings.bin), then 32-bit arguments; a %s argument is itself an offset in that file.
+ * wifi7: after START_REQ for WLAN the firmware filled its HIP4 fields (version 4) but sent no START_CFM, and its log
+ * stopped growing (write index 194). The decoded lines go to the console and the last ones into the heartbeat.
+ */
+#define LOGN 5
+static char *ls;                        /* log-strings.bin */
+static uint32_t ls_sz, log_recs, log_bad;
+static char loglines[LOGN][112];
+
+static bool
+is_flag(char c)
+{
+	return c == '-' || c == '+' || c == ' ' || c == '#' || c == '.' || (c >= '0' && c <= '9');
+}
+
+static void
+fw_format(char *out, size_t outsz, const char *fmt, const uint32_t *args, uint32_t nargs)
+{
+	size_t o = 0;
+	uint32_t ai = 0;
+	while (*fmt != 0 && o + 1 < outsz) {
+		if (*fmt != '%') {
+			char c = *fmt++;
+			out[o++] = (c == '\n' || c == '\r') ? ' ' : c;
+			continue;
+		}
+		if (fmt[1] == '%') {
+			out[o++] = '%';
+			fmt += 2;
+			continue;
+		}
+		/* flags and width are dropped (a format from the firmware's file is not given to snprintf as a format) */
+		fmt++;
+		while (is_flag(*fmt) || *fmt == 'l' || *fmt == 'h' || *fmt == 'z') {
+			fmt++;
+		}
+		char c = *fmt;
+		if (c == 0) {
+			break;
+		}
+		fmt++;
+		uint32_t a = ai < nargs ? args[ai] : 0;
+		ai++;
+		int n;
+		if (c == 's') {
+			n = snprintf(out + o, outsz - o, "%s", a < ls_sz ? ls + a : "<?>");
+		} else if (c == 'd' || c == 'i') {
+			n = snprintf(out + o, outsz - o, "%d", (int)a);
+		} else if (c == 'c') {
+			n = snprintf(out + o, outsz - o, "%c", (int)(a & 0x7f));
+		} else if (c == 'u') {
+			n = snprintf(out + o, outsz - o, "%u", a);
+		} else {
+			n = snprintf(out + o, outsz - o, "%x", a);
+		}
+		if (n < 0) {
+			break;
+		}
+		o += MIN((size_t)n, outsz - o - 1);
+	}
+	out[o] = 0;
+}
+
+static void
+read_log(void)
+{
+	static uint32_t words[256];
+	static char line[240];
+	struct mx_cbuf *b = &conf->mxlog.buf;
+	volatile uint32_t *ri = (volatile uint32_t *)(shm + b->read_index_loc);
+	volatile uint32_t *wi = (volatile uint32_t *)(shm + b->write_index_loc);
+	volatile uint32_t *ring = (volatile uint32_t *)(shm + b->buffer_loc);
+	uint32_t n = b->num_packets;
+	for (int guard = 0; guard < 256; guard++) {
+		uint32_t r = *ri % n, w = *wi % n, avail = (w + n - r) % n;
+		if (avail == 0) {
+			break;
+		}
+		uint32_t hdr = ring[r], bytes;
+		if ((hdr >> 16) == 0x9669) {
+			bytes = (hdr & 0xff) * 4;
+		} else if ((hdr >> 16) == 0xA55A) {
+			bytes = hdr & 0xff;
+		} else {
+			*ri = (r + 1) % n;
+			log_bad++;
+			continue;
+		}
+		uint32_t pk = (bytes + 3) / 4;
+		if (avail < 1 + pk) {
+			break;
+		}
+		for (uint32_t i = 0; i < pk; i++) {
+			words[i] = ring[(r + 1 + i) % n];
+		}
+		*ri = (r + 1 + pk) % n;
+		log_recs++;
+		if ((hdr >> 16) == 0xA55A) {
+			size_t m = MIN((size_t)bytes, sizeof(line) - 1);
+			memcpy(line, words, m);
+			line[m] = 0;
+			snprintf(loglines[log_recs % LOGN], sizeof(loglines[0]), "%s", line);
+		} else if (pk >= 2) {
+			const char *fmt = (ls != NULL && words[1] < ls_sz) ? ls + words[1] : NULL;
+			if (fmt != NULL) {
+				fw_format(line, sizeof(line), fmt, words + 2, pk - 2);
+			} else {
+				snprintf(line, sizeof(line), "fmt@%#x %x %x %x", words[1], pk > 2 ? words[2] : 0,
+				    pk > 3 ? words[3] : 0, pk > 4 ? words[4] : 0);
+			}
+			snprintf(loglines[log_recs % LOGN], sizeof(loglines[0]), "%x %s", words[0], line);
+		}
+		printf("XC5 FW %u: %s\n", log_recs, loglines[log_recs % LOGN]);
+	}
+}
+
+static void
+load_ls(void)
+{
+	if (ls_sz != 0) {
+		return;
+	}
+	if (ls == NULL) {
+		ls = kalloc_data(1u << 20, Z_WAITOK);
+		if (ls == NULL) {
+			return;
+		}
+	}
+	int64_t n = read_file("/private/var/xc5/wifi/log-strings.bin", (uint8_t *)ls, (1u << 20) - 1);
+	if (n > 0) {
+		ls[n] = 0;
+		ls_sz = (uint32_t)n;
+		printf("XC5 WLBT: log-strings.bin %u bytes: %.60s\n", ls_sz, ls);
+	}
+}
+
+/* the log is read once its strings are there, or after 60 s without them (raw offsets then) */
+static void
+poll_log(int tenths)
+{
+	if (ls_sz == 0 && tenths % 20 == 0) {
+		load_ls();
+	}
+	if (ls_sz != 0 || tenths >= 600) {
+		read_log();
+	}
+}
+
 static void
 wlbt_thread(__unused void *arg, __unused wait_result_t w)
 {
@@ -465,6 +628,7 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 	xcover5_wlbt_state[3] = (uint64_t)fwlen;
 	uint32_t entry = *(uint32_t *)(shm + 40), hdr_len = *(uint32_t *)(shm + 16);
 	uint32_t runtime = *(uint32_t *)(shm + 36), panic_off = *(uint32_t *)(shm + 176);
+	hb_panic_off = (panic_off != 0 && panic_off + 64 < SHMEM_MAP) ? panic_off : 0;
 	xcover5_wlbt_state[2] = entry;
 	printf("XC5 WLBT: firmware %lld bytes, header v%u.%u, api %u.%u, entry %#x, runtime %#x, panic record at %#x, "
 	    "build %.40s\n", fwlen, *(uint16_t *)(shm + 14), *(uint16_t *)(shm + 12), *(uint16_t *)(shm + 22),
@@ -567,7 +731,6 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 
 	/* 20 s of what it does */
 	uint32_t last_states = 0xffffffff, last_sr0 = 0xffffffff, last_sr1 = 0xffffffff;
-	uint32_t last_log = 0;
 	bool asked = false;
 	for (int t = 0; t < 200; t++) {
 		read_mgmt();
@@ -579,11 +742,8 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 				start_service(0, 0);            /* the NULL service */
 			}
 		}
-		uint32_t logw = *(volatile uint32_t *)(shm + conf->mxlog.buf.write_index_loc);
-		if (logw != last_log) {
-			printf("XC5 WLBT: mxlog write index %u (the firmware is logging)\n", logw);
-			last_log = logw;
-		}
+		poll_log(t);
+
 		uint32_t st = rd(pmu, WLBT_STATES), sr0 = rd(mbox, INTSR0), sr1 = rd(mbox, INTSR1);
 		if (st != last_states || sr0 != last_sr0 || sr1 != last_sr1 || t % 50 == 0) {
 			char when[32];
@@ -595,10 +755,16 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 		}
 		delay(100000);
 	}
-	/* the early lines scroll away while the system starts: the outcome is said again every 20 s for 3 minutes */
-	for (int i = 0; i < 9; i++) {
-		uint32_t *p = (uint32_t *)(shm + ((panic_off != 0 && panic_off + 64 < SHMEM_MAP) ? panic_off : 0));
+	/* then the log and the management ring every 0.5 s for good; the outcome said again every 20 s for 3 minutes */
+	for (int i = 0, tick = 0;; tick++) {
 		read_mgmt();
+		poll_log(200 + tick * 5);
+		if (tick % 40 != 0 || i >= 9) {
+			delay(500000);
+			continue;
+		}
+		i++;
+		uint32_t *p = (uint32_t *)(shm + ((panic_off != 0 && panic_off + 64 < SHMEM_MAP) ? panic_off : 0));
 		printf("XC5 WLBT summary: fw %lld B entry %#x | power %d CFG_REQ %d SMC %#llx | STATUS %#x STATES %#x | ISSR0-3 "
 		    "%#x %#x %#x %#x | INTSR0 %#x INTMSR0 %#x INTSR1 %#x | mgmt to-AP r%u w%u, mxlog w%u | panic %08x %08x %08x\n",
 		    fwlen, entry, (int)(v & 1), (int)cfg, smc, rd(pmu, WLBT_STATUS), rd(pmu, WLBT_STATES), rd(mbox, ISSR(0)),
@@ -606,7 +772,7 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 		    rd(mbox, INTSR1), *(volatile uint32_t *)(shm + conf->mgmt.to_ap.buf.read_index_loc),
 		    *(volatile uint32_t *)(shm + conf->mgmt.to_ap.buf.write_index_loc),
 		    *(volatile uint32_t *)(shm + conf->mxlog.buf.write_index_loc), p[0], p[1], p[2]);
-		delay(20 * 1000 * 1000);
+		delay(500000);
 	}
 }
 
@@ -628,10 +794,14 @@ xc5_wlbt_heartbeat(void)
 		struct hip_cfg_v5 *v5 = (struct hip_cfg_v5 *)(hip + HIP_V5);
 		struct hip_cfg_v4 *v4 = (struct hip_cfg_v4 *)(hip + HIP_V4);
 		struct hip_cfg_head *h = in->conf_ver == 4 ? &v4->h : &v5->h;
-		printf("XC5 hip cfm=%#x ver=%u compat=%#x mlme=%#x ma=%#x build=%#x patch=%#x room=%u/%u scb=%08x %08x q0 %u/%u "
-		    "q3 %u/%u mib=%u\n", hb_cfm, in->conf_ver, h->compat_flag, h->sap_mlme, h->sap_ma, h->fw_build, h->fw_patch,
-		    h->headroom, h->tailroom, *(volatile uint32_t *)(hip + HIP_SCBRD), *(volatile uint32_t *)(hip + HIP_SCBRD + 4),
-		    hip[HIP_Q + 1024], hip[HIP_Q + 1025], hip[HIP_Q + 3 * HIP_QSZ + 1024], hip[HIP_Q + 3 * HIP_QSZ + 1025], hip_mib);
+		printf("XC5 hip mib=%u cfm=%#x ver=%u mlme=%#x build=%#x scb=%08x q0 %u/%u q3 %u/%u ls=%u log %u bad %u\n",
+		    hip_mib, hb_cfm, in->conf_ver, h->sap_mlme, h->fw_build, *(volatile uint32_t *)(hip + HIP_SCBRD),
+		    hip[HIP_Q + 1024], hip[HIP_Q + 1025], hip[HIP_Q + 3 * HIP_QSZ + 1024], hip[HIP_Q + 3 * HIP_QSZ + 1025], ls_sz,
+		    log_recs, log_bad);
+	}
+	/* the firmware's last log lines, oldest first */
+	for (uint32_t k = log_recs >= LOGN ? log_recs - LOGN + 1 : 1; k != 0 && k <= log_recs; k++) {
+		printf("XC5 fw%u %s\n", k, loglines[k % LOGN]);
 	}
 	printf("XC5 wlbt pwr=%u cfg=%u smc=%#llx st=%#x issr0=%#x sr0=%#x mgmt r%u w%u msgs=%u first=%08x last=%08x %08x "
 	    "sent=%u out r%u w%u log w%u\n", hb_power, hb_cfg, hb_smc, rd(pmu, WLBT_STATES), rd(mbox, ISSR(0)),
