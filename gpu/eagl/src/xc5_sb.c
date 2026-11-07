@@ -305,8 +305,27 @@ static void image_added(const struct mach_header *header, intptr_t image_slide) 
     guard_poster_kit();         /* once PosterKit's classes are there */
 }
 
+/*
+ * Boot 76: with SpringBoard alive, the lock screen came up with iOS's own stock wallpaper (CollectionsPoster drew it),
+ * and a second later the wallpaper went black while the clock stayed: "A5XELTE FB: display-off request ignored
+ * (a5fb_keep_on)" at that moment. SpringBoard dims and blanks the screen on its idle timer (here at once, with no
+ * user activity yet), and having blanked it, it takes the live poster down; the panel stays on (a5fb_keep_on) and shows
+ * the wallpaperless frame. There is no power key here to wake it. SpringBoard's own defaults (SBDefaults, domain
+ * com.apple.springboard) have the switches: SBDisableAutoDim (disableAutoDim) and SBDontDimOrLockOnAC
+ * (dontDimOrLockWhileConnectedToPower). Both set before SpringBoard reads them. /private/var/xc5/autodim.on leaves
+ * them alone.
+ */
+static void keep_screen_on(void) {
+    if (access(DROP_DIR "autodim.on", F_OK) == 0) return;
+    CFPreferencesSetAppValue(CFSTR("SBDisableAutoDim"), kCFBooleanTrue, kCFPreferencesCurrentApplication);
+    CFPreferencesSetAppValue(CFSTR("SBDontDimOrLockOnAC"), kCFBooleanTrue, kCFPreferencesCurrentApplication);
+    CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);
+    say("xc5sb: SBDisableAutoDim and SBDontDimOrLockOnAC set: no idle dim or blank");
+}
+
 __attribute__((constructor)) static void xc5_sb_start(void) {
     if (strcmp(getprogname(), "SpringBoard") != 0) return;
+    keep_screen_on();
     {
         size_t length = 0;
         const void *cache = _dyld_get_shared_cache_range(&length);
