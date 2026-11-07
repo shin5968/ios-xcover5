@@ -2106,10 +2106,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..33a26ab
+index 0000000..65b2873
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,828 @@
+@@ -0,0 +1,864 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -2519,6 +2519,38 @@ index 0000000..33a26ab
 +	h->mib_sz = hip_mib;
 +}
 +
++/*
++ * What the Samsung driver gives the firmware of an .hcf file is not the file (mgt.c slsi_mib_open_file and
++ * slsi_mib_get_platform): an 8-byte header (byte 7 = 1, the format) is dropped, then, when the payload starts with the
++ * keys 0xFFFE (version, length 1, value 1) and 0xFFFF (platform name, a vldata octet string), those are dropped too.
++ * wifi8 (video 210843): with the whole files the firmware logged "Received SM_MSG_START_REQ for service: 1" and then
++ * nothing more, and no START_CFM. In place at p; returns the length left (0 if the header is not there).
++ */
++static uint32_t
++hcf_payload(uint8_t *p, uint32_t len)
++{
++	if (len < 8 || p[7] != 1) {
++		return 0;
++	}
++	uint32_t pos = 8;
++	if (len >= pos + 12 && p[pos] == 0xFE && p[pos + 1] == 0xFF && p[pos + 2] == 1 && p[pos + 3] == 0 &&
++	    p[pos + 4] == 1 && p[pos + 5] == 0 && p[pos + 6] == 0xFF && p[pos + 7] == 0xFF) {
++		uint32_t q = pos + 8;
++		uint32_t nlen = p[q] | ((uint32_t)p[q + 1] << 16);   /* as the driver reads it */
++		q += 2;
++		uint8_t vh = p[q++];
++		uint32_t vl = vh & 0x17;
++		if ((vh & 0xA0) != 0 && vl <= 2 && nlen >= 2 + vl && q + nlen <= len) {
++			nlen -= 1 + vl;
++			q += vl;
++			nlen += nlen & 1;
++			pos = q + nlen;
++		}
++	}
++	memmove(p, p + pos, len - pos);
++	return len - pos;
++}
++
 +static bool
 +make_hip(void)
 +{
@@ -2539,8 +2571,12 @@ index 0000000..33a26ab
 +			delay(1000000);
 +		}
 +	}
-+	int64_t b = a > 0 ? read_file("/private/var/xc5/wifi/wlan_sw.hcf", hip + HIP_MIB + a, HIP_MIB_SZ - (size_t)a) : -1;
-+	hip_mib = (uint32_t)((a > 0 ? a : 0) + (b > 0 ? b : 0));
++	uint32_t pa = a > 0 ? hcf_payload(hip + HIP_MIB, (uint32_t)a) : 0;
++	int64_t b = pa > 0 ? read_file("/private/var/xc5/wifi/wlan_sw.hcf", hip + HIP_MIB + pa, HIP_MIB_SZ - pa) : -1;
++	uint32_t pb = b > 0 ? hcf_payload(hip + HIP_MIB + pa, (uint32_t)b) : 0;
++	hip_mib = pa + pb;
++	bzero(hip + HIP_MIB + hip_mib, HIP_MIB_SZ - hip_mib);
++	printf("XC5 WLBT: MIB payloads %u of %lld + %u of %lld bytes\n", pa, a, pb, b);
 +
 +	struct hip_cfg_v5 *v5 = (struct hip_cfg_v5 *)(hip + HIP_V5);
 +	struct hip_cfg_v4 *v4 = (struct hip_cfg_v4 *)(hip + HIP_V4);
