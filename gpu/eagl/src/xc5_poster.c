@@ -71,15 +71,15 @@ static int read_word(uintptr_t at, uintptr_t *value) {
         KERN_SUCCESS && got == sizeof *value;
 }
 
-static void sample(int n) {
+static void sample_thread(int n, mach_port_t th, const char *tag) {
     arm_thread_state64_t st;
     mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
     char line[220], a[24];
     size_t len = 0;
     Dl_info info;
 
-    if (thread_suspend(main_thread) != KERN_SUCCESS) return;
-    kern_return_t kr = thread_get_state(main_thread, ARM_THREAD_STATE64, (thread_state_t)&st, &count);
+    if (thread_suspend(th) != KERN_SUCCESS) return;
+    kern_return_t kr = thread_get_state(th, ARM_THREAD_STATE64, (thread_state_t)&st, &count);
     uintptr_t pc = (uintptr_t)arm_thread_state64_get_pc(st), lr = (uintptr_t)arm_thread_state64_get_lr(st);
     uintptr_t fp = (uintptr_t)arm_thread_state64_get_fp(st), frames[8];
     int nf = 0;
@@ -90,10 +90,10 @@ static void sample(int n) {
         if (next <= fp) break;
         fp = next;
     }
-    thread_resume(main_thread);
-    if (kr != KERN_SUCCESS) { say("xc5poster: #%d main thread state: %d", n, kr); return; }
+    thread_resume(th);
+    if (kr != KERN_SUCCESS) { say("xc5poster: #%d%s thread state: %d", n, tag, kr); return; }
     fmt_addr(a, sizeof a, pc & 0x0000000fffffffffUL);
-    len += (size_t)snprintf(line + len, sizeof line - len, "xc5poster: #%d pc %s", n, a);
+    len += (size_t)snprintf(line + len, sizeof line - len, "xc5poster: #%d%s pc %s", n, tag, a);
     fmt_addr(a, sizeof a, lr & 0x0000000fffffffffUL);
     len += (size_t)snprintf(line + len, sizeof line - len, " lr %s bt", a);
     for (int i = 0; i < nf && len < sizeof line - 20; i++) {
@@ -103,15 +103,42 @@ static void sample(int n) {
     say("%s", line);
     if (dladdr((void *)(pc & 0x0000000fffffffffUL), &info) && info.dli_fname != NULL) {
         const char *base = strrchr(info.dli_fname, '/');
-        say("xc5poster: #%d in %s (%s)", n, base ? base + 1 : info.dli_fname,
+        say("xc5poster: #%d%s in %s (%s)", n, tag, base ? base + 1 : info.dli_fname,
             info.dli_sname ? info.dli_sname : "?");
     }
+}
+
+/* Boot 81: the Photos app's main thread waits on checkpointd's reply; checkpointd's work runs on queue
+ * threads, so in a daemon (not an app) every thread is sampled, as "t1".."t7". */
+static int all_threads;
+
+static void sample(int n) {
+    if (!all_threads) {
+        sample_thread(n, main_thread, "");
+        return;
+    }
+    thread_act_array_t list;
+    mach_msg_type_number_t count = 0;
+    mach_port_t self = mach_thread_self();
+    if (task_threads(mach_task_self(), &list, &count) != KERN_SUCCESS) return;
+    int shown = 0;
+    for (mach_msg_type_number_t i = 0; i < count; i++) {
+        char tag[8];
+        if (list[i] != self && shown < 7) {
+            snprintf(tag, sizeof tag, " t%u", i);
+            sample_thread(n, list[i], tag);
+            shown++;
+        }
+        mach_port_deallocate(mach_task_self(), list[i]);
+    }
+    mach_port_deallocate(mach_task_self(), self);
+    vm_deallocate(mach_task_self(), (vm_address_t)list, count * sizeof list[0]);
 }
 
 static void *sampler(void *arg) {
     (void)arg;
     for (int n = 1; n <= 40; n++) {
-        sleep(1);
+        sleep(all_threads ? 3 : 1);
         sample(n);
     }
     return NULL;
@@ -128,6 +155,7 @@ __attribute__((constructor)) static void xc5_poster_init(void) {
         slide = cache_lo - CACHE_BASE;
     }
     main_thread = mach_thread_self();       /* constructors run on the main thread */
+    all_threads = strcmp(getprogname(), "checkpointd") == 0;
     say("xc5poster: loaded in %s (pid %d), cache slide %#lx", getprogname(), getpid(), (unsigned long)slide);
     if (pthread_create(&t, NULL, sampler, NULL) == 0) pthread_detach(t);
 }

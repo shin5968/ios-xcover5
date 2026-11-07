@@ -361,6 +361,9 @@ static const struct {
 	 * screen with no crash, and its own start was hidden under that screen */
 	{ "/MobileSlideShow.app/MobileSlideShow", "xc5photos", "/private/var/xc5/lib/libxc5poster.dylib",
 	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5poster.dylib", "MobileSlideShow" },
+	/* boot 81: Photos' main thread waits on checkpointd (MCCopyCheckpointValue); its threads sampled too */
+	{ "/usr/libexec/checkpointd", "xc5photos", "/private/var/xc5/lib/libxc5poster.dylib",
+	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5poster.dylib", "checkpointd" },
 	/* xc5mtl=1/2: Metal M3, chronod (the widgets' renderer) asks Metal for a device with
 	 * RedwoodMetal.bundle named on IOAcceleratorES (gpu/metal/xc5_mtl.c; needs xc5metal=1) */
 	{ "/ChronoCore.framework/Support/chronod", "xc5mtl", "/private/var/xc5/lib/libxc5mtl.dylib",
