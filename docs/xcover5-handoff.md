@@ -99,6 +99,15 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   더해 `clock_set_calendar_microtime`. 2024-2099가 아니면 안 씀. 기본 켜짐(`xc5rtc=0`으로 끔). 커밋 b6f3524, xnu CI
   42351773001. 시험 이미지 `xc5-ios-rtc1-console.tar`(+ `xc5pmic=1`이라 PMIC/RTC 레지스터 덤프도 찍힘). 볼 것:
   `XC5 RTC: CTRL .. YEAR ..`, `XC5 RTC: the PMIC's clock says ...: calendar set`, 잠금화면 날짜.
+  - 사례 조사(2026-11-07): **Samsung의 S2MPU12 RTC 드라이버 원본**이 Galaxy A21s 커널(같은 Exynos 850,
+    GitHub `jameskdev/android_kernel_samsung_a21s-common` `drivers/rtc/rtc-s2mpu12.c`, `include/linux/mfd/samsung/rtc-s2mp.h`,
+    `drivers/mfd/s2mpu12-core.c`; GPL, 사실만)에 있음: RTC = I2C 주소 2, `CONFIG_RTC_DRV_S2MP` 없음 → MSEC 0x04, SEC 0x05 ..
+    YEAR 0x0B, 시 `& 0x1f`(PM 비트 6), 연도 +2000, CTRL 비트0 BCD/비트1 24h. **읽기 전마다 UPDATE(0x02) |= RUDR(비트 0) 쓰고
+    1 ms 뒤 읽음**(안 하면 마지막 래치 값). 안드로이드는 `CONFIG_RTC_HCTOSYS=y`로 부팅 때 이 시계로 시간을 맞춤.
+    Scion(S9, S2MPS18)은 같은 배치, RUDR 안 쓰고 S-Boot 래치 + 업타임(폰에서 2018-01-01이 나왔다고 적음, 즉 시계 미설정).
+    y2sios/Scion은 RTC 없을 때 `epoch=` 부팅 인자/`/chosen/boot-epoch`로 PE의 시간 함수를 채움(`GenericARMPE.cpp`).
+  - 조치(커밋 12d416e, xnu CI 42357159161): 우리도 RUDR 래치를 한 번 씀(`xc5rtclatch=0`이면 읽기만), 시 마스크 0x1f.
+    시험 이미지 `xc5-ios-rtc2-console.tar`(rtc1 대체). 볼 것: `XC5 RTC: latched (UPDATE 0x.. | RUDR): 0` 다음 날짜.
 - **Wi-Fi 조사**: 칩은 Exynos 850 내장 Samsung SCSC "WLBT"(`scsc_wifibt@119C0000`, 예약 메모리 `wifibt_if` 12 MB,
   인터럽트 MBOX/ALIVE/CFG_REQ/WDOG, syscon: wlbt_remap 0x14C50000, boot_cfg 0x14C60000, BAAW들). Broadcom이 아니라서
   S9(brcmfmac)·y2sios 하드웨어 드라이버는 못 씀. iOS 쪽 층(en0 + 가짜 IO80211Controller + apple80211 ioctl, y2sios
