@@ -155,7 +155,9 @@ __attribute__((constructor)) static void xc5_poster_init(void) {
         slide = cache_lo - CACHE_BASE;
     }
     main_thread = mach_thread_self();       /* constructors run on the main thread */
-    all_threads = strcmp(getprogname(), "checkpointd") == 0;
+    /* boot 84: past checkpointd, the Photos app aborts on "assetsDataSourceManager.dataSource.numberOfSections == 1":
+     * its library has nothing in it, which is assetsd's side */
+    all_threads = strcmp(getprogname(), "checkpointd") == 0 || strcmp(getprogname(), "assetsd") == 0;
     say("xc5poster: loaded in %s (pid %d), cache slide %#lx", getprogname(), getpid(), (unsigned long)slide);
     if (pthread_create(&t, NULL, sampler, NULL) == 0) pthread_detach(t);
 }

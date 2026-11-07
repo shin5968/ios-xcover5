@@ -423,6 +423,9 @@ static const struct {
 	{ "/usr/libexec/checkpointd", "xc5ckpt", "/private/var/xc5/lib/libxc5ckpt.dylib",
 	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5ckpt.dylib:/private/var/xc5/lib/libxc5poster.dylib",
 	  "checkpointd" },
+	/* boot 84: the Photos app's library comes up empty (numberOfSections 0): assetsd's threads sampled */
+	{ "/AssetsLibrary.framework/Support/assetsd", "xc5photos", "/private/var/xc5/lib/libxc5poster.dylib",
+	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5poster.dylib", "assetsd" },
 	/* boot 81: Photos' main thread waits on checkpointd (MCCopyCheckpointValue); its threads sampled too */
 	{ "/usr/libexec/checkpointd", "xc5photos", "/private/var/xc5/lib/libxc5poster.dylib",
 	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5poster.dylib", "checkpointd" },
