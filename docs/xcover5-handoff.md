@@ -55,18 +55,17 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
 - **기준 이미지(부팅 77)**: `xc5-ios-wall2-console.tar` = `xc5gpu=4 xc5gl=2 xc5wall=1`, 커널은 xnu CI 42315969905 산출물,
   드롭 1794022820. CoreAnimation을 Mali로 그리고, 잠금화면에 iOS 기본 배경화면(CollectionsPoster), 잠금 해제 후 홈 화면.
 - 안 되는 것: 위젯(chronod/RenderBox, Metal 필요로 추정), 전원 키(드라이버 없음), 셀룰러/카메라 등.
-- **Metal 작업 중**(`docs/xcover5-metal-plan.md`): M1 = `libredwoodair.dylib`(y2sios AIR + A32 패치)를 mesa-ios에서 빌드.
-  CI 42337661505에서 컴파일은 되고 링크에서 `redwood_bo_cache_stats` 하나가 없었음 → `air_metal.c`에 정의 추가,
-  CI 42337985007 결과 확인 필요.
+- **Metal 작업 중**(`docs/xcover5-metal-plan.md`): **M1 완료** — mesa-ios CI 42337985007이 `lib/libredwoodair.dylib`
+  (9.8 MB, `rwa_*` 43개)을 만듦. y2sios AIR + A32 `air-integer-ubo.patch`, 우리 herodrm과 링크. 첫 시도(42337661505)는
+  `redwood_bo_cache_stats`(y2sios panfrost-retain.patch 것) 없음 → `air_metal.c`에 0으로 정의. 폰에서는 아직 안 돌림.
 
 ## 다음 행동
 
-1. mesa-ios 산출물에 `lib/libredwoodair.dylib`와 `rwa_*` 함수 수(빌드 로그 `libredwoodair: N rwa_* functions`) 확인.
-2. M2: y2sios `userland/src/redwoodmetal.m`, `redwooddrawable.m`(MIT)을 `gpu/metal/runtime/`으로 가져와 iOS 번들
+1. M2: y2sios `userland/src/redwoodmetal.m`, `redwooddrawable.m`(MIT)을 `gpu/metal/runtime/`으로 가져와 iOS 번들
    `RedwoodMetal.bundle`로 빌드. GPU 직접 호출 6곳(kMsmGemNew/Info, kDrmGemClose, kMsmGetParam, IOConnectMapMemory64,
    surface)을 XC5GPU 선택자(0 GetParam, 1 CreateBO, 2 FreeBO, 3 MapBO, 6 SurfaceBO)로, `m2m_log`는 XC5GPU Log(5)로,
    dlopen 경로 `/redwood/lib` → `/private/var/xc5/lib`.
-3. M3: 커널에 `xc5metal=1` → `IOAcceleratorES`에 `MetalPluginName=RedwoodMetal`, `MetalPluginClassName=RedwoodMetalDevice`.
+2. M3: 커널에 `xc5metal=1` → `IOAcceleratorES`에 `MetalPluginName=RedwoodMetal`, `MetalPluginClassName=RedwoodMetalDevice`.
    번들을 `/System/Library/Extensions/`에 두는 방법(드롭 존은 `/private/var/xc5`만 씀).
 
 ## 분석 도구 (`tools/xcover5/dev/`)
