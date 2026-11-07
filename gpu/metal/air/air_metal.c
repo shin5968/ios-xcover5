@@ -830,7 +830,8 @@ struct redwood_bo_cache_stats {
    uint64_t hits, misses, evicted, evicted_bytes;
    uint64_t cached_bytes, cached_bos;
 };
-extern struct redwood_bo_cache_stats redwood_bo_cache_stats;
+/* XCover5: our panfrost has no panfrost-retain.patch, so these counters are ours and stay zero. */
+struct redwood_bo_cache_stats redwood_bo_cache_stats;
 #endif
 
 /* constant buffer bindings: given to the GPU as they are, or copied (Panfrost uploads a user buffer at every draw) */
