@@ -243,6 +243,15 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   조치(커밋 ac7babe, xnu CI 42371495675): `hcf_payload()`로 같은 방식으로 자름 → wlan.hcf 4082 B + wlan_sw.hcf 268 B = mib 4350. 콘솔
   `XC5 WLBT: MIB payloads ...`. 이미지 `xc5-ios-wifi9-console.tar`(드롭 그대로 1794053226).
   그래도 멈추면: 첫 테스트 = WLAN 요청 뒤 NULL 서비스 START_REQ도 보내 관리 태스크가 살아 있는지 보기.
+- **wifi9 결과(영상 20261107_212337): Wi-Fi 3b 성공 — WLAN 서비스 시작됨.** `XC5 hip mib=4350 cfm=0x2 ver=4 mlme=0xe07`,
+  `XC5 wlbt ... mgmt r2 w2 msgs=2 ... last=00010101 ff000000 sent=1` (채널 1, 서비스 1, SM_MSG_START_CFM). 펌웨어 로그:
+  `Received SM_MSG_START_REQ for service: 1` → `fw57 627b5 Sending SM_MSG_START_CFM for a service: 1` → `fw58 Speedy drive
+  strength changed from 1 to 2`. INTSR0 0x480000(to-AP 비트 3, 6). 부팅·잠금화면 정상. **원인은 MIB 형식**(hcf 헤더+플랫폼 키를
+  떼야 함). scoreboard/큐는 아직 0(호스트가 아무 신호도 안 보냈으니 정상).
+- **다음 = Wi-Fi 3c**: HIP4 데이터 경로로 첫 FAPI 신호 주고받기. 삼성 순서(hip4_setup, mgt.c slsi_start →
+  slsi_mib_initial_get): (1) to-AP 비트 7 인터럽트·scoreboard·큐 6개 읽기(FH ctrl/data/RFB, TH ctrl/data/RFB), (2) mbulk 풀
+  (TX ctrl 64 KiB)로 MLME-GET.request(MIB에서 MAC 주소 등 읽기)를 TH? 아님 FH 큐에 넣고 AP->R4 비트 5 울리기, (3) 응답
+  MLME-GET.confirm을 RX에서 읽어 MAC 주소 출력. 자료: hip4.c(hip4_q_add_signal, scoreboard 인덱스), mbulk.h, fapi.h, mib.c.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
