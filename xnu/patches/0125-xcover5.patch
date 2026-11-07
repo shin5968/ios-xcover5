@@ -2106,10 +2106,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..65b2873
+index 0000000..7ae058d
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,864 @@
+@@ -0,0 +1,987 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -2448,8 +2448,7 @@ index 0000000..65b2873
 +/*
 + * wifi6 (video 203333): a second 4 MiB ml_io_map_wcomb panicked like wifi1 ("kmem_alloc(..., 4194304, ...) failed
 + * with 3"). So the HIP sits in the 4 MiB already mapped, after mxconf: control, MIB and TX (0x240000-0x35a000) are
-+ * ours to reach; RX (0x35a000-0x45a000) is the firmware's to write and runs past the map, read later through a small
-+ * map of its own when there is something in it.
++ * ours to reach; RX (0x35a000-0x3da000, 512 KiB since step 3c) too.
 + */
 +#define HIP_OFF         0x240000u       /* in the shared memory */
 +#define HIP_MIB         0x2000u
@@ -2457,7 +2456,7 @@ index 0000000..65b2873
 +#define HIP_TX          (HIP_MIB + HIP_MIB_SZ)
 +#define HIP_TX_SZ       (0x100000u + 0x10000u)
 +#define HIP_RX          (HIP_TX + HIP_TX_SZ)
-+#define HIP_RX_SZ       0x100000u
++#define HIP_RX_SZ       0x80000u        /* the 512 KiB the driver also uses: 0x35a000-0x3da000, inside the map */
 +#define HIP_V5          32u
 +#define HIP_V4          160u
 +#define HIP_SCBRD       448u
@@ -2725,6 +2724,126 @@ index 0000000..65b2873
 +	}
 +}
 +
++/*
++ * Step 3c: the first FAPI signal over the HIP4 (hip4.c hip4_q_add_signal / hip4_skb_to_mbulk / hip4_mbulk_to_skb,
++ * mbulk_def.h, utils.h fapi_alloc_f, fapi.h, mib.c; facts only).
++ *   Queues: 0 FH ctrl, 1 FH data, 2 FH RFB (the firmware gives our buffers back), 3 TH ctrl, 4 TH data, 5 TH RFB (we
++ *   give its buffers back). Each one's write and read index is a byte in the scoreboard: q_idx_layout, the side that
++ *   the firmware owns at +64. An entry is the shared-memory offset of an mbulk; after it is put in, the index moves
++ *   and the AP->R4 bit (HIP_FH_BIT) is raised.
++ *   mbulk: 20-byte header {u32 next; u8 flag (1 signal, 4 owned by the other side), class (5 from host ctrl), pool
++ *   (1 ctrl), refcnt; u16 dat_bufsz, sig_bufsz, len, head; u32 chain}, then the signal buffer (4 bytes for the
++ *   firmware's own header, then the FAPI signal), then the data at +20+head (after the headroom the firmware asked for).
++ *   MLME-GET.request 0x2001: {u16 id, receiver 0, sender 0xC001; u32 fw_reference; u16 vif 0; 12 spare} and as data
++ *   the MIB keys asked for ({u16 psid, u16 0} each): what Samsung's driver asks first (slsi_mib_initial_get) --
++ *   unifiChipVersion 0x07E6, unifiHardwarePlatform 0x0941, unifiFirmwareBuildId 0x07E5. (The MAC address is not the
++ *   firmware's: Samsung's driver reads it from a file.) The answer, MLME-GET.confirm 0x2101, comes on queue 3.
++ */
++static const uint8_t q_layout[6][2] = {         /* [queue][write, read] */
++	{ 0, 64 }, { 1, 65 }, { 66, 2 }, { 67, 3 }, { 68, 4 }, { 5, 69 }
++};
++static uint32_t mlme_sent, mlme_got, mlme_id, mlme_siglen, mlme_len, mlme_data[6], fh_rfb;
++static bool mlme_asked;
++
++static inline volatile uint8_t *
++scb(int q, int rw)
++{
++	return (volatile uint8_t *)(hip + HIP_SCBRD + q_layout[q][rw]);
++}
++
++static inline volatile uint32_t *
++qarr(int q)
++{
++	return (volatile uint32_t *)(hip + HIP_Q + (uint32_t)q * HIP_QSZ);
++}
++
++static bool
++q_put(int q, uint32_t ref)
++{
++	uint8_t w = *scb(q, 0), r = *scb(q, 1);
++	if ((uint8_t)(w + 1) == r) {
++		return false;
++	}
++	qarr(q)[w] = ref;
++	__asm__ volatile ("dsb sy" ::: "memory");
++	*scb(q, 0) = (uint8_t)(w + 1);
++	__asm__ volatile ("dsb sy" ::: "memory");
++	wr(mbox, 0x01c, 1u << HIP_FH_BIT);      /* INTGR1 */
++	return true;
++}
++
++static void
++send_mlme_get(void)
++{
++	static const uint8_t keys[] = { 0xE6, 0x07, 0, 0, 0x41, 0x09, 0, 0, 0xE5, 0x07, 0, 0 };
++	struct hip_init *in = (struct hip_init *)hip;
++	struct hip_cfg_head *h = in->conf_ver == 4 ? &((struct hip_cfg_v4 *)(hip + HIP_V4))->h :
++	    &((struct hip_cfg_v5 *)(hip + HIP_V5))->h;
++	uint32_t moff = HIP_TX + 0x100000;      /* the first 2 KiB slot of the TX control area */
++	uint8_t *m = hip + moff;
++	uint16_t sigbuf = (uint16_t)(((20 + 24 + 4 + 3) & ~3u) - 20);
++	uint16_t head = (uint16_t)(sigbuf + h->headroom);
++	bzero(m, 2048);
++	m[4] = 1 | 4;                           /* signal, owned by the firmware now */
++	m[5] = 5;                               /* MBULK_CLASS_FROM_HOST_CTL */
++	m[6] = 1;                               /* MBULK_POOL_ID_CTRL */
++	m[7] = 1;
++	*(uint16_t *)(m + 8) = (uint16_t)(sizeof(keys) + h->headroom + h->tailroom);
++	*(uint16_t *)(m + 10) = sigbuf;
++	*(uint16_t *)(m + 12) = sizeof(keys);
++	*(uint16_t *)(m + 14) = head;
++	uint8_t *sig = m + 20 + 4;
++	*(uint16_t *)(sig + 0) = 0x2001;        /* MLME_GET_REQ */
++	*(uint16_t *)(sig + 4) = 0xC001;        /* sender: the driver's first process id */
++	memcpy(m + 20 + head, keys, sizeof(keys));
++	__asm__ volatile ("dsb sy" ::: "memory");
++	if (q_put(0, HIP_OFF + moff)) {
++		mlme_sent++;
++		printf("XC5 WLBT: MLME-GET.request (chip version, platform, build id) in FH ctrl, mbulk %#x\n", HIP_OFF + moff);
++	}
++}
++
++/* Signals from the firmware (queue 3) and our buffers it gave back (queue 2) */
++static void
++hip_poll(void)
++{
++	if (hip == NULL || (hb_cfm & 2) == 0 || ((struct hip_init *)hip)->conf_ver == 0) {
++		return;
++	}
++	if (!mlme_asked) {
++		mlme_asked = true;
++		send_mlme_get();
++	}
++	while (*scb(2, 1) != *scb(2, 0)) {
++		*scb(2, 1) = (uint8_t)(*scb(2, 1) + 1);
++		fh_rfb++;
++	}
++	for (int guard = 0; guard < 32 && *scb(3, 1) != *scb(3, 0); guard++) {
++		uint8_t r = *scb(3, 1);
++		uint32_t ref = qarr(3)[r];
++		if (ref >= HIP_OFF && ref + 64 < SHMEM_MAP) {
++			uint8_t *m = shm + ref;
++			uint16_t sigbuf = *(uint16_t *)(m + 10), len = *(uint16_t *)(m + 12), head = *(uint16_t *)(m + 14);
++			uint8_t *sig = m + 20 + 4;
++			mlme_got++;
++			mlme_id = *(uint16_t *)sig;
++			mlme_siglen = sigbuf >= 4 ? sigbuf - 4u : 0;
++			mlme_len = len;
++			bzero(mlme_data, sizeof(mlme_data));
++			if (ref + 20u + head + MIN((uint32_t)len, 24u) < SHMEM_MAP) {
++				memcpy(mlme_data, m + 20 + head, MIN((size_t)len, sizeof(mlme_data)));
++			}
++			printf("XC5 WLBT: TH ctrl signal %#x (signal %u bytes, data %u) mbulk %#x: %08x %08x %08x %08x\n", mlme_id,
++			    mlme_siglen, len, ref, mlme_data[0], mlme_data[1], mlme_data[2], mlme_data[3]);
++		} else {
++			printf("XC5 WLBT: TH ctrl entry %#x outside the map\n", ref);
++		}
++		*scb(3, 1) = (uint8_t)(r + 1);
++		__asm__ volatile ("dsb sy" ::: "memory");
++		q_put(5, ref);                  /* back to the firmware */
++	}
++}
++
 +static void
 +load_ls(void)
 +{
@@ -2891,6 +3010,7 @@ index 0000000..65b2873
 +			}
 +		}
 +		poll_log(t);
++		hip_poll();
 +
 +		uint32_t st = rd(pmu, WLBT_STATES), sr0 = rd(mbox, INTSR0), sr1 = rd(mbox, INTSR1);
 +		if (st != last_states || sr0 != last_sr0 || sr1 != last_sr1 || t % 50 == 0) {
@@ -2907,6 +3027,7 @@ index 0000000..65b2873
 +	for (int i = 0, tick = 0;; tick++) {
 +		read_mgmt();
 +		poll_log(200 + tick * 5);
++		hip_poll();
 +		if (tick % 40 != 0 || i >= 9) {
 +			delay(500000);
 +			continue;
@@ -2942,10 +3063,12 @@ index 0000000..65b2873
 +		struct hip_cfg_v5 *v5 = (struct hip_cfg_v5 *)(hip + HIP_V5);
 +		struct hip_cfg_v4 *v4 = (struct hip_cfg_v4 *)(hip + HIP_V4);
 +		struct hip_cfg_head *h = in->conf_ver == 4 ? &v4->h : &v5->h;
-+		printf("XC5 hip mib=%u cfm=%#x ver=%u mlme=%#x build=%#x scb=%08x q0 %u/%u q3 %u/%u ls=%u log %u bad %u\n",
-+		    hip_mib, hb_cfm, in->conf_ver, h->sap_mlme, h->fw_build, *(volatile uint32_t *)(hip + HIP_SCBRD),
-+		    hip[HIP_Q + 1024], hip[HIP_Q + 1025], hip[HIP_Q + 3 * HIP_QSZ + 1024], hip[HIP_Q + 3 * HIP_QSZ + 1025], ls_sz,
-+		    log_recs, log_bad);
++		printf("XC5 hip mib=%u cfm=%#x ver=%u mlme=%#x ls=%u log %u bad %u | q0 w%u r%u q2 w%u q3 w%u r%u q5 w%u r%u\n",
++		    hip_mib, hb_cfm, in->conf_ver, h->sap_mlme, ls_sz, log_recs, log_bad, *scb(0, 0), *scb(0, 1), *scb(2, 0),
++		    *scb(3, 0), *scb(3, 1), *scb(5, 0), *scb(5, 1));
++		printf("XC5 mlme sent=%u got=%u id=%#x siglen=%u len=%u data %08x %08x %08x %08x %08x %08x\n", mlme_sent, mlme_got,
++		    mlme_id, mlme_siglen, mlme_len, mlme_data[0], mlme_data[1], mlme_data[2], mlme_data[3], mlme_data[4],
++		    mlme_data[5]);
 +	}
 +	/* the firmware's last log lines, oldest first */
 +	for (uint32_t k = log_recs >= LOGN ? log_recs - LOGN + 1 : 1; k != 0 && k <= log_recs; k++) {
