@@ -58,15 +58,23 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
 - **Metal 작업 중**(`docs/xcover5-metal-plan.md`): **M1 완료** — mesa-ios CI 42337985007이 `lib/libredwoodair.dylib`
   (9.8 MB, `rwa_*` 43개)을 만듦. y2sios AIR + A32 `air-integer-ubo.patch`, 우리 herodrm과 링크. 첫 시도(42337661505)는
   `redwood_bo_cache_stats`(y2sios panfrost-retain.patch 것) 없음 → `air_metal.c`에 0으로 정의. 폰에서는 아직 안 돌림.
+- **M2 완료(커밋 d4c435f, mesa-ios CI 42338725082 성공, 번들 실행 파일 390 KB, 폰에서는 아직 안 돌림)**: y2sios `userland/src/`를 `gpu/metal/runtime/`에,
+  `gpu/metal/build-metal.sh`가 `out/metal/RedwoodMetal.bundle/{RedwoodMetal,Info.plist}`를 만듦(mesa-ios 워크플로).
+  - 소스는 y2sios 그대로 두고 `runtime/xc5inc/IOKit/IOKitLib.h`(우리 것, `-I`로 SDK보다 먼저)가 바꿈:
+    `RedwoodMali`→`XC5GPU`, `RedwoodGPU`→없음(그래서 Mali/panfrost 경로), 구조체 요청 0x44 GET_PARAM / 0x42 CREATE_BO /
+    0x09 GEM_CLOSE / 0x7e surface → XC5GPU 선택자 0/1/2/6, `IOConnectMapMemory64`→MapBO(3), Unmap은 아무것도 안 함.
+  - `m2m.h`: `/dev/m2m`이 없으면 기록을 XC5GPU Log(5)로 보냄 → 콘솔에 `gl: metal <등급> <분류> ...`.
+  - dlopen 경로 `/private/var/xc5/lib/libredwoodair.dylib`. libredwoodair에 rpath `/private/var/xc5/lib` 추가(build-mesa.sh).
+  - `air_metal.c`: IOSurface 가져오기를 `herodrm_surface_import`(대리 fd)로. y2sios는 surface ID를 fd 자리에 그대로 넣었음.
+  - `_MTLDevice`(Metal 비공개 클래스)는 `-Wl,-U`로 실행 때 찾게 함.
 
 ## 다음 행동
 
-1. M2: y2sios `userland/src/redwoodmetal.m`, `redwooddrawable.m`(MIT)을 `gpu/metal/runtime/`으로 가져와 iOS 번들
-   `RedwoodMetal.bundle`로 빌드. GPU 직접 호출 6곳(kMsmGemNew/Info, kDrmGemClose, kMsmGetParam, IOConnectMapMemory64,
-   surface)을 XC5GPU 선택자(0 GetParam, 1 CreateBO, 2 FreeBO, 3 MapBO, 6 SurfaceBO)로, `m2m_log`는 XC5GPU Log(5)로,
-   dlopen 경로 `/redwood/lib` → `/private/var/xc5/lib`.
-2. M3: 커널에 `xc5metal=1` → `IOAcceleratorES`에 `MetalPluginName=RedwoodMetal`, `MetalPluginClassName=RedwoodMetalDevice`.
-   번들을 `/System/Library/Extensions/`에 두는 방법(드롭 존은 `/private/var/xc5`만 씀).
+1. M3: 커널에 `xc5metal=1` → `IOAcceleratorES`에 `MetalPluginName`, `MetalPluginClassName=RedwoodMetalDevice`.
+   Metal은 `/System/Library/Extensions/<이름>.bundle`을 연다. 드롭 존은 `/private/var/xc5`만 쓰므로 후보:
+   (가) `MetalPluginName=../../../private/var/xc5/metal/RedwoodMetal` (경로를 그대로 붙이는지 공유 캐시에서 확인 필요),
+   (나) 커널/드롭이 루트에 심볼릭 링크를 만들기. `mkdrop.py`는 지금 `lib/*.dylib`만 넣으니 `metal/` 디렉터리도 넣게 고칠 것.
+   확인용으로 y2sios `metal_props.c`(서비스 속성 읽기)와 `metal_drv_test.m`을 작은 테스트로 빌드.
 
 ## 분석 도구 (`tools/xcover5/dev/`)
 
