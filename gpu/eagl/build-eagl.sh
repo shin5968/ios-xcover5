@@ -69,8 +69,14 @@ $CC -O2 -g -Wall -fno-objc-arc -c "$HERE/src/xc5_sb.c" -o "$OBJ/xc5_sb.o"
 $CC -dynamiclib -o "$OUT/lib/libxc5sb.dylib" "$OBJ/xc5_sb.o" \
   -install_name @rpath/libxc5sb.dylib -framework CoreFoundation -framework IOKit -lobjc -Wl,-undefined,error
 
+# libxc5net.dylib: configd learns the kernel's Wi-Fi interface as a service with DNS (src/xc5_net.c), xc5net=1.
+$CC -O2 -g -Wall -c "$HERE/src/xc5_net.c" -o "$OBJ/xc5_net.o"
+$CC -dynamiclib -o "$OUT/lib/libxc5net.dylib" "$OBJ/xc5_net.o" \
+  -install_name @rpath/libxc5net.dylib -framework CoreFoundation -framework IOKit \
+  -Wl,-undefined,error
+
 for f in "$OUT/lib/libxc5eagl.dylib" "$OUT/lib/libxc5eagl-b.dylib" "$OUT/lib/libxc5pb.dylib" "$OUT/lib/libxc5media.dylib" \
-    "$OUT/lib/libxc5poster.dylib" "$OUT/lib/libxc5ckpt.dylib" "$OUT/lib/libxc5sb.dylib"; do
+    "$OUT/lib/libxc5poster.dylib" "$OUT/lib/libxc5ckpt.dylib" "$OUT/lib/libxc5sb.dylib" "$OUT/lib/libxc5net.dylib"; do
   codesign -s - -f "$f"
   otool -L "$f"
 done

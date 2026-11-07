@@ -433,6 +433,10 @@ static const struct {
 	 * RedwoodMetal.bundle named on IOAcceleratorES (gpu/metal/xc5_mtl.c; needs xc5metal=1) */
 	{ "/ChronoCore.framework/Support/chronod", "xc5mtl", "/private/var/xc5/lib/libxc5mtl.dylib",
 	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5mtl.dylib", "chronod" },
+	/* xc5net=1: configd learns the kernel's Wi-Fi interface (en0) as a service with a DNS server, so that it becomes
+	 * the primary interface and names resolve (gpu/eagl/src/xc5_net.c; needs xc5wifi=1) */
+	{ "/usr/libexec/configd", "xc5net", "/private/var/xc5/lib/libxc5net.dylib",
+	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5net.dylib", "configd" },
 };
 
 static int

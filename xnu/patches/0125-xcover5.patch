@@ -988,10 +988,10 @@ index ba647a8..979c83f 100644
  	int log_contacts = 0;
 diff --git a/bsd/dev/xc5_drop.c b/bsd/dev/xc5_drop.c
 new file mode 100644
-index 0000000..540539b
+index 0000000..73c2bf9
 --- /dev/null
 +++ b/bsd/dev/xc5_drop.c
-@@ -0,0 +1,592 @@
+@@ -0,0 +1,596 @@
 +/*
 + * XCover5 drop zone: files for the iOS root from the CACHE partition, so the
 + * Mesa libraries reach the phone without reflashing the 12 GB root image.
@@ -1427,6 +1427,10 @@ index 0000000..540539b
 +	 * RedwoodMetal.bundle named on IOAcceleratorES (gpu/metal/xc5_mtl.c; needs xc5metal=1) */
 +	{ "/ChronoCore.framework/Support/chronod", "xc5mtl", "/private/var/xc5/lib/libxc5mtl.dylib",
 +	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5mtl.dylib", "chronod" },
++	/* xc5net=1: configd learns the kernel's Wi-Fi interface (en0) as a service with a DNS server, so that it becomes
++	 * the primary interface and names resolve (gpu/eagl/src/xc5_net.c; needs xc5wifi=1) */
++	{ "/usr/libexec/configd", "xc5net", "/private/var/xc5/lib/libxc5net.dylib",
++	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5net.dylib", "configd" },
 +};
 +
 +static int
@@ -2106,10 +2110,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..50a6e1e
+index 0000000..236e8ef
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,1836 @@
+@@ -0,0 +1,1852 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -2169,6 +2173,7 @@ index 0000000..50a6e1e
 +#include <net/route.h>
 +#include <netinet/in.h>
 +#include <netinet/in_var.h>
++#include <sys/sysctl.h>
 +
 +extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 +extern vm_offset_t ml_io_map_wcomb(vm_offset_t phys_addr, vm_size_t size);
@@ -3430,6 +3435,15 @@ index 0000000..50a6e1e
 +static char if_nm[IFNAMSIZ] = "-";
 +static socket_t ping_so;
 +static uint64_t ping_next;
++/*
++ * Step 4d: what configd needs to make en0 the primary interface with a DNS server (gpu/eagl/src/xc5_net.c, inserted
++ * into configd with xc5net=1, reads it and answers in kern.xc5netstat: bit 0 written to the dynamic store, bit 1 en0
++ * primary, bit 2 a global DNS configuration, bit 3 a name resolved; 0x100 + SCError when writing failed).
++ */
++static char xc5wifi_info[128] = "down";
++SYSCTL_STRING(_kern, OID_AUTO, xc5wifi, CTLFLAG_RD | CTLFLAG_LOCKED, xc5wifi_info, sizeof(xc5wifi_info), "");
++static int xc5net_stat;
++SYSCTL_INT(_kern, OID_AUTO, xc5netstat, CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_LOCKED, &xc5net_stat, 0, "");
 +
 +static void
 +deliver(const uint8_t *fr, uint32_t n)
@@ -3625,6 +3639,10 @@ index 0000000..50a6e1e
 +		}
 +	}
 +	ping_err = sock_socket(PF_INET, SOCK_DGRAM, IPPROTO_ICMP, NULL, NULL, &ping_so);
++	const uint8_t *a = (const uint8_t *)&ack_ip, *mk = (const uint8_t *)&mask, *g = (const uint8_t *)&ack_gw;
++	const uint8_t *d = (const uint8_t *)(ack_dns != 0 ? &ack_dns : &ack_gw);
++	snprintf(xc5wifi_info, sizeof(xc5wifi_info), "up %s %u.%u.%u.%u %u.%u.%u.%u %u.%u.%u.%u %u.%u.%u.%u", if_nm, a[0], a[1],
++	    a[2], a[3], mk[0], mk[1], mk[2], mk[3], g[0], g[1], g[2], g[3], d[0], d[1], d[2], d[3]);
 +	printf("XC5 WLBT: %s up (%d), address %d, route %d, ping socket %d\n", if_nm, if_err, addr_err, route_err, ping_err);
 +}
 +
@@ -3929,6 +3947,8 @@ index 0000000..50a6e1e
 +	    dhcp_state, of[0], of[1], of[2], of[3], ip[0], ip[1], ip[2], ip[3]);
 +	printf("XC5 w if %s %d addr %d route %d out %u in %u drop %u ping %u/%u (%d)\n", if_nm, if_err, addr_err, route_err,
 +	    if_out, if_in, if_drop, ping_got, ping_sent, ping_err);
++	const uint8_t *dn = (const uint8_t *)&ack_dns;
++	printf("XC5 w net %#x dns %u.%u.%u.%u\n", xc5net_stat, dn[0], dn[1], dn[2], dn[3]);
 +}
 +void xc5_wlbt_start(void);
 +void

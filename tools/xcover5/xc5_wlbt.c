@@ -57,6 +57,7 @@
 #include <net/route.h>
 #include <netinet/in.h>
 #include <netinet/in_var.h>
+#include <sys/sysctl.h>
 
 extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern vm_offset_t ml_io_map_wcomb(vm_offset_t phys_addr, vm_size_t size);
@@ -1318,6 +1319,15 @@ static int if_err = -1, addr_err = -1, route_err = -1, ping_err = -1;
 static char if_nm[IFNAMSIZ] = "-";
 static socket_t ping_so;
 static uint64_t ping_next;
+/*
+ * Step 4d: what configd needs to make en0 the primary interface with a DNS server (gpu/eagl/src/xc5_net.c, inserted
+ * into configd with xc5net=1, reads it and answers in kern.xc5netstat: bit 0 written to the dynamic store, bit 1 en0
+ * primary, bit 2 a global DNS configuration, bit 3 a name resolved; 0x100 + SCError when writing failed).
+ */
+static char xc5wifi_info[128] = "down";
+SYSCTL_STRING(_kern, OID_AUTO, xc5wifi, CTLFLAG_RD | CTLFLAG_LOCKED, xc5wifi_info, sizeof(xc5wifi_info), "");
+static int xc5net_stat;
+SYSCTL_INT(_kern, OID_AUTO, xc5netstat, CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_LOCKED, &xc5net_stat, 0, "");
 
 static void
 deliver(const uint8_t *fr, uint32_t n)
@@ -1513,6 +1523,10 @@ net_up(void)
 		}
 	}
 	ping_err = sock_socket(PF_INET, SOCK_DGRAM, IPPROTO_ICMP, NULL, NULL, &ping_so);
+	const uint8_t *a = (const uint8_t *)&ack_ip, *mk = (const uint8_t *)&mask, *g = (const uint8_t *)&ack_gw;
+	const uint8_t *d = (const uint8_t *)(ack_dns != 0 ? &ack_dns : &ack_gw);
+	snprintf(xc5wifi_info, sizeof(xc5wifi_info), "up %s %u.%u.%u.%u %u.%u.%u.%u %u.%u.%u.%u %u.%u.%u.%u", if_nm, a[0], a[1],
+	    a[2], a[3], mk[0], mk[1], mk[2], mk[3], g[0], g[1], g[2], g[3], d[0], d[1], d[2], d[3]);
 	printf("XC5 WLBT: %s up (%d), address %d, route %d, ping socket %d\n", if_nm, if_err, addr_err, route_err, ping_err);
 }
 
@@ -1817,6 +1831,8 @@ xc5_wlbt_heartbeat(void)
 	    dhcp_state, of[0], of[1], of[2], of[3], ip[0], ip[1], ip[2], ip[3]);
 	printf("XC5 w if %s %d addr %d route %d out %u in %u drop %u ping %u/%u (%d)\n", if_nm, if_err, addr_err, route_err,
 	    if_out, if_in, if_drop, ping_got, ping_sent, ping_err);
+	const uint8_t *dn = (const uint8_t *)&ack_dns;
+	printf("XC5 w net %#x dns %u.%u.%u.%u\n", xc5net_stat, dn[0], dn[1], dn[2], dn[3]);
 }
 void xc5_wlbt_start(void);
 void
