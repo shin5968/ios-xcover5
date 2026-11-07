@@ -336,6 +336,14 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   ifnet_attach, ether 주소 02:58:43:35:00:01) + output 콜백 → MA-UNITDATA, 수신 프레임 → ifnet_input. 주소는 DHCP로 받은 값을
   커널에서 설정(SIOCAIFADDR, 서브넷·게이트웨이·DNS는 ACK에서 — 현재 mask/gw/dns도 파싱함), 기본 경로 추가. 확인: 다른 기기에서
   ping, 또는 iOS 앱의 인터넷. 그다음 configd/IPConfiguration이 en0을 인식하게(IOKit IONetworkInterface 흉내) 할지 결정.
+- **4c 구현(커밋 c7a98de, xnu CI 42384527367)**: DHCP ACK 뒤 커널이 레거시 BSD 이더넷 인터페이스를 만듦(if_fake.c BSD 모드 방식):
+  `ifnet_allocate_extended`(IFNET_INIT_LEGACY | IFNET_INIT_NX_NOAUTO, name "en", 비어 있는 첫 unit — 보통 en0, family ETHERNET,
+  IFT_ETHER, ether_demux/add_proto/del_proto/check_multi/frameout_extended), attach, lladdr 02:58:43:35:00:01, UP|RUNNING.
+  출력 콜백 → MA-UNITDATA(send_frame). 입력: 받은 모든 프레임 → mbuf(헤더 포인터 = 이더넷 헤더, data는 그 뒤) → 락 밖에서
+  `ifnet_input`. HIP4 큐는 뮤텍스 하나로 보호(스레드와 출력 경로), 스레드는 10 ms마다 폴링. 주소: 커널 소켓 SIOCAIFADDR(ACK의
+  주소·마스크), 기본 경로: 라우팅 소켓 RTM_ADD(게이트웨이), 확인: ICMP 데이터그램 소켓으로 2초마다 게이트웨이 ping.
+  heartbeat 마지막 줄 `XC5 w if <이름> <err> addr <err> route <err> out N in N drop N ping <응답>/<보냄> (<err>)`.
+  이미지 `xc5-ios-wifi18-console.tar`. DNS는 아직 없음(IP 통신만).
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
