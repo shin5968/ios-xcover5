@@ -325,14 +325,20 @@ start_service(uint8_t id, uint32_t ref)
 
 /*
  * Step 3b: the WLAN service's HIP4 (hip4.h / hip4_init, cm_if.c slsi_sm_wlan_service_open): 2.5 MiB of the shared
- * memory, 4 KiB aligned -- here the second 4 MiB of the window, mapped on its own (one 12 MiB map failed, wifi1) --
+ * memory, 4 KiB aligned -- here right after mxconf, at 0x240000 (see HIP_OFF) --
  * laid out as CONFIG 8 KiB (the hip4_hip_control), MIB 32 KiB (the stock wlan.hcf files back to back), TX data 1 MiB,
  * TX control 64 KiB, RX 1 MiB. The control (packed parts, Samsung's alignments): init {magic 0xcaaa0400,
  * conf_hip4_ver (the firmware's), refs to config A (v4) and B (v5)} at 0, config v5 (120 bytes) at 32, config v4
  * (227) at 160, scoreboard u32[256] at 448, six queues of {u32[256], 3 index bytes} each 1088 bytes from 1472.
  * Every location is an offset in the shared memory. Then SM_MSG_START_REQ for service 1 with the control's offset.
  */
-#define HIP_OFF         0x400000u       /* in the shared memory */
+/*
+ * wifi6 (video 203333): a second 4 MiB ml_io_map_wcomb panicked like wifi1 ("kmem_alloc(..., 4194304, ...) failed
+ * with 3"). So the HIP sits in the 4 MiB already mapped, after mxconf: control, MIB and TX (0x240000-0x35a000) are
+ * ours to reach; RX (0x35a000-0x45a000) is the firmware's to write and runs past the map, read later through a small
+ * map of its own when there is something in it.
+ */
+#define HIP_OFF         0x240000u       /* in the shared memory */
 #define HIP_MIB         0x2000u
 #define HIP_MIB_SZ      0x8000u
 #define HIP_TX          (HIP_MIB + HIP_MIB_SZ)
@@ -403,11 +409,12 @@ head_fill(struct hip_cfg_head *h, uint16_t ver, uint16_t len)
 static bool
 make_hip(void)
 {
-	hip = (uint8_t *)ml_io_map_wcomb(SHMEM_PA + HIP_OFF, 0x400000);
-	if (hip == NULL) {
+	if (heap > HIP_OFF) {
+		printf("XC5 WLBT: mxconf heap %#x runs into the HIP at %#x: WLAN not started\n", heap, HIP_OFF);
 		return false;
 	}
-	bzero(hip, HIP_RX + HIP_RX_SZ);
+	hip = shm + HIP_OFF;
+	bzero(hip, SHMEM_MAP - HIP_OFF);
 	/* the MIB: the stock files the Samsung driver loads (wlan.hcf, wlan_sw.hcf as mx140_*), whole, back to back */
 	int64_t a = read_file("/private/var/xc5/wifi/wlan.hcf", hip + HIP_MIB, HIP_MIB_SZ);
 	int64_t b = a > 0 ? read_file("/private/var/xc5/wifi/wlan_sw.hcf", hip + HIP_MIB + a, HIP_MIB_SZ - (size_t)a) : -1;
