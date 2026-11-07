@@ -51,6 +51,9 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
 | `xc5conrows=40` | 화면 아래 40줄만 콘솔 |
 | `xc5metal=1` | XC5GPU 아래에 `IOAcceleratorES`("sgx") 공개. Metal 속성 두 개는 비어 있고, 프로세스가 `IORegistryEntrySetCFProperties`로 넣고 뺌(빈 문자열 = 지움). 콘솔 `XC5 metal: ...` |
 | `xc5metal=1` | XC5GPU 아래에 `IOAcceleratorES`("sgx") 공개, `MetalPluginName=../../../private/var/xc5/metal/RedwoodMetal`, `MetalPluginClassName=RedwoodMetalDevice`. 두 속성은 `xc5metalfor`에 든 프로세스에게만 보임. 콘솔 `XC5 metal: ...` |
+| `xc5pmic=1/2` | S2MPU12 PMIC를 ACPM으로(`xc5_pmic.c`): 1 = 레지스터 덤프 + 바뀌는 레지스터 출력(전원 키 찾기), 2 = `xc5pwrreg`/`xc5pwrbit`(`xc5pwrlow`)를 30 ms마다 읽어 전원 키로 |
+| `xc5ckpt=1` | checkpointd에 `libxc5ckpt.dylib`(FairPlay mach_msg 3초 제한) |
+| `xc5photos=1` | 사진 앱·checkpointd·assetsd에 샘플러(`libxc5poster.dylib`) |
 | `xc5metalfor=a,b` | Metal 속성을 볼 프로세스 이름(쉼표, 기본 `chronod`). 다른 프로세스는 Metal 장치가 없다고 봄(78에서 SpringBoard가 잡고 죽음) |
 | `xc5mtl=1` | chronod에 `libxc5mtl.dylib`(`gpu/metal/xc5_mtl.c`): 6초 뒤 Metal 장치·버퍼·명령 버퍼 시험, 단계마다 `gl: mtl[pid] step N ...`. 속성을 못 읽을 때만 직접 넣음(옛 커널용). `xc5metal=1` 필요 |
 ## 지금 상태 (2026-11-07)
@@ -81,7 +84,19 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   그림**(`metal W PERF slow draw ... plane_color`). 배터리 위젯은 전부터 나오던 것(Metal과 무관, 사용자 확인). 사진 위젯
   "대기 중..."은 사진 앱도 제대로 안 되므로 사진 라이브러리(assetsd/photolibraryd) 쪽 문제일 가능성. SpringBoard 크래시는 본 프레임에서 없음.
 
+- **사진 앱 조사는 사용자 요청으로 중단(2026-11-07)**: 부팅 84에서 checkpointd/FairPlay는 넘었고 남은 건 assetsd(빈 보관함).
+  photo8 이미지(assetsd 샘플링)는 만들어 두었으나 시험 안 함.
+- **드라이버 작업(사용자 요청)**: 남은 것 = 전원 키(PMIC), RTC(PMIC, 1970년), 배터리 잔량(s2mu106 연료계), 밝기, 진동,
+  Wi-Fi/소리/카메라/셀룰러(큼). 전원 키부터: `tools/xcover5/xc5_pmic.c`(커밋 98f6ca3, xnu CI 42350979144) =
+  S2MPU12를 ACPM으로 읽기(메일박스 0x11900000, SRAM 0x02039000, initdata 0x7000, 채널 2; 프로토콜은 y2sios/Scion 문서대로,
+  코드 복사 없음, **읽기만**). 시험 이미지 `xc5-ios-pmic1-console.tar`(wall2 기준 + `xc5metal=1 xc5ckpt=1 xc5pmic=1`).
+
 ## 다음 행동
+
+0. **전원 키**: pmic1 콘솔에서 `XC5 PMIC: ACPM initdata ...`, `channel 2: ...`, `top block register 0 ...`, `pmic 00: ...` 덤프,
+   그리고 전원 키를 누를 때 `XC5 PMIC: pmic RR: AA -> BB` 줄. 바뀌는 레지스터/비트를 찾아 `xc5pmic=2 xc5pwrreg=0xRR
+   xc5pwrbit=N (xc5pwrlow=1)`로 → keys 드라이버의 Power(비트 5)에 합쳐짐. 채널을 못 찾거나 읽기가 실패(`--`)하면 ACPM 레이아웃
+   (initdata 오프셋, 첫 페이지 접근 불가 등)부터 확인. RTC 블록 덤프는 다음 작업(RTC 시간) 재료.
 
 0. 사진 앱 조사(사용자 요청): `xc5-ios-photo1-console.tar` = 부팅 79 기준 + `sweetscan=backboardd,SpringBoard,MobileSlideShow,
    assetsd,photoanalysisd,mediaanalysisd`(이 프로세스들이 SIGABRT/SIGTRAP로 죽으면 커널이 `STR` 줄로 힙 문자열을 찍음).
