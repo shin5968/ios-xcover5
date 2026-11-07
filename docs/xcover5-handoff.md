@@ -83,6 +83,10 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
 
 ## 다음 행동
 
+0. 사진 앱 조사(사용자 요청): `xc5-ios-photo1-console.tar` = 부팅 79 기준 + `sweetscan=backboardd,SpringBoard,MobileSlideShow,
+   assetsd,photoanalysisd,mediaanalysisd`(이 프로세스들이 SIGABRT/SIGTRAP로 죽으면 커널이 `STR` 줄로 힙 문자열을 찍음).
+   사용자가 사진 앱을 열고 콘솔 영상을 보냄 → `exec MobileSlideShow`/`assetsd`, `CRASH ...`, `STR ...` 읽기. 사진 앱은
+   `/Applications/MobileSlideShow.app`, 라이브러리 데몬 `AssetsLibrary.framework/Support/assetsd`, 위젯 `PhotosReliveWidget.appex`.
 1. M4 위젯: chronod가 Metal로 그리는 것이 무엇인지(어떤 위젯/요소) 확인. 사진 위젯은 사진 앱(assetsd/photolibraryd)부터. 위젯 확장이 스냅샷을 못 주는지, chronod가
    그리다 막히는지. 다음 영상에서 홈 화면 오래 두고 `CRASH`, `metal E ...`, `chronod` 줄 확인. 필요하면 확장 프로세스를
    `xc5metalfor`에 추가(쉼표 목록). `gpuAddress 0`(Mesa 버퍼 경로에서 GPU 주소를 안 알려줌)도 확인할 것.
