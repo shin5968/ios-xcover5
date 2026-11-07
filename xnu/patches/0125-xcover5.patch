@@ -2106,10 +2106,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..5d61bd6
+index 0000000..a2d8fb0
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,1188 @@
+@@ -0,0 +1,1450 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -2747,12 +2747,15 @@ index 0000000..5d61bd6
 +static bool mlme_asked;
 +/* what came back: MLME-GET values, ADD_VIF / ADD_SCAN results, scan results */
 +static uint32_t mib_chip, mib_plat, mib_build, vif_res = 0xffff, scan_res = 0xffff, scan_inds, scan_done;
-+#define APN 6
++#define APN 16
 +static struct {
 +	char ssid[33];
++	uint8_t ssid_len;
++	uint8_t raw_ssid[32];
 +	uint8_t bssid[6];
 +	int16_t rssi;
 +	uint16_t mhz;
++	bool open;
 +} aps[APN];
 +static uint32_t ap_count;
 +static const uint8_t vif_mac[6] = { 0x02, 0x58, 0x43, 0x35, 0x00, 0x01 };   /* locally administered: "XC5" */
@@ -2942,6 +2945,8 @@ index 0000000..5d61bd6
 +		return;
 +	}
 +	char ssid[33] = "";
++	uint8_t raw[32];
++	uint32_t rawl = 0;
 +	for (uint32_t p = 36; p + 2 <= n; p += 2u + f[p + 1]) {         /* elements after the 24 + 12 fixed bytes */
 +		if (f[p] == 0 && p + 2u + f[p + 1] <= n) {
 +			uint32_t l = MIN((uint32_t)f[p + 1], 32u);
@@ -2949,6 +2954,8 @@ index 0000000..5d61bd6
 +				ssid[i] = (f[p + 2 + i] >= 0x20 && f[p + 2 + i] < 0x7f) ? (char)f[p + 2 + i] : '?';
 +			}
 +			ssid[l] = 0;
++			memcpy(raw, f + p + 2, l);
++			rawl = l;
 +			break;
 +		}
 +	}
@@ -2966,6 +2973,9 @@ index 0000000..5d61bd6
 +		ap_count++;
 +	}
 +	snprintf(aps[k].ssid, sizeof(aps[k].ssid), "%s", ssid[0] ? ssid : "(hidden)");
++	memcpy(aps[k].raw_ssid, raw, rawl);
++	aps[k].ssid_len = (uint8_t)rawl;
++	aps[k].open = !(f[34] & 0x10);          /* capability: privacy bit */
 +	memcpy(aps[k].bssid, bssid, 6);
 +	aps[k].rssi = (int16_t)(sig[14] | sig[15] << 8);
 +	aps[k].mhz = (uint16_t)((sig[12] | sig[13] << 8) / 2);
@@ -2973,6 +2983,220 @@ index 0000000..5d61bd6
 +	    bssid[2], bssid[3], bssid[4], bssid[5], aps[k].mhz, aps[k].rssi);
 +}
 +
++/*
++ * Step 4: join an open network and see the data path work (mlme.c slsi_mlme_connect, slsi_mlme_connect_resp;
++ * rx.c slsi_rx_connect_ind; tx.c; netif.h; fapi.h; facts only).
++ *   The network: the one named by the boot-arg xc5ssid, else the strongest open one the scan found (capability
++ *   without the privacy bit).
++ *   MLME-CONNECT.request 0x200b {header; vif 1; bssid; authentication_type 0 (open); channel_frequency 2 x MHz;
++ *   12 spare}, data: the SSID element -> MLME-CONNECT.confirm 0x210b {vif; result_code}; the firmware
++ *   authenticates and associates and says MLME-CONNECT.indication 0x2303 {vif; result_code}, answered by
++ *   MLME-CONNECT.response 0x2200 {vif; 12 spare}. (The 802.1X port is the host's own state: nothing to send.)
++ *   MA-UNITDATA.request 0x1000 {header; vif 1; host_tag; priority 0; peer_index 1 (the AP: queue set 0 + 1);
++ *   data_unit_descriptor 1 (802.3 frame); bulk_data_descriptor 0; 12 spare} with an Ethernet frame as data, in an
++ *   mbulk of the data pool (class 4, pool 0) on the FH data queue -> MA-UNITDATA.confirm 0x1100 {vif;
++ *   transmission_status}; received frames come as MA-UNITDATA.indication 0x1300 {vif; data_unit_descriptor; ...;
++ *   proprieraty_information_length (bytes before the frame)}.
++ *   The proof that frames go both ways: DHCP from the kernel -- DISCOVER, the OFFER's address, REQUEST, ACK.
++ */
++static int ap_sel = -1;
++static uint32_t conn_cfm = 0xffff, conn_ind = 0xffff, disc_reason = 0xffff, data_cfm = 0xffff, data_tx, data_rx;
++static uint32_t dhcp_state, dhcp_xid = 0x58433501, offer_ip, offer_srv, ack_ip, ack_gw, ack_dns, ack_mask;
++static uint64_t dhcp_next;
++static char want_ssid[33];
++
++static void
++send_connect(void)
++{
++	int best = -1;
++	for (uint32_t k = 0; k < ap_count && k < APN; k++) {
++		bool named = want_ssid[0] != 0 && aps[k].ssid_len == strlen(want_ssid) &&
++		    memcmp(aps[k].raw_ssid, want_ssid, aps[k].ssid_len) == 0;
++		if (want_ssid[0] != 0 ? named : (aps[k].open && aps[k].ssid_len > 0)) {
++			if (best < 0 || aps[k].rssi > aps[best].rssi) {
++				best = (int)k;
++			}
++		}
++	}
++	if (best < 0) {
++		printf("XC5 WLBT: no network to join (%s)\n", want_ssid[0] ? want_ssid : "no open one found");
++		return;
++	}
++	ap_sel = best;
++	uint8_t s[34] = { 0x0b, 0x20 };
++	s[10] = 1;
++	memcpy(s + 12, aps[best].bssid, 6);
++	s[18] = 0;                              /* open system */
++	uint16_t fw = (uint16_t)(2 * aps[best].mhz);
++	s[20] = (uint8_t)fw;
++	s[21] = (uint8_t)(fw >> 8);
++	uint8_t d[34];
++	d[0] = 0;
++	d[1] = aps[best].ssid_len;
++	memcpy(d + 2, aps[best].raw_ssid, aps[best].ssid_len);
++	send_sig(s, sizeof(s), d, 2u + aps[best].ssid_len);
++	printf("XC5 WLBT: joining %s (%u MHz, %s)\n", aps[best].ssid, aps[best].mhz, aps[best].open ? "open" : "secured");
++}
++
++static uint16_t
++ip_sum(const uint8_t *p, uint32_t n)
++{
++	uint32_t s = 0;
++	for (uint32_t i = 0; i + 1 < n; i += 2) {
++		s += (uint32_t)(p[i] << 8 | p[i + 1]);
++	}
++	while (s >> 16) {
++		s = (s & 0xffff) + (s >> 16);
++	}
++	return (uint16_t)~s;
++}
++
++/* An Ethernet frame through the data path: MA-UNITDATA.request on the FH data queue, from the TX data area */
++static void
++send_frame(const uint8_t *fr, uint32_t len)
++{
++	struct hip_cfg_head *h = fw_cfg();
++	static uint32_t slot;
++	uint32_t moff = HIP_TX + (slot++ % 64) * 2048;
++	uint8_t *m = hip + moff;
++	uint8_t s[34] = { 0x00, 0x10 };
++	s[10] = 1;                              /* vif */
++	s[12] = (uint8_t)(0x10 + data_tx);      /* host_tag */
++	s[13] = 0x10;
++	s[16] = 1;                              /* peer_index */
++	s[18] = 1;                              /* 802.3 frame */
++	uint16_t sigbuf = (uint16_t)(((20 + sizeof(s) + 4 + 3) & ~3u) - 20);
++	uint16_t head = (uint16_t)(sigbuf + h->headroom);
++	bzero(m, 2048);
++	m[4] = 1 | 4;
++	m[5] = 4;                               /* MBULK_CLASS_FROM_HOST_DAT */
++	m[6] = 0;                               /* MBULK_POOL_ID_DATA */
++	m[7] = 1;
++	*(uint16_t *)(m + 8) = (uint16_t)(len + h->headroom + h->tailroom);
++	*(uint16_t *)(m + 10) = sigbuf;
++	*(uint16_t *)(m + 12) = (uint16_t)len;
++	*(uint16_t *)(m + 14) = head;
++	memcpy(m + 20 + 4, s, sizeof(s));
++	memcpy(m + 20 + head, fr, len);
++	__asm__ volatile ("dsb sy" ::: "memory");
++	if (q_put(1, HIP_OFF + moff)) {
++		data_tx++;
++	}
++}
++
++/* DHCP over UDP over IPv4 in an Ethernet broadcast: type 1 DISCOVER, 3 REQUEST */
++static void
++send_dhcp(uint8_t type)
++{
++	uint8_t fr[342];
++	bzero(fr, sizeof(fr));
++	memset(fr, 0xff, 6);
++	memcpy(fr + 6, vif_mac, 6);
++	fr[12] = 0x08;
++	uint8_t *ip = fr + 14, *udp = ip + 20, *b = udp + 8;
++	uint32_t blen = 236 + 4, o = 0;
++	uint8_t *opt = b + 240;
++	opt[o++] = 53; opt[o++] = 1; opt[o++] = type;
++	if (type == 3) {
++		opt[o++] = 50; opt[o++] = 4; memcpy(opt + o, &offer_ip, 4); o += 4;
++		opt[o++] = 54; opt[o++] = 4; memcpy(opt + o, &offer_srv, 4); o += 4;
++	}
++	opt[o++] = 55; opt[o++] = 3; opt[o++] = 1; opt[o++] = 3; opt[o++] = 6;
++	opt[o++] = 255;
++	blen += o;
++	if (blen < 300) {
++		blen = 300;
++	}
++	b[0] = 1; b[1] = 1; b[2] = 6;
++	b[4] = (uint8_t)(dhcp_xid >> 24); b[5] = (uint8_t)(dhcp_xid >> 16); b[6] = (uint8_t)(dhcp_xid >> 8);
++	b[7] = (uint8_t)dhcp_xid;
++	b[10] = 0x80;                           /* broadcast replies */
++	memcpy(b + 28, vif_mac, 6);
++	b[236] = 99; b[237] = 130; b[238] = 83; b[239] = 99;
++	uint32_t ulen = 8 + blen, iplen = 20 + ulen;
++	udp[1] = 68; udp[3] = 67;
++	udp[4] = (uint8_t)(ulen >> 8); udp[5] = (uint8_t)ulen;
++	ip[0] = 0x45; ip[2] = (uint8_t)(iplen >> 8); ip[3] = (uint8_t)iplen; ip[8] = 64; ip[9] = 17;
++	memset(ip + 16, 0xff, 4);
++	uint16_t cs = ip_sum(ip, 20);
++	ip[10] = (uint8_t)(cs >> 8); ip[11] = (uint8_t)cs;
++	send_frame(fr, 14 + iplen);
++	printf("XC5 WLBT: DHCP %s sent\n", type == 1 ? "DISCOVER" : "REQUEST");
++}
++
++static void
++on_frame(const uint8_t *fr, uint32_t n)
++{
++	data_rx++;
++	if (n < 14 + 20 + 8 + 240 || fr[12] != 0x08 || fr[13] != 0 || fr[14 + 9] != 17) {
++		return;
++	}
++	const uint8_t *ip = fr + 14;
++	const uint8_t *udp = ip + (ip[0] & 15) * 4, *b = udp + 8;
++	if (udp[1] != 67 || udp[3] != 68 || b + 240 > fr + n || b[0] != 2 ||
++	    (uint32_t)(b[4] << 24 | b[5] << 16 | b[6] << 8 | b[7]) != dhcp_xid) {
++		return;
++	}
++	uint8_t type = 0;
++	uint32_t srv = 0, gw = 0, dns = 0, mask = 0, yi;
++	memcpy(&yi, b + 16, 4);
++	for (const uint8_t *p = b + 240; p + 2 <= fr + n && p[0] != 255;) {
++		if (p[0] == 0) {
++			p++;
++			continue;
++		}
++		if (p + 2 + p[1] > fr + n) {
++			break;
++		}
++		if (p[0] == 53) {
++			type = p[2];
++		} else if (p[0] == 54 && p[1] >= 4) {
++			memcpy(&srv, p + 2, 4);
++		} else if (p[0] == 3 && p[1] >= 4) {
++			memcpy(&gw, p + 2, 4);
++		} else if (p[0] == 6 && p[1] >= 4) {
++			memcpy(&dns, p + 2, 4);
++		} else if (p[0] == 1 && p[1] >= 4) {
++			memcpy(&mask, p + 2, 4);
++		}
++		p += 2 + p[1];
++	}
++	if (type == 2 && dhcp_state == 1) {     /* OFFER */
++		offer_ip = yi;
++		offer_srv = srv;
++		dhcp_state = 2;
++		send_dhcp(3);
++	} else if (type == 5) {                 /* ACK */
++		ack_ip = yi;
++		ack_gw = gw;
++		ack_dns = dns;
++		ack_mask = mask;
++		dhcp_state = 3;
++	}
++	const uint8_t *a = (const uint8_t *)&yi;
++	printf("XC5 WLBT: DHCP %u from the network: %u.%u.%u.%u\n", type, a[0], a[1], a[2], a[3]);
++}
++
++static void
++dhcp_tick(void)
++{
++	if (conn_ind != 0 || dhcp_state >= 3) {
++		return;
++	}
++	uint64_t now = mach_absolute_time(), ns;
++	absolutetime_to_nanoseconds(now, &ns);
++	if (ns < dhcp_next) {
++		return;
++	}
++	dhcp_next = ns + 4000000000ull;
++	if (dhcp_state <= 1) {
++		dhcp_state = 1;
++		dhcp_xid++;
++		send_dhcp(1);
++	} else if (dhcp_state == 2) {
++		send_dhcp(3);
++	}
++}
 +static void
 +on_signal(uint32_t ref)
 +{
@@ -3004,11 +3228,41 @@ index 0000000..5d61bd6
 +		break;
 +	case 0x2301:                            /* MLME_SCAN_DONE_IND */
 +		scan_done++;
++		if (ap_sel < 0 && conn_cfm == 0xffff) {
++			send_connect();
++		}
 +		break;
++	case 0x210b:                            /* MLME_CONNECT_CFM */
++		conn_cfm = *(uint16_t *)(sig + 12);
++		break;
++	case 0x2303: {                          /* MLME_CONNECT_IND */
++		conn_ind = *(uint16_t *)(sig + 12);
++		uint8_t s[24] = { 0x00, 0x22 };
++		s[10] = 1;
++		if (conn_ind == 0) {
++			send_sig(s, sizeof(s), NULL, 0);        /* MLME_CONNECT_RES */
++		}
++		break;
++	}
++	case 0x2309:                            /* MLME_DISCONNECTED_IND */
++		disc_reason = *(uint16_t *)(sig + 18);
++		break;
++	case 0x1100:                            /* MA_UNITDATA_CFM */
++		data_cfm = *(uint16_t *)(sig + 12);
++		break;
++	case 0x1300: {                          /* MA_UNITDATA_IND */
++		uint16_t pil = *(uint16_t *)(sig + 20);
++		if (pil < n) {
++			on_frame(data + pil, n - pil);
++		}
++		break;
++	}
 +	default:
 +		break;
 +	}
-+	printf("XC5 WLBT: signal %#x from the firmware, %u data bytes\n", id, n);
++	if (id != 0x1300 && id != 0x8301) {
++		printf("XC5 WLBT: signal %#x from the firmware, %u data bytes\n", id, n);
++	}
 +}
 +
 +/* Signals from the firmware (queues 3 and 4) and our buffers it gave back (queue 2) */
@@ -3026,6 +3280,7 @@ index 0000000..5d61bd6
 +		*scb(2, 1) = (uint8_t)(*scb(2, 1) + 1);
 +		fh_rfb++;
 +	}
++	dhcp_tick();
 +	for (int q = 3; q <= 4; q++) {
 +		for (int guard = 0; guard < 64 && *scb(q, 1) != *scb(q, 0); guard++) {
 +			uint8_t r = *scb(q, 1);
@@ -3268,9 +3523,15 @@ index 0000000..5d61bd6
 +		    mlme_ids[(mlme_got + 5) % 8], mlme_ids[(mlme_got + 6) % 8], mlme_ids[(mlme_got + 7) % 8]);
 +		printf("XC5 chip %x plat %x build %u\n", mib_chip, mib_plat, mib_build);
 +		printf("XC5 vif %x scan %x ind %u done %u aps %u\n", vif_res, scan_res, scan_inds, scan_done, ap_count);
-+		for (uint32_t k = 0; k < ap_count && k < APN; k++) {
-+			printf("XC5 ap %u %d %.24s\n", aps[k].mhz, aps[k].rssi, aps[k].ssid);
-+		}	}
++		for (uint32_t k = 0; k < ap_count && k < 6; k++) {
++			printf("XC5 ap %u %d %c %.24s\n", aps[k].mhz, aps[k].rssi, aps[k].open ? 'o' : 's', aps[k].ssid);
++		}
++		const uint8_t *ip = (const uint8_t *)&ack_ip, *gw = (const uint8_t *)&ack_gw, *of = (const uint8_t *)&offer_ip;
++		printf("XC5 join %.20s cfm %x ind %x disc %x\n", ap_sel >= 0 ? aps[ap_sel].ssid : "-", conn_cfm, conn_ind,
++		    disc_reason);
++		printf("XC5 data tx %u cfm %x rx %u dhcp %u offer %u.%u.%u.%u\n", data_tx, data_cfm, data_rx, dhcp_state, of[0],
++		    of[1], of[2], of[3]);
++		printf("XC5 ip %u.%u.%u.%u gw %u.%u.%u.%u\n", ip[0], ip[1], ip[2], ip[3], gw[0], gw[1], gw[2], gw[3]);	}
 +	/* the firmware's last log lines, oldest first */
 +	for (uint32_t k = log_recs >= LOGN ? log_recs - LOGN + 1 : 1; k != 0 && k <= log_recs; k++) {
 +		printf("XC5 fw%u %s\n", k, loglines[k % LOGN]);
@@ -3293,6 +3554,7 @@ index 0000000..5d61bd6
 +		return;
 +	}
 +	PE_parse_boot_argn("xc5wlan", &wlan_mode, sizeof(wlan_mode));
++	PE_parse_boot_argn("xc5ssid", want_ssid, sizeof(want_ssid) - 1);
 +	thread_t thread;
 +	if (kernel_thread_start(wlbt_thread, NULL, &thread) == KERN_SUCCESS) {
 +		thread_deallocate(thread);
