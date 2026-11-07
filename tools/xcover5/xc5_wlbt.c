@@ -44,6 +44,19 @@
 #include <kern/thread.h>
 #include <mach/mach_time.h>
 #include <pexpert/pexpert.h>
+#include <kern/locks.h>
+#include <sys/socket.h>
+#include <sys/sockio.h>
+#include <sys/kpi_mbuf.h>
+#include <sys/kpi_socket.h>
+#include <net/if.h>
+#include <net/if_types.h>
+#include <net/ethernet.h>
+#include <net/if_ether.h>
+#include <net/kpi_interface.h>
+#include <net/route.h>
+#include <netinet/in.h>
+#include <netinet/in_var.h>
 
 extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern vm_offset_t ml_io_map_wcomb(vm_offset_t phys_addr, vm_size_t size);
@@ -1054,10 +1067,13 @@ send_dhcp(uint8_t type)
 	printf("XC5 WLBT: DHCP %s sent\n", type == 1 ? "DISCOVER" : "REQUEST");
 }
 
+static void deliver(const uint8_t *fr, uint32_t n);
+
 static void
 on_frame(const uint8_t *fr, uint32_t n)
 {
 	data_rx++;
+	deliver(fr, n);
 	if (n < 14 + 20 + 8 + 240 || fr[12] != 0x08 || fr[13] != 0 || fr[14 + 9] != 17) {
 		return;
 	}
@@ -1130,7 +1146,7 @@ dhcp_tick(void)
 static void
 on_signal(uint32_t ref)
 {
-	static uint8_t data[1024];
+	static uint8_t data[2048];
 	uint8_t *m = shm + ref;
 	uint8_t *sig = m + 20 + 4;
 	uint16_t id = *(uint16_t *)sig;
@@ -1245,9 +1261,9 @@ on_signal(uint32_t ref)
 	}
 }
 
-/* Signals from the firmware (queues 3 and 4) and our buffers it gave back (queue 2) */
+/* Signals from the firmware (queues 3 and 4) and our buffers it gave back (queue 2); the caller holds xc5w_mtx */
 static void
-hip_poll(void)
+hip_poll_locked(void)
 {
 	if (hip == NULL || (hb_cfm & 2) == 0 || ((struct hip_init *)hip)->conf_ver == 0) {
 		return;
@@ -1281,6 +1297,273 @@ hip_poll(void)
 			*scb(q, 1) = (uint8_t)(r + 1);
 			__asm__ volatile ("dsb sy" ::: "memory");
 			q_put(5, ref);          /* back to the firmware */
+		}
+	}
+}
+/*
+ * Step 4c: the network interface (en<n>, normally en0) the iOS network stack sees. A legacy BSD Ethernet interface as
+ * bsd/net/if_fake.c makes one in its BSD mode: ifnet_allocate_extended (IFNET_INIT_LEGACY, no Skywalk nexus), the
+ * ether_* demux/framer, ifnet_attach, the link-layer address. Output: the framed Ethernet packet goes out as an
+ * MA-UNITDATA.request. Input: every frame received becomes an mbuf whose packet header points at the Ethernet header
+ * and whose data starts after it (as feth does it), handed to ifnet_input outside our lock. The address, mask and
+ * default route come from the DHCP ACK, set with a kernel socket (SIOCAIFADDR) and a routing socket (RTM_ADD). Then
+ * the gateway is pinged (an ICMP datagram socket) every 2 s, the proof that the stack itself talks through the radio.
+ */
+static LCK_GRP_DECLARE(xc5w_grp, "xc5wlbt");
+static LCK_MTX_DECLARE(xc5w_mtx, &xc5w_grp);
+static ifnet_t xc5_ifp;
+static mbuf_t rx_head, rx_tail;
+static uint32_t rx_n, if_out, if_in, if_drop, ping_sent, ping_got;
+static int if_err = -1, addr_err = -1, route_err = -1, ping_err = -1;
+static char if_nm[IFNAMSIZ] = "-";
+static socket_t ping_so;
+static uint64_t ping_next;
+
+static void
+deliver(const uint8_t *fr, uint32_t n)
+{
+	if (xc5_ifp == NULL || n < ETHER_HDR_LEN || n > 2048) {
+		return;
+	}
+	mbuf_t m = NULL;
+	unsigned int chunks = 1;
+	if (mbuf_allocpacket(MBUF_DONTWAIT, n, &chunks, &m) != 0 || m == NULL) {
+		if_drop++;
+		return;
+	}
+	if (mbuf_copyback(m, 0, n, fr, MBUF_DONTWAIT) != 0) {
+		mbuf_freem(m);
+		if_drop++;
+		return;
+	}
+	(void)mbuf_pkthdr_setrcvif(m, xc5_ifp);
+	void *h = mbuf_data(m);
+	mbuf_pkthdr_setheader(m, h);
+	mbuf_pkthdr_adjustlen(m, -ETHER_HDR_LEN);
+	(void)mbuf_setdata(m, (char *)h + ETHER_HDR_LEN, mbuf_len(m) - ETHER_HDR_LEN);
+	if (rx_tail != NULL) {
+		mbuf_setnextpkt(rx_tail, m);
+	} else {
+		rx_head = m;
+	}
+	rx_tail = m;
+	rx_n++;
+}
+
+static void
+hip_poll(void)
+{
+	lck_mtx_lock(&xc5w_mtx);
+	hip_poll_locked();
+	mbuf_t head = rx_head;
+	uint32_t n = rx_n;
+	rx_head = rx_tail = NULL;
+	rx_n = 0;
+	ifnet_t ifp = xc5_ifp;
+	lck_mtx_unlock(&xc5w_mtx);
+	if (head != NULL) {
+		struct ifnet_stat_increment_param st = {};
+		st.packets_in = n;
+		if_in += n;
+		ifnet_input(ifp, head, &st);
+	}
+}
+
+static errno_t
+xc5_if_output(ifnet_t ifp, mbuf_t m)
+{
+	static uint8_t buf[1600];
+	size_t len = mbuf_pkthdr_len(m);
+	lck_mtx_lock(&xc5w_mtx);
+	if (conn_ind == 0 && len >= ETHER_HDR_LEN && len <= sizeof(buf) && mbuf_copydata(m, 0, len, buf) == 0) {
+		send_frame(buf, (uint32_t)len);
+		if_out++;
+		(void)ifnet_stat_increment_out(ifp, 1, (uint32_t)len, 0);
+	} else {
+		if_drop++;
+		(void)ifnet_stat_increment_out(ifp, 0, 0, 1);
+	}
+	lck_mtx_unlock(&xc5w_mtx);
+	mbuf_freem(m);
+	return 0;
+}
+
+static errno_t
+xc5_if_ioctl(ifnet_t ifp, unsigned long cmd, void *data)
+{
+	(void)data;
+	switch (cmd) {
+	case SIOCSIFADDR:
+	case SIOCAIFADDR:
+		ifnet_set_flags(ifp, IFF_UP, IFF_UP);
+		return 0;
+	case SIOCSIFFLAGS:
+	case SIOCADDMULTI:
+	case SIOCDELMULTI:
+		return 0;
+	default:
+		return EOPNOTSUPP;
+	}
+}
+
+static void
+sin_set(struct sockaddr_in *s, uint32_t a)
+{
+	bzero(s, sizeof(*s));
+	s->sin_len = sizeof(*s);
+	s->sin_family = AF_INET;
+	s->sin_addr.s_addr = a;
+}
+
+/* In the Wi-Fi thread, without our lock (attaching and the address make the stack send) */
+static void
+net_up(void)
+{
+	struct ifnet_init_eparams p;
+	ifnet_t ifp = NULL;
+	uint32_t unit;
+	for (unit = 0; unit < 8; unit++) {
+		ifnet_t other = NULL;
+		snprintf(if_nm, sizeof(if_nm), "en%u", unit);
+		if (ifnet_find_by_name(if_nm, &other) != 0) {
+			break;
+		}
+		ifnet_release(other);
+	}
+	bzero(&p, sizeof(p));
+	p.ver = IFNET_INIT_CURRENT_VERSION;
+	p.len = sizeof(p);
+	p.flags = IFNET_INIT_LEGACY | IFNET_INIT_NX_NOAUTO;
+	p.uniqueid = "xc5wlan";
+	p.uniqueid_len = 7;
+	p.name = "en";
+	p.unit = unit;
+	p.family = IFNET_FAMILY_ETHERNET;
+	p.type = IFT_ETHER;
+	p.output = xc5_if_output;
+	p.demux = ether_demux;
+	p.add_proto = ether_add_proto;
+	p.del_proto = ether_del_proto;
+	p.check_multi = ether_check_multi;
+	p.framer_extended = ether_frameout_extended;
+	p.ioctl = xc5_if_ioctl;
+	p.broadcast_addr = etherbroadcastaddr;
+	p.broadcast_len = ETHER_ADDR_LEN;
+	if_err = ifnet_allocate_extended(&p, &ifp);
+	if (if_err != 0) {
+		return;
+	}
+	(void)ifnet_set_capabilities_enabled(ifp, 0, -1);
+	ifnet_set_addrlen(ifp, ETHER_ADDR_LEN);
+	ifnet_set_baudrate(ifp, 72000000);
+	ifnet_set_mtu(ifp, ETHERMTU);
+	ifnet_set_flags(ifp, IFF_BROADCAST | IFF_MULTICAST | IFF_SIMPLEX, 0xffff);
+	ifnet_set_hdrlen(ifp, sizeof(struct ether_header));
+	ifnet_set_offload(ifp, 0);
+	if_err = ifnet_attach(ifp, NULL);
+	if (if_err != 0) {
+		ifnet_release(ifp);
+		return;
+	}
+	ifnet_set_lladdr(ifp, vif_mac, ETHER_ADDR_LEN);
+	ifnet_set_flags(ifp, IFF_UP | IFF_RUNNING, IFF_UP | IFF_RUNNING);
+	lck_mtx_lock(&xc5w_mtx);
+	xc5_ifp = ifp;
+	lck_mtx_unlock(&xc5w_mtx);
+
+	uint32_t mask = ack_mask != 0 ? ack_mask : htonl(0xffffff00);
+	socket_t so = NULL;
+	addr_err = sock_socket(PF_INET, SOCK_DGRAM, 0, NULL, NULL, &so);
+	if (addr_err == 0) {
+		struct in_aliasreq ifra;
+		bzero(&ifra, sizeof(ifra));
+		strlcpy(ifra.ifra_name, if_nm, sizeof(ifra.ifra_name));
+		sin_set(&ifra.ifra_addr, ack_ip);
+		sin_set(&ifra.ifra_mask, mask);
+		sin_set(&ifra.ifra_broadaddr, ack_ip | ~mask);
+		addr_err = sock_ioctl(so, SIOCAIFADDR, &ifra);
+		sock_close(so);
+	}
+	if (ack_gw != 0) {
+		struct {
+			struct rt_msghdr h;
+			struct sockaddr_in dst, gw, mask;
+		} msg;
+		bzero(&msg, sizeof(msg));
+		msg.h.rtm_msglen = sizeof(msg);
+		msg.h.rtm_version = RTM_VERSION;
+		msg.h.rtm_type = RTM_ADD;
+		msg.h.rtm_flags = RTF_UP | RTF_GATEWAY | RTF_STATIC;
+		msg.h.rtm_addrs = RTA_DST | RTA_GATEWAY | RTA_NETMASK;
+		msg.h.rtm_seq = 1;
+		sin_set(&msg.dst, 0);
+		sin_set(&msg.gw, ack_gw);
+		sin_set(&msg.mask, 0);
+		socket_t rs = NULL;
+		route_err = sock_socket(PF_ROUTE, SOCK_RAW, 0, NULL, NULL, &rs);
+		if (route_err == 0) {
+			struct iovec iov = { &msg, sizeof(msg) };
+			struct msghdr mh;
+			size_t sent = 0;
+			bzero(&mh, sizeof(mh));
+			mh.msg_iov = &iov;
+			mh.msg_iovlen = 1;
+			route_err = sock_send(rs, &mh, 0, &sent);
+			sock_close(rs);
+		}
+	}
+	ping_err = sock_socket(PF_INET, SOCK_DGRAM, IPPROTO_ICMP, NULL, NULL, &ping_so);
+	printf("XC5 WLBT: %s up (%d), address %d, route %d, ping socket %d\n", if_nm, if_err, addr_err, route_err, ping_err);
+}
+
+static void
+ping_tick(void)
+{
+	if (ping_so == NULL || ack_gw == 0) {
+		return;
+	}
+	uint64_t ns;
+	absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
+	if (ns >= ping_next) {
+		ping_next = ns + 2000000000ull;
+		uint8_t e[24];
+		bzero(e, sizeof(e));
+		e[0] = 8;                       /* echo request */
+		e[4] = 0x58;
+		e[5] = 0x35;
+		e[7] = (uint8_t)ping_sent;
+		uint16_t cs = ip_sum(e, sizeof(e));
+		e[2] = (uint8_t)(cs >> 8);
+		e[3] = (uint8_t)cs;
+		struct sockaddr_in to;
+		sin_set(&to, ack_gw);
+		struct iovec iov = { e, sizeof(e) };
+		struct msghdr mh;
+		size_t sent = 0;
+		bzero(&mh, sizeof(mh));
+		mh.msg_name = &to;
+		mh.msg_namelen = sizeof(to);
+		mh.msg_iov = &iov;
+		mh.msg_iovlen = 1;
+		ping_err = sock_send(ping_so, &mh, 0, &sent);
+		if (ping_err == 0) {
+			ping_sent++;
+		}
+	}
+	for (int k = 0; k < 8; k++) {
+		uint8_t r[128];
+		struct iovec iov = { r, sizeof(r) };
+		struct msghdr mh;
+		size_t got = 0;
+		bzero(&mh, sizeof(mh));
+		mh.msg_iov = &iov;
+		mh.msg_iovlen = 1;
+		if (sock_receive(ping_so, &mh, MSG_DONTWAIT, &got) != 0 || got == 0) {
+			break;
+		}
+		const uint8_t *icmp = (got >= 20 && (r[0] >> 4) == 4) ? r + (r[0] & 15) * 4 : r;
+		if (icmp < r + got && icmp[0] == 0) {
+			ping_got++;
 		}
 	}
 }
@@ -1464,12 +1747,19 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 		delay(100000);
 	}
 	/* then the log and the management ring every 0.5 s for good; the outcome said again every 20 s for 3 minutes */
+	/* 10 ms ticks from here on: the network interface's receive path is this loop (step 4c) */
 	for (int i = 0, tick = 0;; tick++) {
-		read_mgmt();
-		poll_log(200 + tick * 5);
+		if (tick % 50 == 0) {
+			read_mgmt();
+			poll_log(200 + tick / 10);
+		}
 		hip_poll();
-		if (tick % 40 != 0 || i >= 9) {
-			delay(500000);
+		if (xc5_ifp == NULL && dhcp_state == 3 && if_err == -1) {
+			net_up();
+		}
+		ping_tick();
+		if (tick % 2000 != 0 || i >= 9) {
+			delay(10000);
 			continue;
 		}
 		i++;
@@ -1481,7 +1771,7 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 		    rd(mbox, INTSR1), *(volatile uint32_t *)(shm + conf->mgmt.to_ap.buf.read_index_loc),
 		    *(volatile uint32_t *)(shm + conf->mgmt.to_ap.buf.write_index_loc),
 		    *(volatile uint32_t *)(shm + conf->mxlog.buf.write_index_loc), p[0], p[1], p[2]);
-		delay(500000);
+		delay(10000);
 	}
 }
 
@@ -1525,6 +1815,8 @@ xc5_wlbt_heartbeat(void)
 	const uint8_t *ip = (const uint8_t *)&ack_ip, *of = (const uint8_t *)&offer_ip;
 	printf("XC5 w data tx %u cfm %x rx %u dhcp %u offer %u.%u.%u.%u ip %u.%u.%u.%u\n", data_tx, data_cfm, data_rx,
 	    dhcp_state, of[0], of[1], of[2], of[3], ip[0], ip[1], ip[2], ip[3]);
+	printf("XC5 w if %s %d addr %d route %d out %u in %u drop %u ping %u/%u (%d)\n", if_nm, if_err, addr_err, route_err,
+	    if_out, if_in, if_drop, ping_got, ping_sent, ping_err);
 }
 void xc5_wlbt_start(void);
 void
