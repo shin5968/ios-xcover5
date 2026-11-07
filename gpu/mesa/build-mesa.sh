@@ -24,6 +24,48 @@ cd "$WORK"
 [ -d libdrm ] || git clone -q --depth 1 --branch "$LIBDRM_TAG" https://gitlab.freedesktop.org/mesa/drm.git libdrm
 python3 "$HERE/patch-mesa.py" mesa
 
+# XCover5 Metal M1 (docs/xcover5-metal-plan.md): the AIR frontend (Apple's shader bitcode -> NIR) from
+# stormtroopxyz/y2sios (MIT, gpu/metal/air, with Luminous418/hakios-a32's air-integer-ubo.patch applied), and
+# libredwoodair (its rwa_* contract, air_metal.h) over panfrost's Bifrost compiler, as y2sios's air-panfrost.patch
+# declares it -- but linked against our libdrm stand-in (herodrm) instead of compiling y2sios's redwood_drm.c in.
+METAL="$HERE/../metal"
+if [ -d "$METAL/air" ] && [ ! -f mesa/.xc5-air ]; then
+  rm -rf mesa/src/compiler/air
+  cp -r "$METAL/air" mesa/src/compiler/air
+  python3 - mesa <<'PY'
+import sys
+from pathlib import Path
+m = Path(sys.argv[1])
+c = m / 'src/compiler/meson.build'
+t = c.read_text()
+if "subdir('air')" not in t:
+    t = t.replace("subdir('spirv')\n", "subdir('spirv')\n\nsubdir('air')\n", 1)
+    assert "subdir('air')" in t, 'src/compiler/meson.build: no spirv subdir'
+    c.write_text(t)
+p = m / 'src/gallium/drivers/panfrost/meson.build'
+t = p.read_text()
+if 'redwoodair' not in t:
+    t += '''
+# XCover5: libredwoodair, the Metal driver's compiler and dispatcher (y2sios air-panfrost.patch, without
+# redwood_drm.c: dep_libdrm is our HeroGPU/XC5GPU stand-in).
+libredwoodair = shared_library(
+  'redwoodair',
+  files('../../../compiler/air/air_metal.c'),
+  include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium,
+                         inc_gallium_aux, inc_gallium_winsys_sw, inc_gallium_winsys,
+                         include_directories('../../drivers')],
+  dependencies : [dep_m, idep_air, idep_mesautil, idep_xmlconfig, driver_softpipe,
+                  driver_panfrost, dep_libdrm],
+  link_with : [libgallium, libgalliumvl_stub, libws_null],
+  build_by_default : false,
+  install : false,
+)
+'''
+    p.write_text(t)
+PY
+  touch mesa/.xc5-air
+fi
+
 # The libdrm stand-in, and a pkg-config file pointing Mesa at it.
 mkdir -p drm-standin pc
 $CC_IOS -O2 -Wall -fvisibility=hidden -dynamiclib \
@@ -82,6 +124,12 @@ cd mesa
   -Dgallium-opencl=disabled -Dgallium-rusticl=false -Dgallium-xa=disabled \
   -Dgallium-vdpau=disabled -Dgallium-va=disabled -Dtools= -Dperfetto=false
 ninja -C build -k 0
+# Metal M1: not built by default (build_by_default false), asked for by name. A failure here does not cost the
+# GLES libraries above: the log says why and the artifact goes out without it.
+AIR_OK=0
+if [ -f .xc5-air ]; then
+  if ninja -C build src/gallium/drivers/panfrost/libredwoodair.dylib; then AIR_OK=1; else echo "::warning::libredwoodair did not build"; fi
+fi
 cd ..
 
 mkdir -p "$OUT/lib"
@@ -90,6 +138,10 @@ glapi=$(ls mesa/build/src/mapi/shared-glapi/libglapi.0*.dylib 2>/dev/null | head
 cp "$osmesa" "$OUT/lib/libOSMesa.8.dylib"
 [ -n "$glapi" ] && cp "$glapi" "$OUT/lib/libglapi.0.dylib"
 cp drm-standin/libdrm.2.dylib "$OUT/lib/"
+if [ "$AIR_OK" = 1 ]; then
+  cp mesa/build/src/gallium/drivers/panfrost/libredwoodair.dylib "$OUT/lib/libredwoodair.dylib"
+  echo "libredwoodair: $(nm -gU "$OUT/lib/libredwoodair.dylib" | grep -c ' _rwa_') rwa_* functions"
+fi
 
 # @rpath install names, so the dylibs load from wherever they are installed.
 for lib in "$OUT"/lib/*.dylib; do
