@@ -235,6 +235,71 @@ static void guard_poster_kit(void) {
             sel_getName(wrapped[i].sel));
 }
 
+/*
+ * Boot 75: with the guard SpringBoard no longer aborts (one pid all along), yet no lock screen comes and our
+ * look_at_windows (on the main queue) never says a word: the main thread is held somewhere. From a thread of ours,
+ * every 3 s from 15 s to 75 s, the main thread's pc, lr and 10 frame-pointer return addresses, unslid for the 16.7.16
+ * cache (symbolised on the host).
+ */
+#include <mach/thread_status.h>
+#include <pthread.h>
+extern const void *_dyld_get_shared_cache_range(size_t *length);
+static mach_port_t main_thread;
+static uintptr_t cache_lo, cache_hi, cache_slide;
+
+static void fmt_addr(char *out, size_t size, uintptr_t a) {
+    a &= 0x0000000fffffffffUL;
+    if (a >= cache_lo && a < cache_hi) snprintf(out, size, "%lx", (unsigned long)(a - cache_slide));
+    else snprintf(out, size, "+%lx", (unsigned long)a);
+}
+
+static int read_word(uintptr_t at, uintptr_t *value) {
+    vm_size_t got = 0;
+    return vm_read_overwrite(mach_task_self(), (vm_address_t)at, sizeof *value, (vm_address_t)value, &got) ==
+        KERN_SUCCESS && got == sizeof *value;
+}
+
+static void sample_main(int n) {
+    arm_thread_state64_t st;
+    mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
+    char line[230], a[24];
+    size_t len = 0;
+    uintptr_t frames[10];
+    int nf = 0;
+
+    if (thread_suspend(main_thread) != KERN_SUCCESS) return;
+    kern_return_t kr = thread_get_state(main_thread, ARM_THREAD_STATE64, (thread_state_t)&st, &count);
+    uintptr_t fp = (uintptr_t)arm_thread_state64_get_fp(st);
+    while (kr == KERN_SUCCESS && fp != 0 && nf < 10) {
+        uintptr_t next, ret;
+        if (!read_word(fp, &next) || !read_word(fp + 8, &ret) || ret == 0) break;
+        frames[nf++] = ret;
+        if (next <= fp) break;
+        fp = next;
+    }
+    thread_resume(main_thread);
+    if (kr != KERN_SUCCESS) return;
+    fmt_addr(a, sizeof a, (uintptr_t)arm_thread_state64_get_pc(st));
+    len += (size_t)snprintf(line + len, sizeof line - len, "xc5sb: main #%d pc %s", n, a);
+    fmt_addr(a, sizeof a, (uintptr_t)arm_thread_state64_get_lr(st));
+    len += (size_t)snprintf(line + len, sizeof line - len, " lr %s bt", a);
+    for (int i = 0; i < nf && len < sizeof line - 16; i++) {
+        fmt_addr(a, sizeof a, frames[i]);
+        len += (size_t)snprintf(line + len, sizeof line - len, " %s", a);
+    }
+    say("%s", line);
+}
+
+static void *main_sampler(void *arg) {
+    (void)arg;
+    sleep(15);
+    for (int n = 1; n <= 20; n++) {
+        sample_main(n);
+        sleep(3);
+    }
+    return NULL;
+}
+
 static void image_added(const struct mach_header *header, intptr_t image_slide) {
     (void)header; (void)image_slide;
     guard_poster_kit();         /* once PosterKit's classes are there */
@@ -242,6 +307,18 @@ static void image_added(const struct mach_header *header, intptr_t image_slide) 
 
 __attribute__((constructor)) static void xc5_sb_start(void) {
     if (strcmp(getprogname(), "SpringBoard") != 0) return;
+    {
+        size_t length = 0;
+        const void *cache = _dyld_get_shared_cache_range(&length);
+        pthread_t t;
+        if (cache != NULL) {
+            cache_lo = (uintptr_t)cache;
+            cache_hi = cache_lo + length;
+            cache_slide = cache_lo - 0x180000000UL;
+        }
+        main_thread = mach_thread_self();       /* constructors run on the main thread */
+        if (pthread_create(&t, NULL, main_sampler, NULL) == 0) pthread_detach(t);
+    }
     _dyld_register_func_for_add_image(image_added);         /* also called for every image already loaded */
     if (access(DROP_DIR "wallpaper.off", F_OK) == 0) {
         say("xc5sb: wallpaper.off: left alone");
