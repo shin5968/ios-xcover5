@@ -82,7 +82,7 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
 
 ## 다음 행동
 
-1. M4 위젯: 사진 위젯 "대기 중..." 원인 찾기. 위젯 확장(예: PhotosWidget 확장 프로세스)이 스냅샷을 못 주는지, chronod가
+1. M4 위젯: chronod가 Metal로 그리는 것이 무엇인지(어떤 위젯/요소) 확인. 사진 위젯은 사진 앱(assetsd/photolibraryd)부터. 위젯 확장이 스냅샷을 못 주는지, chronod가
    그리다 막히는지. 다음 영상에서 홈 화면 오래 두고 `CRASH`, `metal E ...`, `chronod` 줄 확인. 필요하면 확장 프로세스를
    `xc5metalfor`에 추가(쉼표 목록). `gpuAddress 0`(Mesa 버퍼 경로에서 GPU 주소를 안 알려줌)도 확인할 것.
 2. Metal 컴퓨트 한 번(셰이더 metallib을 CI의 Xcode `xcrun metal`로 만들어 드롭에 넣고, `xc5_mtl.c`에서 실행·결과 확인).
