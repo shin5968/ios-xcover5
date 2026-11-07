@@ -283,6 +283,15 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   rssi}의 데이터 = 비콘/프로브 응답 프레임(체인 mbulk까지 모음) → SSID(24+12바이트 뒤 원소 0), BSSID(+16). 6개까지 기억.
   TH data(q4)도 읽음. 송신은 TX ctrl 32칸 순환. heartbeat: `XC5 mlme sent= got= rfb= ids ...`, `XC5 chip a700 plat 77 build N`,
   `XC5 vif <결과> scan <결과> ind <수> done <수> aps <수>`, `XC5 ap <MHz> <dBm> <SSID>`. 이미지 `xc5-ios-wifi12-console.tar`.
+- **wifi12 결과(영상 20261107_220938): Wi-Fi 3d 성공 — 폰이 실제 AP를 찾음.** `XC5 chip a700 plat 77 build 498375851`
+  (펌웨어 빌드 문자열의 `univ3 498375851`과 같음), `XC5 vif 0 scan 0 ind 1 done 1 aps 1`, `XC5 ap 2412 -57 <근처 AP SSID>`
+  (채널 1, -57 dBm). `XC5 mlme sent=3 got=77 rfb=3 ids 8301 8301 8301 2301`, q3/q5 w77 r77. ADD_VIF·ADD_SCAN 모두 result 0,
+  SCAN_DONE 1번. 신호 대부분 0x8301(DEBUG SAP 쪽 표시, 미해독). 검색 결과(SCAN_IND)는 1개뿐 → 다른 AP가 없었거나 일부만 보고됨
+  (다음에 확인: 0x8301 해독, 활성 검색에 probe 응답, 5 GHz 채널 추가).
+- **다음 = iOS 쪽 연결(4단계)**: 커널 안 Wi-Fi 드라이버(xc5_wlbt)를 iOS 네트워크 스택에 붙이기. 후보 순서: (a) 연결
+  (MLME-CONNECT.request, 개방형 또는 WPA2 → 4-way handshake는 펌웨어 오프로드 여부 확인), (b) 데이터 경로(MA-UNITDATA,
+  TH/FH data 큐)로 이더넷 프레임 주고받기, (c) BSD `ifnet`(en0) 등록 + DHCP, (d) apple80211/IO80211 흉내(설정 앱 Wi-Fi 목록용,
+  y2sios/Scion 방식 조사). 가장 짧은 길: 개방형 또는 WPA2 AP에 커널에서 직접 붙고 en0만 올려 ping.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
