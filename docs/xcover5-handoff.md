@@ -110,6 +110,10 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
      볼 것: `xc5ckpt: loaded in checkpointd`, `xc5ckpt: ... mach_msg id ... limited`, `answered 0x10004003 (no reply in time)`,
      그 뒤 사진 앱이 그려지는지. 사진 앱 다음 벽은 Metal일 수 있음(PXG는 Metal 렌더러만, `xc5metalfor`에 MobileSlideShow 넣어 둠).
      같은 FairPlay 대기는 App Store 등 다른 곳에도 있을 것(S9+는 AMS 메서드 교체로 해결).
+   - 부팅 83: 라이브러리는 들어갔지만 제한 줄이 안 나옴(port.md 83). 다음 `xc5-ios-photo6-console.tar`(xnu CI 42347265756,
+     mesa-ios CI 42347265677, 드롭 1794033462): checkpointd에 libxc5ckpt + libxc5poster(모든 스레드 3초마다), mach_msg 처음
+     12번 모두 `xc5ckpt: mach_msg #N option ... id ...`. 볼 것: mach_msg 줄이 나오는지(안 나오면 interpose 미적용 →
+     다른 방법: fishhook식 GOT 덮어쓰기), 스레드가 어디서 멈췄는지.
 1. M4 위젯: chronod가 Metal로 그리는 것이 무엇인지(어떤 위젯/요소) 확인. 사진 위젯은 사진 앱(assetsd/photolibraryd)부터. 위젯 확장이 스냅샷을 못 주는지, chronod가
    그리다 막히는지. 다음 영상에서 홈 화면 오래 두고 `CRASH`, `metal E ...`, `chronod` 줄 확인. 필요하면 확장 프로세스를
    `xc5metalfor`에 추가(쉼표 목록). `gpuAddress 0`(Mesa 버퍼 경로에서 GPU 주소를 안 알려줌)도 확인할 것.

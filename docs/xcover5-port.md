@@ -279,6 +279,11 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
     (@"ImageSpecifications")`, NULL이면 `/System/Library/CoreServices/Checkpoint.xml`에서 직접 읽음(대체 경로 있음).
   - 조치(커밋 1b0f769): `xc5ckpt=1` → checkpointd에 `libxc5ckpt.dylib`(mach_msg interpose, send+receive에 3초 제한).
     `xc5_drop.c`: 꺼진 항목이 검색을 끝내지 않게(같은 프로그램에 항목 둘).
+- 83 (`xc5-ios-photo5-console.tar`, 드롭 1794032165): `XC5 PB: checkpointd (pid 294): libxc5ckpt.dylib inserted`,
+  `xc5ckpt: loaded in checkpointd (pid 294)`, 그런데 **"receive limited" 줄이 한 번도 안 나옴**, 사진 앱은 여전히 하얗고
+  메인 스레드는 같은 checkpointd 대기. `machstub.py`로 0x10003c23c 스텁이 `_mach_msg`임은 확인. 이번 checkpointd가 그 호출에
+  이르지 않았는지, interpose가 안 걸린 건지 모름 → (커밋 5aec1cd) checkpointd에 두 라이브러리를 함께 넣고
+  (`DYLD_INSERT_LIBRARIES=libxc5ckpt:libxc5poster`), mach_msg는 옵션과 상관없이 처음 12번을 모두 찍음.
 
 ## S8 포트와 다른 점
 
