@@ -983,10 +983,10 @@ index ba647a8..979c83f 100644
  	int log_contacts = 0;
 diff --git a/bsd/dev/xc5_drop.c b/bsd/dev/xc5_drop.c
 new file mode 100644
-index 0000000..aa08d6b
+index 0000000..54d1437
 --- /dev/null
 +++ b/bsd/dev/xc5_drop.c
-@@ -0,0 +1,527 @@
+@@ -0,0 +1,532 @@
 +/*
 + * XCover5 drop zone: files for the iOS root from the CACHE partition, so the
 + * Mesa libraries reach the phone without reflashing the 12 GB root image.
@@ -1350,6 +1350,11 @@ index 0000000..aa08d6b
 +	 * screen with no crash, and its own start was hidden under that screen */
 +	{ "/MobileSlideShow.app/MobileSlideShow", "xc5photos", "/private/var/xc5/lib/libxc5poster.dylib",
 +	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5poster.dylib", "MobileSlideShow" },
++	/* xc5ckpt=1: checkpointd's FairPlay Mach call gets a time limit (gpu/eagl/src/xc5_ckpt.c, boot 82:
++	 * fairplayd.H2 starts and exits at once, so the call waited forever and so did the Photos app).
++	 * Before the xc5photos entry: one library per process, the first entry that is on wins. */
++	{ "/usr/libexec/checkpointd", "xc5ckpt", "/private/var/xc5/lib/libxc5ckpt.dylib",
++	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5ckpt.dylib", "checkpointd" },
 +	/* boot 81: Photos' main thread waits on checkpointd (MCCopyCheckpointValue); its threads sampled too */
 +	{ "/usr/libexec/checkpointd", "xc5photos", "/private/var/xc5/lib/libxc5poster.dylib",
 +	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5poster.dylib", "checkpointd" },
@@ -1385,7 +1390,7 @@ index 0000000..aa08d6b
 +			continue;
 +		}
 +		if (!PE_parse_boot_argn(xpb_targets[t].bootarg, &on, sizeof(on)) || !on) {
-+			return 0;
++			continue;       /* a later entry for the same program may be on (checkpointd: xc5ckpt, xc5photos) */
 +		}
 +		if (xpb_count >= XPB_MAX) {
 +			printf("XC5 PB: %s (pid %d): no room, stock\n", xpb_targets[t].name, pid);

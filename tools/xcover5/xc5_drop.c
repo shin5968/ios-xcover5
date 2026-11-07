@@ -361,6 +361,11 @@ static const struct {
 	 * screen with no crash, and its own start was hidden under that screen */
 	{ "/MobileSlideShow.app/MobileSlideShow", "xc5photos", "/private/var/xc5/lib/libxc5poster.dylib",
 	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5poster.dylib", "MobileSlideShow" },
+	/* xc5ckpt=1: checkpointd's FairPlay Mach call gets a time limit (gpu/eagl/src/xc5_ckpt.c, boot 82:
+	 * fairplayd.H2 starts and exits at once, so the call waited forever and so did the Photos app).
+	 * Before the xc5photos entry: one library per process, the first entry that is on wins. */
+	{ "/usr/libexec/checkpointd", "xc5ckpt", "/private/var/xc5/lib/libxc5ckpt.dylib",
+	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5ckpt.dylib", "checkpointd" },
 	/* boot 81: Photos' main thread waits on checkpointd (MCCopyCheckpointValue); its threads sampled too */
 	{ "/usr/libexec/checkpointd", "xc5photos", "/private/var/xc5/lib/libxc5poster.dylib",
 	  "DYLD_INSERT_LIBRARIES=/private/var/xc5/lib/libxc5poster.dylib", "checkpointd" },
@@ -396,7 +401,7 @@ xpb_env(const char *path, int pid, const char **extra, int max)
 			continue;
 		}
 		if (!PE_parse_boot_argn(xpb_targets[t].bootarg, &on, sizeof(on)) || !on) {
-			return 0;
+			continue;       /* a later entry for the same program may be on (checkpointd: xc5ckpt, xc5photos) */
 		}
 		if (xpb_count >= XPB_MAX) {
 			printf("XC5 PB: %s (pid %d): no room, stock\n", xpb_targets[t].name, pid);
