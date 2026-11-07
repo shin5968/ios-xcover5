@@ -123,6 +123,10 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
     지우지 않는다면). 오차: 이미지를 만든 뒤 부팅까지 걸린 시간만큼 늦음. 이미지 `xc5-ios-rtc4-console.tar`.
     볼 것: `XC5 RTC: written 2026-..`, `... not valid; xc5epoch ...: using ...; RTC written`, 잠금화면 날짜. 그리고 **한 번 더
     재부팅**했을 때 `the PMIC's clock said 2026-..`가 나오는지(시계가 유지되는지).
+  - **rtc4 결과(영상 20261107_184810): 날짜 해결.** 잠금화면 `11월 7일 토요일 1:46`, launchd 로그 `2026-11-07 01:45`.
+    시각은 iOS 기본 시간대(미국 태평양, PST) 기준이라 한국 시각과 8시간 차이(UTC 09:46 = KST 18:46, 맞음). 시간대는
+    설정 > 일반 > 날짜 및 시간에서 바꾸거나, 이후 `/var/db/timezone/localtime` 쪽으로 기본값을 줄 수 있음.
+    재부팅 뒤 RTC 유지 여부(새 이미지 없이 `the PMIC's clock said 2026-..`)는 아직 확인 안 함.
 - **Wi-Fi 조사**: 칩은 Exynos 850 내장 Samsung SCSC "WLBT"(`scsc_wifibt@119C0000`, 예약 메모리 `wifibt_if` 12 MB,
   인터럽트 MBOX/ALIVE/CFG_REQ/WDOG, syscon: wlbt_remap 0x14C50000, boot_cfg 0x14C60000, BAAW들). Broadcom이 아니라서
   S9(brcmfmac)·y2sios 하드웨어 드라이버는 못 씀. iOS 쪽 층(en0 + 가짜 IO80211Controller + apple80211 ioctl, y2sios
