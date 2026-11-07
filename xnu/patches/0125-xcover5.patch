@@ -2106,10 +2106,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..a2d8fb0
+index 0000000..6df5528
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,1450 @@
+@@ -0,0 +1,1494 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -2746,6 +2746,9 @@ index 0000000..a2d8fb0
 +static uint16_t mlme_ids[8];
 +static bool mlme_asked;
 +/* what came back: MLME-GET values, ADD_VIF / ADD_SCAN results, scan results */
++static uint32_t mib_ht = 0xff, mib_vht = 0xff, mib_rates[3];
++static uint8_t conn_data[16];
++static uint32_t conn_len;
 +static uint32_t mib_chip, mib_plat, mib_build, vif_res = 0xffff, scan_res = 0xffff, scan_inds, scan_done;
 +#define APN 16
 +static struct {
@@ -2756,6 +2759,9 @@ index 0000000..a2d8fb0
 +	int16_t rssi;
 +	uint16_t mhz;
 +	bool open;
++	uint8_t rates[16];                      /* Supported Rates then Extended Supported Rates */
++	uint8_t nrates;
++	uint8_t caps;                           /* 1 HT, 2 VHT, 4 HE (extension 35) present */
 +} aps[APN];
 +static uint32_t ap_count;
 +static const uint8_t vif_mac[6] = { 0x02, 0x58, 0x43, 0x35, 0x00, 0x01 };   /* locally administered: "XC5" */
@@ -2831,7 +2837,9 @@ index 0000000..a2d8fb0
 +static void
 +send_mlme_get(void)
 +{
-+	static const uint8_t keys[] = { 0xE6, 0x07, 0, 0, 0x41, 0x09, 0, 0, 0xE5, 0x07, 0, 0 };
++	/* + unifiHtActivated 0x07FE, unifiVhtActivated 0x07FD, unifiSupportedDataRates 0x07F9 (wifi13: association refused) */
++	static const uint8_t keys[] = { 0xE6, 0x07, 0, 0, 0x41, 0x09, 0, 0, 0xE5, 0x07, 0, 0, 0xFE, 0x07, 0, 0, 0xFD, 0x07, 0, 0,
++		                        0xF9, 0x07, 0, 0 };
 +	uint8_t s[24] = { 0x01, 0x20 };         /* MLME_GET_REQ, vif 0 */
 +	send_sig(s, sizeof(s), keys, sizeof(keys));
 +}
@@ -2932,6 +2940,13 @@ index 0000000..a2d8fb0
 +			mib_plat = val;
 +		} else if (psid == 0x07E5) {
 +			mib_build = val;
++		} else if (psid == 0x07FE) {
++			mib_ht = val;
++		} else if (psid == 0x07FD) {
++			mib_vht = val;
++		} else if (psid == 0x07F9 && p + 4 + l <= n) {
++			bzero(mib_rates, sizeof(mib_rates));
++			memcpy(mib_rates, v, MIN((size_t)l, sizeof(mib_rates)));
 +		}
 +		p += 4 + l + (l & 1);
 +	}
@@ -2947,6 +2962,20 @@ index 0000000..a2d8fb0
 +	char ssid[33] = "";
 +	uint8_t raw[32];
 +	uint32_t rawl = 0;
++	uint8_t rates[16], nr = 0, caps = 0;
++	for (uint32_t p = 36; p + 2 <= n && p + 2u + f[p + 1] <= n; p += 2u + f[p + 1]) {
++		if (f[p] == 1 || f[p] == 50) {
++			for (uint32_t i = 0; i < f[p + 1] && nr < sizeof(rates); i++) {
++				rates[nr++] = f[p + 2 + i];
++			}
++		} else if (f[p] == 45) {
++			caps |= 1;
++		} else if (f[p] == 191) {
++			caps |= 2;
++		} else if (f[p] == 255 && f[p + 1] >= 1 && f[p + 2] == 35) {
++			caps |= 4;
++		}
++	}
 +	for (uint32_t p = 36; p + 2 <= n; p += 2u + f[p + 1]) {         /* elements after the 24 + 12 fixed bytes */
 +		if (f[p] == 0 && p + 2u + f[p + 1] <= n) {
 +			uint32_t l = MIN((uint32_t)f[p + 1], 32u);
@@ -2976,6 +3005,9 @@ index 0000000..a2d8fb0
 +	memcpy(aps[k].raw_ssid, raw, rawl);
 +	aps[k].ssid_len = (uint8_t)rawl;
 +	aps[k].open = !(f[34] & 0x10);          /* capability: privacy bit */
++	memcpy(aps[k].rates, rates, nr);
++	aps[k].nrates = nr;
++	aps[k].caps = caps;
 +	memcpy(aps[k].bssid, bssid, 6);
 +	aps[k].rssi = (int16_t)(sig[14] | sig[15] << 8);
 +	aps[k].mhz = (uint16_t)((sig[12] | sig[13] << 8) / 2);
@@ -3237,6 +3269,8 @@ index 0000000..a2d8fb0
 +		break;
 +	case 0x2303: {                          /* MLME_CONNECT_IND */
 +		conn_ind = *(uint16_t *)(sig + 12);
++		conn_len = n;
++		memcpy(conn_data, data, MIN((size_t)n, sizeof(conn_data)));
 +		uint8_t s[24] = { 0x00, 0x22 };
 +		s[10] = 1;
 +		if (conn_ind == 0) {
@@ -3529,6 +3563,16 @@ index 0000000..a2d8fb0
 +		const uint8_t *ip = (const uint8_t *)&ack_ip, *gw = (const uint8_t *)&ack_gw, *of = (const uint8_t *)&offer_ip;
 +		printf("XC5 join %.20s cfm %x ind %x disc %x\n", ap_sel >= 0 ? aps[ap_sel].ssid : "-", conn_cfm, conn_ind,
 +		    disc_reason);
++		if (ap_sel >= 0) {
++			const uint8_t *r = aps[ap_sel].rates;
++			printf("XC5 rates %u caps %x: %x %x %x %x %x %x %x %x %x %x %x %x\n", aps[ap_sel].nrates, aps[ap_sel].caps, r[0],
++			    r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11]);
++		}
++		printf("XC5 fw ht %x vht %x rates %08x %08x %08x\n", mib_ht, mib_vht, mib_rates[0], mib_rates[1], mib_rates[2]);
++		printf("XC5 assoc %u: %02x%02x %02x%02x %02x%02x %02x%02x %02x%02x %02x%02x %02x%02x %02x%02x\n", conn_len,
++		    conn_data[0], conn_data[1], conn_data[2], conn_data[3], conn_data[4], conn_data[5], conn_data[6], conn_data[7],
++		    conn_data[8], conn_data[9], conn_data[10], conn_data[11], conn_data[12], conn_data[13], conn_data[14],
++		    conn_data[15]);
 +		printf("XC5 data tx %u cfm %x rx %u dhcp %u offer %u.%u.%u.%u\n", data_tx, data_cfm, data_rx, dhcp_state, of[0],
 +		    of[1], of[2], of[3]);
 +		printf("XC5 ip %u.%u.%u.%u gw %u.%u.%u.%u\n", ip[0], ip[1], ip[2], ip[3], gw[0], gw[1], gw[2], gw[3]);	}
