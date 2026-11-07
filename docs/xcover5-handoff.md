@@ -128,6 +128,11 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
      이미지 `xc5-ios-photo7-console.tar`(xnu CI 42348421220, 드롭 1794034425 = photo6 + 이 plist): **두 번 부팅**해야 함
      (첫 부팅 설치 `XC5 DROP: .../disabled.plist: 788 bytes ... (next boot)`, 두 번째 부팅에 fairplayd 없음 → `exec fairplayd.H2`
      줄이 사라져야 함). xc5ckpt·샘플러도 그대로 들어 있음.
+   - **부팅 84 결과(photo7): 사진 앱이 checkpointd를 넘어감**, 우리 Metal 번들을 불러 그리기 시작하다가
+     `assetsDataSourceManager.dataSource.numberOfSections == 1` 단언으로 abort(보관함 데이터가 비어 있음, port.md 84).
+     다음 `xc5-ios-photo8-console.tar`(xnu CI 42349821373, mesa-ios CI 42349821374, 드롭 1794035482; 한 번 부팅이면 됨,
+     disabled.plist는 이미 들어가 있음): assetsd의 모든 스레드도 3초마다 `xc5poster: #N tK ...`. 볼 것: `XC5 PB: assetsd ... inserted`,
+     assetsd가 어디서 기다리는지(라이브러리 열기, 마이그레이션, DB 생성), `CRASH assetsd`/`STR`.
 1. M4 위젯: chronod가 Metal로 그리는 것이 무엇인지(어떤 위젯/요소) 확인. 사진 위젯은 사진 앱(assetsd/photolibraryd)부터. 위젯 확장이 스냅샷을 못 주는지, chronod가
    그리다 막히는지. 다음 영상에서 홈 화면 오래 두고 `CRASH`, `metal E ...`, `chronod` 줄 확인. 필요하면 확장 프로세스를
    `xc5metalfor`에 추가(쉼표 목록). `gpuAddress 0`(Mesa 버퍼 경로에서 GPU 주소를 안 알려줌)도 확인할 것.

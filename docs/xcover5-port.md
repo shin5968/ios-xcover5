@@ -284,6 +284,16 @@ stride 2880 at 0xfa000000`. 이 다음(eMMC 루트, launchd)은 아직 보지 �
   메인 스레드는 같은 checkpointd 대기. `machstub.py`로 0x10003c23c 스텁이 `_mach_msg`임은 확인. 이번 checkpointd가 그 호출에
   이르지 않았는지, interpose가 안 걸린 건지 모름 → (커밋 5aec1cd) checkpointd에 두 라이브러리를 함께 넣고
   (`DYLD_INSERT_LIBRARIES=libxc5ckpt:libxc5poster`), mach_msg는 옵션과 상관없이 처음 12번을 모두 찍음.
+- photo6은 시험 안 하고 photo7로 넘어감(herolte 방식 추가).
+- 84 (`xc5-ios-photo7-console.tar`, xnu CI 42348421220, 드롭 1794034425 + launchd disabled.plist에 fairplayd.H2, 두 번째 부팅):
+  **사진 앱이 checkpointd 대기를 넘어감**. 메인 스레드 샘플이 이제 움직임(#2 PhotosUICore, #3 `object_getClass`, #4 dyld),
+  `STR dlopen(/var/xc5/metal/RedwoodMetal.bundle/RedwoodMetal, 0x0115)`(사진 앱이 우리 Metal 장치를 씀, `metal I PSO ...`),
+  그 다음 **NSInternalInconsistencyException "Invalid parameter not satisfying:
+  assetsDataSourceManager.dataSource.numberOfSections == 1"**, `<PUTabbedLibraryViewController>` 표시 중 → abort
+  (`m2m-nodev: F CRASH signal 6 ... pthread_kill`, 우리 드라이버의 크래시 기록기). 두 번 열어 두 번 같음(pid 251, 262).
+  STR에 "iPhoto Library Migration", "Live Photo bundle for Drag-n-Drop". 즉 사진 보관함 데이터가 비어 있음 → assetsd 쪽.
+  fairplayd 끄기와 xc5ckpt 중 무엇이 풀었는지는 이 영상에서 구분 안 함(`xc5ckpt: mach_msg` 줄 확인 못 함).
+  다음(커밋 bf8d5cf): `xc5photos=1`이 assetsd(`AssetsLibrary.framework/Support/assetsd`)의 모든 스레드도 3초마다 찍음.
 
 ## S8 포트와 다른 점
 
