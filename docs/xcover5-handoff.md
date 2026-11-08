@@ -444,6 +444,10 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   우리는 펌웨어→AP 인터럽트를 한 번도 지우지 않았음(삼성: platform_mif_irq_bit_clear, INTCR0 = bit<<16). 조치(커밋 66862e9, xnu CI 42463772327):
   hip_poll이 큐를 읽기 전에 INTSR0의 대기 비트를 INTCR0(0x00c)로 지움. heartbeat `XC5 w fw ... irqclr <횟수> sr0 <INTSR0>`. 이미지 `xc5-ios-wifi30-console.tar`.
   그래도 안 되면: 딥슬립 MIB 끄기(펌웨어 문자열 "DEEP SLEEP has been DISABLED ... via MIB override"), 또는 깨우기 절차 조사.
+- **wifi30 결과(영상 20261108_175109)**: 목록에 **S24와 olleh_WiFi_FE1A 둘 다** 뜸(검색 보존·DEL_SCAN 효과), `irqclr 61 sr0 0`(인터럽트 지우기 동작). S24 누르면 여전히
+  "연결할 수 없음", 그런데 `sent 7 got 81`이 연결 시도 전후로 같음 → **CONNECT 자체를 안 보냄**(펌웨어 문제 아님). 원인 위치 진단(커밋 3218814, xnu CI 42466106103;
+  첫 실행은 CI의 hdiutil KDK 마운트 실패로 재실행): heartbeat `XC5 w ui join assoc <ASSOCIATE 수> why <1 짧은 요청,2 이름,3 키 종류,4 넘김> cipher <키 종류> key <길이>
+  | stage <1 대기,2 보안,3 AP 못 찾음,4 CONNECT 요청,5 응답> err <errno> sec ssid bssid | cfm ind`. 이미지 `xc5-ios-wifi31-console.tar`.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
