@@ -411,6 +411,10 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   state/channels 1-13). 모르는 ioctl은 redwood_apple80211_ioctl로. 끊김 → redwood_sta_lost. heartbeat `XC5 w net ... | ui 1 phase <0 off,1 idle,
   2 scan,3 join,4 joined> link <0/1> scans joins leaves`. 이미지 `xc5-ios-wifi23-console.tar`(인자: wifi21에서 xc5net 빼고 `xc5wifiui=1`, 드롭 그대로).
   시험: 설정 > Wi-Fi 목록에 핫스팟이 보이는지, 눌러서 연결되는지(개방형).
+- **사용자(wifi23): 설정에서 Wi-Fi가 안 켜짐.** y2sios README: "Working runs use wifi_pcie_wait=3 so en0 exists before wifid starts" → 우리는 en0·
+  RedwoodWLAN을 펌웨어·서비스·VIF 뒤(수십 초)에 만들어 wifid가 장치를 못 찾음. 조치(커밋 e449248, xnu CI 42456383025): Wi-Fi 스레드 시작
+  즉시(lo0가 생기면) en0·RedwoodWLAN·redwood_sta_attach, 그 전에 온 검색·연결 요청은 VIF가 생길 때까지 최대 90초 대기(sta_wait_ready).
+  이미지 `xc5-ios-wifi24-console.tar`(인자 wifi23과 같음).
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
