@@ -438,6 +438,12 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   AP 2개·SCAN_DONE 정상. 하지만 이후 wifid 검색마다 목록 비우고(ap_count=0) 같은 scan id로 ADD_SCAN 반복 → 확인 없음 → 목록 0. 조치(커밋 b1009d1,
   xnu CI 42462437237): 찾은 AP 보존(BSSID로 중복 제거), 20초 안에 끝난 검색이 있으면 wifid에 바로 응답, 진행 중이면 재요청 안 함, 다시 검색할 땐
   **MLME-DEL-SCAN.request 0x2006**(scan id 0x100) 뒤 ADD_SCAN. 이미지 `xc5-ios-wifi29-console.tar`.
+- **wifi29 결과(영상 20261108_173146): 설정 Wi-Fi 목록에 핫스팟 S24가 뜸!** 누르면 "다음 네트워크에 연결할 수 없음: 'S24'". 콘솔 `XC5 w cfm 2 vif 0 scan ffff ind 1
+  done 1 aps 1`, `XC5 w ap S24 2437 -30 o`, `XC5 w join cfm ffff ind ffff`(CONNECT 확인조차 없음), `ui 1 phase 1 ... scans 4 joins 2 leaves 2`, `a80211 req 403
+  refused 327 ... results asked 8 given 4`, fw 로그 `deep_sleep_wake.c: CMN: [DEEPSLEEP] infrastructure`. → 펌웨어가 한동안 쉬면 딥슬립, 그 뒤 보낸 신호에 무응답.
+  우리는 펌웨어→AP 인터럽트를 한 번도 지우지 않았음(삼성: platform_mif_irq_bit_clear, INTCR0 = bit<<16). 조치(커밋 66862e9, xnu CI 42463772327):
+  hip_poll이 큐를 읽기 전에 INTSR0의 대기 비트를 INTCR0(0x00c)로 지움. heartbeat `XC5 w fw ... irqclr <횟수> sr0 <INTSR0>`. 이미지 `xc5-ios-wifi30-console.tar`.
+  그래도 안 되면: 딥슬립 MIB 끄기(펌웨어 문자열 "DEEP SLEEP has been DISABLED ... via MIB override"), 또는 깨우기 절차 조사.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
