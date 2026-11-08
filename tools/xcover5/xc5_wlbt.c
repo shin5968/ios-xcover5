@@ -1760,10 +1760,23 @@ sta_power(bool on)
 	return 0;
 }
 
+/* the radio's interface (vif 1) exists: what was asked for before that waits up to 90 s */
+static bool
+sta_wait_ready(void)
+{
+	for (int i = 0; i < 4500 && !ui_ready; i++) {
+		delay(20000);
+	}
+	return ui_ready;
+}
+
 static int
 sta_scan(const struct redwood_sta_scan *what)
 {
 	(void)what;                             /* every 2.4 GHz channel, any name, actively: what this file's scan does */
+	if (!sta_wait_ready()) {
+		return EBUSY;
+	}
 	lck_mtx_lock(&xc5w_mtx);
 	uint32_t seen = scan_done;
 	ap_count = 0;
@@ -1826,6 +1839,9 @@ static int
 sta_join(const struct redwood_sta_join *what)
 {
 	ui_joins++;
+	if (!sta_wait_ready()) {
+		return EBUSY;
+	}
 	if (what->security != REDWOOD_STA_OPEN) {
 		printf("XC5 WLBT: a WPA2 join is asked for: not built yet\n");
 		return EOPNOTSUPP;              /* (Apple80211's "unable to join", not "wrong password": EAUTH would say that) */
@@ -1973,6 +1989,22 @@ poll_log(int tenths)
 static void
 wlbt_thread(__unused void *arg, __unused wait_result_t w)
 {
+	/*
+	 * wifi23: Settings' Wi-Fi switch stayed off. wifid looks for its device when it starts, and en0 with its registry
+	 * entries came only after the firmware, the service and vif 1 were up (tens of seconds later). As y2sios has it
+	 * ("so en0 exists before wifid starts"): made here, first, as soon as the network stack is (lo0 there); scans
+	 * and joins asked for before the radio is ready wait for it (sta_wait_ready).
+	 */
+	if (wifi_ui) {
+		ifnet_t lo = NULL;
+		for (int i = 0; i < 300 && ifnet_find_by_name("lo0", &lo) != 0; i++) {
+			delay(100000);
+		}
+		if (lo != NULL) {
+			ifnet_release(lo);
+		}
+		ui_up();
+	}
 	/* the firmware comes with the drop, which is written once launchd remounts / read-write */
 	int64_t fwlen = -1;
 	shm = (uint8_t *)ml_io_map_wcomb(SHMEM_PA, SHMEM_MAP);
@@ -2128,8 +2160,8 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 		if (xc5_ifp == NULL && dhcp_state == 3 && if_err == -1 && !wifi_ui) {
 			net_up();
 		}
-		if (wifi_ui && ui_ready && xc5_ifp == NULL && if_err == -1) {
-			ui_up();
+		if (wifi_ui && xc5_ifp == NULL && if_err == -1) {
+			ui_up();                        /* (made at the start; this only if that did not happen) */
 		}
 		if (wifi_ui) {
 			ui_tick();
