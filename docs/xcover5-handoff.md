@@ -430,6 +430,10 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   12초 뒤 시간 초과로 SCAN_DONE 이벤트 → wifid가 결과를 읽지만 0개. 그 외 wifid가 `gets 115 (?) 1288 bytes: REFUSED`(미구현), `gets 103 error 6`(연결 전 정상).
   진단(커밋 8b8c013, xnu CI 42459941247): heartbeat `XC5 w fw vif <ADD_VIF 결과> scancfm <이번 ADD_SCAN 확인, 검색마다 초기화> ind <SCAN_IND 수> sent got ids
   <최근 신호 4개>`. 이미지 `xc5-ios-wifi27-console.tar`.
+- **wifi27 결과(영상 20261108_165518)**: `XC5 w fw vif 0 scancfm ffff ind 0 sent 3 got 10 ids 8301 2101 8301 2107` → wifid 요청으로 **redwood_sta 스레드에서
+  보낸 ADD_SCAN에 확인(CFM)조차 없음**, ADD_VIF 확인 뒤 펌웨어 무응답. 지금까지 응답받은 신호는 모두 Wi-Fi 스레드의 hip_poll 안에서 보낸 것.
+  조치(커밋 de5e483, xnu CI 42461129954): station ops는 요청만 표시(want_scan/want_join/want_leave), hip_poll이 보냄; UI 모드에서도 ADD_VIF 직후
+  첫 검색을 바로(예전 동작 방식), 결과는 wifid용으로 보관. 원인(다른 스레드에서의 q_put이 왜 무시되는지)은 미확인. 이미지 `xc5-ios-wifi28-console.tar`.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
