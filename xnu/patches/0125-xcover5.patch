@@ -990,10 +990,10 @@ index ba647a8..979c83f 100644
  	int log_contacts = 0;
 diff --git a/bsd/dev/redwood_apple80211.c b/bsd/dev/redwood_apple80211.c
 new file mode 100644
-index 0000000..4a52490
+index 0000000..06646be
 --- /dev/null
 +++ b/bsd/dev/redwood_apple80211.c
-@@ -0,0 +1,784 @@
+@@ -0,0 +1,793 @@
 +/*
 + * From y2sios (https://github.com/stormtroopxyz/y2sios, kernel/xnu/files/), MIT License,
 + * Copyright (c) 2026 the y2sios contributors; itself after HackiOS by OOSEX GANG (MIT). Taken for the XCover5 port's
@@ -1213,6 +1213,8 @@ index 0000000..4a52490
 +/* XCover5: for the heartbeat (bsd/dev/xc5_wlbt.c) -- requests seen, SCAN_RESULTs asked and given, scan-done events */
 +unsigned xc5_a80211_requests, xc5_a80211_refused, xc5_a80211_results, xc5_a80211_given, xc5_a80211_scandone;
 +int xc5_a80211_last_type, xc5_a80211_last_error;
++unsigned xc5_a80211_joins;
++int xc5_a80211_join_why, xc5_a80211_join_cipher = -1, xc5_a80211_join_keylen = -1;
 +static uint32_t join_result;                    /* of the last join asked for: 0 while it runs, then Apple80211's number */
 +
 +/* ---- channels ---------------------------------------------------------------------------------------- */
@@ -1548,7 +1550,9 @@ index 0000000..4a52490
 +	struct redwood_sta_join *what;
 +	int error;
 +
++	xc5_a80211_joins++;                     /* XCover5 */
 +	if (request->req_len < offsetof(struct apple80211_assoc, rest)) {
++		xc5_a80211_join_why = 1;
 +		return EINVAL;
 +	}
 +	asked = kalloc_data(sizeof(*asked), Z_WAITOK | Z_ZERO);
@@ -1561,7 +1565,10 @@ index 0000000..4a52490
 +	snprintf(said, said_size, " (a join: a name of %u bytes, %s access point, authentication %#x/%#x, a key of %u bytes of kind %u)",
 +	    asked->ssid_length, asked->bssid[0] | asked->bssid[1] | asked->bssid[2] | asked->bssid[3] | asked->bssid[4] |
 +	    asked->bssid[5] ? "a given" : "any", asked->auth_lower, asked->auth_upper, asked->key_length, asked->key_cipher);
++	xc5_a80211_join_cipher = (int)asked->key_cipher;        /* XCover5 */
++	xc5_a80211_join_keylen = (int)asked->key_length;
 +	if (asked->ssid_length == 0 || asked->ssid_length > sizeof(what->ssid)) {
++		xc5_a80211_join_why = 2;
 +		error = EINVAL;
 +		goto out;
 +	}
@@ -1578,9 +1585,11 @@ index 0000000..4a52490
 +		what->security = REDWOOD_STA_WPA2_PSK;
 +		memcpy(what->pmk, asked->key, sizeof(what->pmk));
 +	} else {
++		xc5_a80211_join_why = 3;        /* XCover5: a key of a kind not taken */
 +		error = EINVAL;
 +		goto out;
 +	}
++	xc5_a80211_join_why = 4;                /* XCover5: handed to the station */
 +	lck_mtx_lock(&apple80211_lock);
 +	join_result = 0;
 +	lck_mtx_unlock(&apple80211_lock);
@@ -3295,10 +3304,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..298aca8
+index 0000000..122c2f2
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,2322 @@
+@@ -0,0 +1,2339 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -4266,6 +4275,7 @@ index 0000000..298aca8
 +static bool ui_ready, ui_lost, want_scan, scan_inflight;
 +static uint64_t scan_done_ns;
 +static uint32_t irq_cleared;
++static int join_sec = -1, join_len, join_bssid_given, join_stage, join_err = -1;
 +static int want_join = -1;
 +static bool want_leave;
 +static uint8_t leave_sig[32];                /* (signals go out from the Wi-Fi thread's poll: see sta_scan) */
@@ -5199,12 +5209,18 @@ index 0000000..298aca8
 +sta_join(const struct redwood_sta_join *what)
 +{
 +	ui_joins++;
++	join_sec = what->security;
++	join_len = what->ssid_length;
++	join_bssid_given = (what->bssid[0] | what->bssid[1] | what->bssid[2] | what->bssid[3] | what->bssid[4] |
++	    what->bssid[5]) != 0;
++	join_stage = 1;
 +	if (!sta_wait_ready()) {
-+		return EBUSY;
++		return join_err = EBUSY;
 +	}
++	join_stage = 2;
 +	if (what->security != REDWOOD_STA_OPEN) {
 +		printf("XC5 WLBT: a WPA2 join is asked for: not built yet\n");
-+		return EOPNOTSUPP;              /* (Apple80211's "unable to join", not "wrong password": EAUTH would say that) */
++		return join_err = EOPNOTSUPP;   /* (Apple80211's "unable to join", not "wrong password": EAUTH would say that) */
 +	}
 +	lck_mtx_lock(&xc5w_mtx);
 +	int k = find_ap(what);
@@ -5217,8 +5233,10 @@ index 0000000..298aca8
 +		lck_mtx_unlock(&xc5w_mtx);
 +	}
 +	if (k < 0) {
-+		return ENOENT;
++		join_stage = 3;
++		return join_err = ENOENT;
 +	}
++	join_stage = 4;
 +	lck_mtx_lock(&xc5w_mtx);
 +	conn_cfm = 0xffff;
 +	conn_ind = 0xffff;
@@ -5226,10 +5244,12 @@ index 0000000..298aca8
 +	want_join = k;
 +	lck_mtx_unlock(&xc5w_mtx);
 +	wait_until((volatile uint32_t *)&conn_ind, 0xffff, 15000);
++	join_stage = 5;
 +	if (conn_ind != 0) {
 +		sta_phase = REDWOOD_STA_IDLE;
-+		return conn_ind == 0xffff ? ETIMEDOUT : ECONNREFUSED;
++		return join_err = conn_ind == 0xffff ? ETIMEDOUT : ECONNREFUSED;
 +	}
++	join_err = 0;
 +	sta_phase = REDWOOD_STA_JOINED;
 +	link_state(true);
 +	return 0;
@@ -5598,6 +5618,12 @@ index 0000000..298aca8
 +		printf("XC5 w a80211 req %u refused %u (last %d err %d) | scan aps %u done %u ev %u | results asked %u given %u\n",
 +		    xc5_a80211_requests, xc5_a80211_refused, xc5_a80211_last_type, xc5_a80211_last_error, ap_count, scan_done,
 +		    xc5_a80211_scandone, xc5_a80211_results, xc5_a80211_given);
++		/* wifi30: S24 listed, its join failed with nothing sent: how far a join came, and why it stopped */
++		extern unsigned xc5_a80211_joins;
++		extern int xc5_a80211_join_why, xc5_a80211_join_cipher, xc5_a80211_join_keylen;
++		printf("XC5 w ui join assoc %u why %d cipher %d key %d | stage %d err %d sec %d ssid %d bssid %d | cfm %x ind %x\n",
++		    xc5_a80211_joins, xc5_a80211_join_why, xc5_a80211_join_cipher, xc5_a80211_join_keylen, join_stage, join_err,
++		    join_sec, join_len, join_bssid_given, conn_cfm, conn_ind);
 +		/* wifi26: scans asked by wifid never ended (done 0, aps 0): what the firmware said to them */
 +		printf("XC5 w fw vif %x scancfm %x ind %u sent %u got %u irqclr %u sr0 %x ids %x %x %x %x\n", vif_res, scan_res, scan_inds, mlme_sent,
 +		    mlme_got, irq_cleared, rd(mbox, INTSR0), mlme_ids[(mlme_got + 4) % 8], mlme_ids[(mlme_got + 5) % 8], mlme_ids[(mlme_got + 6) % 8],

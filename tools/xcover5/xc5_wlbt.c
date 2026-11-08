@@ -965,6 +965,7 @@ static int wifi_ui;
 static bool ui_ready, ui_lost, want_scan, scan_inflight;
 static uint64_t scan_done_ns;
 static uint32_t irq_cleared;
+static int join_sec = -1, join_len, join_bssid_given, join_stage, join_err = -1;
 static int want_join = -1;
 static bool want_leave;
 static uint8_t leave_sig[32];                /* (signals go out from the Wi-Fi thread's poll: see sta_scan) */
@@ -1898,12 +1899,18 @@ static int
 sta_join(const struct redwood_sta_join *what)
 {
 	ui_joins++;
+	join_sec = what->security;
+	join_len = what->ssid_length;
+	join_bssid_given = (what->bssid[0] | what->bssid[1] | what->bssid[2] | what->bssid[3] | what->bssid[4] |
+	    what->bssid[5]) != 0;
+	join_stage = 1;
 	if (!sta_wait_ready()) {
-		return EBUSY;
+		return join_err = EBUSY;
 	}
+	join_stage = 2;
 	if (what->security != REDWOOD_STA_OPEN) {
 		printf("XC5 WLBT: a WPA2 join is asked for: not built yet\n");
-		return EOPNOTSUPP;              /* (Apple80211's "unable to join", not "wrong password": EAUTH would say that) */
+		return join_err = EOPNOTSUPP;   /* (Apple80211's "unable to join", not "wrong password": EAUTH would say that) */
 	}
 	lck_mtx_lock(&xc5w_mtx);
 	int k = find_ap(what);
@@ -1916,8 +1923,10 @@ sta_join(const struct redwood_sta_join *what)
 		lck_mtx_unlock(&xc5w_mtx);
 	}
 	if (k < 0) {
-		return ENOENT;
+		join_stage = 3;
+		return join_err = ENOENT;
 	}
+	join_stage = 4;
 	lck_mtx_lock(&xc5w_mtx);
 	conn_cfm = 0xffff;
 	conn_ind = 0xffff;
@@ -1925,10 +1934,12 @@ sta_join(const struct redwood_sta_join *what)
 	want_join = k;
 	lck_mtx_unlock(&xc5w_mtx);
 	wait_until((volatile uint32_t *)&conn_ind, 0xffff, 15000);
+	join_stage = 5;
 	if (conn_ind != 0) {
 		sta_phase = REDWOOD_STA_IDLE;
-		return conn_ind == 0xffff ? ETIMEDOUT : ECONNREFUSED;
+		return join_err = conn_ind == 0xffff ? ETIMEDOUT : ECONNREFUSED;
 	}
+	join_err = 0;
 	sta_phase = REDWOOD_STA_JOINED;
 	link_state(true);
 	return 0;
@@ -2297,6 +2308,12 @@ xc5_wlbt_heartbeat(void)
 		printf("XC5 w a80211 req %u refused %u (last %d err %d) | scan aps %u done %u ev %u | results asked %u given %u\n",
 		    xc5_a80211_requests, xc5_a80211_refused, xc5_a80211_last_type, xc5_a80211_last_error, ap_count, scan_done,
 		    xc5_a80211_scandone, xc5_a80211_results, xc5_a80211_given);
+		/* wifi30: S24 listed, its join failed with nothing sent: how far a join came, and why it stopped */
+		extern unsigned xc5_a80211_joins;
+		extern int xc5_a80211_join_why, xc5_a80211_join_cipher, xc5_a80211_join_keylen;
+		printf("XC5 w ui join assoc %u why %d cipher %d key %d | stage %d err %d sec %d ssid %d bssid %d | cfm %x ind %x\n",
+		    xc5_a80211_joins, xc5_a80211_join_why, xc5_a80211_join_cipher, xc5_a80211_join_keylen, join_stage, join_err,
+		    join_sec, join_len, join_bssid_given, conn_cfm, conn_ind);
 		/* wifi26: scans asked by wifid never ended (done 0, aps 0): what the firmware said to them */
 		printf("XC5 w fw vif %x scancfm %x ind %u sent %u got %u irqclr %u sr0 %x ids %x %x %x %x\n", vif_res, scan_res, scan_inds, mlme_sent,
 		    mlme_got, irq_cleared, rd(mbox, INTSR0), mlme_ids[(mlme_got + 4) % 8], mlme_ids[(mlme_got + 5) % 8], mlme_ids[(mlme_got + 6) % 8],

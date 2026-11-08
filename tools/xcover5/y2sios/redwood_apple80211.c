@@ -217,6 +217,8 @@ static unsigned result_next;                    /* which of what the last scan h
 /* XCover5: for the heartbeat (bsd/dev/xc5_wlbt.c) -- requests seen, SCAN_RESULTs asked and given, scan-done events */
 unsigned xc5_a80211_requests, xc5_a80211_refused, xc5_a80211_results, xc5_a80211_given, xc5_a80211_scandone;
 int xc5_a80211_last_type, xc5_a80211_last_error;
+unsigned xc5_a80211_joins;
+int xc5_a80211_join_why, xc5_a80211_join_cipher = -1, xc5_a80211_join_keylen = -1;
 static uint32_t join_result;                    /* of the last join asked for: 0 while it runs, then Apple80211's number */
 
 /* ---- channels ---------------------------------------------------------------------------------------- */
@@ -552,7 +554,9 @@ set_join(const struct apple80211req *request, char *said, size_t said_size)
 	struct redwood_sta_join *what;
 	int error;
 
+	xc5_a80211_joins++;                     /* XCover5 */
 	if (request->req_len < offsetof(struct apple80211_assoc, rest)) {
+		xc5_a80211_join_why = 1;
 		return EINVAL;
 	}
 	asked = kalloc_data(sizeof(*asked), Z_WAITOK | Z_ZERO);
@@ -565,7 +569,10 @@ set_join(const struct apple80211req *request, char *said, size_t said_size)
 	snprintf(said, said_size, " (a join: a name of %u bytes, %s access point, authentication %#x/%#x, a key of %u bytes of kind %u)",
 	    asked->ssid_length, asked->bssid[0] | asked->bssid[1] | asked->bssid[2] | asked->bssid[3] | asked->bssid[4] |
 	    asked->bssid[5] ? "a given" : "any", asked->auth_lower, asked->auth_upper, asked->key_length, asked->key_cipher);
+	xc5_a80211_join_cipher = (int)asked->key_cipher;        /* XCover5 */
+	xc5_a80211_join_keylen = (int)asked->key_length;
 	if (asked->ssid_length == 0 || asked->ssid_length > sizeof(what->ssid)) {
+		xc5_a80211_join_why = 2;
 		error = EINVAL;
 		goto out;
 	}
@@ -582,9 +589,11 @@ set_join(const struct apple80211req *request, char *said, size_t said_size)
 		what->security = REDWOOD_STA_WPA2_PSK;
 		memcpy(what->pmk, asked->key, sizeof(what->pmk));
 	} else {
+		xc5_a80211_join_why = 3;        /* XCover5: a key of a kind not taken */
 		error = EINVAL;
 		goto out;
 	}
+	xc5_a80211_join_why = 4;                /* XCover5: handed to the station */
 	lck_mtx_lock(&apple80211_lock);
 	join_result = 0;
 	lck_mtx_unlock(&apple80211_lock);
