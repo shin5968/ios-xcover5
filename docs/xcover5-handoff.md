@@ -386,6 +386,11 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   B/G/R XR 384..894, 단일 평면, 불투명)로 페이지 타일을 그리는데 backboardd의 GL 층(gpu/hakios-gl/src/eagl.c my_attachImage)이 'BGRA'·
   'b3a8'만 받음. 조치(커밋 d3c96ad, mesa-ios CI 42442158791): 'b3a8' 경로(deep_to_bgra/bgra_to_deep)를 단일 평면 'w30r'도 받게(투명도 0xff).
   이미지 `xc5-ios-wifi21-console.tar`(**새 드롭 1794108066**, 인자 wifi20과 같음). WSL vhdx 압축 57.8→28.2 GB(사용자, diskpart).
+- **사용자: 부팅 중엔 핫스팟의 연결된 기기에 보였는데 부팅 뒤엔 안 보임.** wifi20 마지막(약 3분)에도 `out 2117 in 239 ping 63/63` → 그때까진 연결 유지.
+  후보 둘을 고침(커밋 9dc2063, xnu CI 42443761365): (1) TX 데이터 64칸을 순서대로 재사용해 펌웨어가 아직 읽는 칸을 덮어쓸 수 있었음 →
+  칸은 FH RFB 큐로 돌아올 때까지 펌웨어 것(비트맵), 0.5초 동안 전부 나가 있으면 강제 회수(force 셈), 빈 칸 없으면 버림(full 셈);
+  (2) MLME-DISCONNECTED.ind를 기록만 했음 → 횟수 세고 2초 뒤 재검색·재연결. heartbeat `XC5 w join cfm ind st disc <이유> n <횟수> | tx
+  back <회수> full <버림> force <강제>`. 이미지 `xc5-ios-wifi22-console.tar`(드롭 wifi21과 같음 1794108066).
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
