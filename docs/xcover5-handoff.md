@@ -373,6 +373,14 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   을 TCP로 요청(iOS 자체의 인터넷 확인과 같은 것) → 콘솔 `xc5net: HTTP <바이트> bytes: HTTP/1.x 200 OK, Success`, xc5netstat 비트 0x10.
   성공이면 Safari 검은 화면은 렌더링 문제(다음: Safari 열 때 콘솔에 WebContent/GPU 프로세스 크래시가 있는지 영상으로). 이미지
   `xc5-ios-wifi20-console.tar`(**새 드롭 1794066219**, 인자 wifi19와 같음, 첫 부팅 뒤 재부팅 권장).
+- **wifi20 결과(영상 20261108_115727): 인터넷 확정.** `xc5net: www.apple.com is 104.94.216.37` → **`xc5net: HTTP 434 bytes: HTTP/1.0 200 OK,
+  Success`** → `done, state 0x1f`. 즉 en0으로 TCP·HTTP가 인터넷까지 오감. 그 뒤 `connectx() - failed necp_set_socket_domain_attributes`
+  가 대량 출력 — uipc_socket.c의 printf(연결 대상이 tracker 캐시에 있을 때 도메인 속성 설정 실패, **연결은 계속됨, 무해**), 오히려 앱들이
+  이름을 풀고 TCP 연결 중이라는 증거. Safari: apple.com 주소창 정상, 잠깐 **흰 페이지(로딩 막대)가 그려졌다가 검게** 바뀜, 콘솔에
+  `SWEET SURF: com.apple.WebKit.GPU create id NN 1125x144 ...`(GPU 프로세스가 IOSurface 생성), `hakios-gl: -attachImage ... not done`.
+  → **Safari 검은 화면은 네트워크가 아니라 WebKit GPU 프로세스 렌더링**(추정: GPU 프로세스의 DOM 렌더링/가속 그리기가 Metal을
+  요구하는데 Metal은 chronod에만 공개). 시험: 설정 > Safari > 고급 > Feature Flags(실험적 기능)에서 "GPU Process: DOM Rendering"
+  (과 Canvas) 끄기 → 다시 Safari. 안 되면 `xc5metalfor`에 com.apple.WebKit.GPU 추가 시험(위험: Metal 실험 단계).
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
