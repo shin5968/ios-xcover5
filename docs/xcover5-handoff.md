@@ -415,6 +415,12 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   RedwoodWLAN을 펌웨어·서비스·VIF 뒤(수십 초)에 만들어 wifid가 장치를 못 찾음. 조치(커밋 e449248, xnu CI 42456383025): Wi-Fi 스레드 시작
   즉시(lo0가 생기면) en0·RedwoodWLAN·redwood_sta_attach, 그 전에 온 검색·연결 요청은 VIF가 생길 때까지 최대 90초 대기(sta_wait_ready).
   이미지 `xc5-ios-wifi24-console.tar`(인자 wifi23과 같음).
+- **wifi24 결과(영상 20261108_160005)**: 여전히 스위치 꺼짐, `XC5 w net 0 ... | ui 1 phase 1 link 0 scans 0 joins 0` → wifid가 아무것도 묻지 않음.
+  원인: 순정 `com.apple.wifid.plist`의 **`_LimitLoadToDeviceTree = ['wlan', 'marconi-wifi']`** — launchd가 장치 트리에 그 노드가 있을 때만 wifid를
+  띄움. 우리 ADT(tools/mkadt_xcover5.py)는 arm-io 아래 wdt만 남겨 wlan이 없음 → **wifid가 아예 실행 안 됨**(y2sios는 mkjobs.py에서 이 키를
+  지움). 조치(커밋 87fc9e1, xnu CI 42457341777): ADT에 `arm-io/wlan`(device_type wlan, compatible samsung,xcover5-wlbt, local-mac-address) 추가,
+  y2sios **MiniIONetworkStack.cpp**(MIT, IOResources/IONetworkStack + 열 수 있는 user client: configd 인터페이스 namer가 이게 없으면 레지스트리
+  quiet를 5분 뒤에야 선언 → wifid의 SCNetworkInterfaceCopyAll이 그만큼 대기) 추가, ui_up에서 시작. 이미지 `xc5-ios-wifi25-console.tar`.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
