@@ -3304,10 +3304,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..d04d017
+index 0000000..a93aad6
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,2414 @@
+@@ -0,0 +1,2456 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -4281,6 +4281,9 @@ index 0000000..d04d017
 +static bool del_done;
 +static uint64_t del_sent_ns;
 +static uint32_t del_cfm = 0xffff, chain_scans, join_on_running;
++static uint32_t q_kicks, q_kick_ok, q_stall_ms;
++static uint64_t q_stall_since, q_kick_at;
++static uint8_t q_stall_r;
 +static volatile int sta_phase = REDWOOD_STA_IDLE;
 +static bool want_leave;
 +static uint8_t leave_sig[32];                /* (signals go out from the Wi-Fi thread's poll: see sta_scan) */
@@ -4722,6 +4725,35 @@ index 0000000..d04d017
 +	 */
 +	uint64_t now_ns;
 +	absolutetime_to_nanoseconds(mach_absolute_time(), &now_ns);
++	/*
++	 * wifi34: the firmware stopped reading the FH control queue with one signal in it (q0 w47 r46). If what we queued
++	 * waits more than 300 ms, the doorbell (INTGR1 bit 5) is rung again, once a second; kick_ok counts the times the
++	 * queue moved after a ring.
++	 */
++	{
++		uint8_t qw = *scb(0, 0), qr = *scb(0, 1);
++		if (qw == qr) {
++			q_stall_since = 0;
++		} else if (q_stall_since == 0 || qr != q_stall_r) {
++			if (q_stall_since != 0 && q_kick_at != 0) {
++				q_kick_ok++;
++			}
++			q_stall_since = now_ns;
++			q_stall_r = qr;
++			q_kick_at = 0;
++		} else {
++			q_stall_ms = (uint32_t)((now_ns - q_stall_since) / 1000000ull);
++			if (q_stall_ms > 300 && (q_kick_at == 0 || now_ns - q_kick_at > 1000000000ull)) {
++				q_kick_at = now_ns;
++				q_kicks++;
++				if (q_kicks <= 6) {
++					printf("XC5 WLBT: FW STALL q0 w%u r%u %u ms | st %x sr1 %x msr1 %x | got %u done %u\n", qw, qr,
++					    q_stall_ms, rd(pmu, WLBT_STATES), rd(mbox, INTSR1), rd(mbox, INTMSR1), mlme_got, scan_done);
++				}
++				wr(mbox, 0x01c, 1u << HIP_FH_BIT);      /* INTGR1 */
++			}
++		}
++	}
 +	if (del_next != 0 && (del_done || now_ns - del_sent_ns > 2000000000ull)) {
 +		int next = del_next;
 +		del_next = 0;
@@ -5703,6 +5735,16 @@ index 0000000..d04d017
 +		/* wifi33: whether the firmware still takes what we queue (FH ctrl r/w) and what it last logged */
 +		printf("XC5 w keep done %u chain %u onrun %u | q0 w%u r%u q3 w%u r%u | fw: %.48s\n", scan_done, chain_scans,
 +		    join_on_running, *scb(0, 0), *scb(0, 1), *scb(3, 0), *scb(3, 1), loglines[log_recs % LOGN]);
++		/*
++		 * wifi34: scans went on (done 22) until the firmware stopped reading the FH control queue (q0 w47 r46, from 44 s
++		 * to 59 s) and sent nothing more: asleep (PMU STATES), hung or panicked (panic words), or our doorbell left
++		 * pending (INTSR1 bit 5 still set) -- and whether ringing it again (kick) brought it back.
++		 */
++		const uint32_t *pw = (const uint32_t *)(shm + hb_panic_off);
++		printf("XC5 w why st %x sr1 %x msr1 %x issr0 %x logw %u recs %u kick %u/%u stall %ums pan %x %x\n",
++		    rd(pmu, WLBT_STATES), rd(mbox, INTSR1), rd(mbox, INTMSR1), rd(mbox, ISSR(0)),
++		    *(volatile uint32_t *)(shm + conf->mxlog.buf.write_index_loc), log_recs, q_kicks, q_kick_ok, q_stall_ms,
++		    hb_panic_off ? pw[0] : 0, hb_panic_off ? pw[1] : 0);
 +	}
 +}
 +void xc5_wlbt_start(void);
