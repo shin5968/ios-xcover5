@@ -39,9 +39,10 @@
 #include <libkern/libkern.h>
 #include <mach/mach_types.h>
 #include <sys/errno.h>
-#include <sys/redwood_input.h>
 #include <sys/redwood_sta.h>
 #include <sys/systm.h>
+
+/* XCover5: printf for redwood_wifi_tell(), there being no redwood_input.c here */
 
 extern void thread_set_thread_name(thread_t thread, const char *name);
 

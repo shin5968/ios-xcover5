@@ -53,7 +53,6 @@
 #include <sys/kern_event.h>
 #include <sys/kernel.h>
 #include <sys/proc.h>
-#include <sys/redwood_input.h>
 #include <sys/redwood_net.h>
 #include <sys/redwood_sta.h>
 #include <sys/sockio.h>

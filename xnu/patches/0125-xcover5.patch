@@ -990,10 +990,10 @@ index ba647a8..979c83f 100644
  	int log_contacts = 0;
 diff --git a/bsd/dev/redwood_apple80211.c b/bsd/dev/redwood_apple80211.c
 new file mode 100644
-index 0000000..f2f7f7f
+index 0000000..8477646
 --- /dev/null
 +++ b/bsd/dev/redwood_apple80211.c
-@@ -0,0 +1,773 @@
+@@ -0,0 +1,772 @@
 +/*
 + * From y2sios (https://github.com/stormtroopxyz/y2sios, kernel/xnu/files/), MIT License,
 + * Copyright (c) 2026 the y2sios contributors; itself after HackiOS by OOSEX GANG (MIT). Taken for the XCover5 port's
@@ -1049,7 +1049,6 @@ index 0000000..f2f7f7f
 +#include <sys/kern_event.h>
 +#include <sys/kernel.h>
 +#include <sys/proc.h>
-+#include <sys/redwood_input.h>
 +#include <sys/redwood_net.h>
 +#include <sys/redwood_sta.h>
 +#include <sys/sockio.h>
@@ -1769,10 +1768,10 @@ index 0000000..f2f7f7f
 +}
 diff --git a/bsd/dev/redwood_sta.c b/bsd/dev/redwood_sta.c
 new file mode 100644
-index 0000000..4318607
+index 0000000..960e5c8
 --- /dev/null
 +++ b/bsd/dev/redwood_sta.c
-@@ -0,0 +1,386 @@
+@@ -0,0 +1,387 @@
 +/*
 + * From y2sios (https://github.com/stormtroopxyz/y2sios, kernel/xnu/files/), MIT License,
 + * Copyright (c) 2026 the y2sios contributors; itself after HackiOS by OOSEX GANG (MIT). Taken for the XCover5 port's
@@ -1814,9 +1813,10 @@ index 0000000..4318607
 +#include <libkern/libkern.h>
 +#include <mach/mach_types.h>
 +#include <sys/errno.h>
-+#include <sys/redwood_input.h>
 +#include <sys/redwood_sta.h>
 +#include <sys/systm.h>
++
++/* XCover5: printf for redwood_wifi_tell(), there being no redwood_input.c here */
 +
 +extern void thread_set_thread_name(thread_t thread, const char *name);
 +
