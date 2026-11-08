@@ -970,7 +970,8 @@ static int want_join = -1;
 static int del_next, del_join = -1, join_after_scan = -1;
 static bool del_done;
 static uint64_t del_sent_ns;
-static uint32_t del_cfm = 0xffff;
+static uint32_t del_cfm = 0xffff, chain_scans, join_on_running;
+static volatile int sta_phase = REDWOOD_STA_IDLE;
 static bool want_leave;
 static uint8_t leave_sig[32];                /* (signals go out from the Wi-Fi thread's poll: see sta_scan) */
 static void send_connect_to(int best);
@@ -1245,6 +1246,20 @@ on_signal(uint32_t ref)
 		if (join_after_scan >= 0) {
 			send_connect_to(join_after_scan);       /* at once, as the working joins did */
 			join_after_scan = -1;
+		} else if (wifi_ui && sta_phase != REDWOOD_STA_JOINED && sta_phase != REDWOOD_STA_JOINING && del_next == 0 &&
+		    want_join < 0 && del_join < 0) {
+			/*
+			 * wifi33: after the first scan's SCAN_DONE the firmware sent nothing more (got 86 from 35 s to 55 s, last id
+			 * 0x2301): the join's DEL_SCAN (del ffff) and ADD_SCAN went unanswered, as every signal sent after an idle
+			 * gap had (wifi28, wifi29: "[DEEPSLEEP] infrastructure"). The joins that worked sent CONNECT the moment a
+			 * scan ended. So until joined the firmware is never left idle: each SCAN_DONE starts the next scan, and a
+			 * join's CONNECT goes out at the end of the scan running when it is asked for.
+			 */
+			uint64_t ns;
+			absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
+			scan_inflight = true;
+			chain_scans++;
+			send_del_scan(1, ns);
 		}
 		if (!wifi_ui && ap_sel < 0 && conn_cfm == 0xffff) {
 			send_connect();
@@ -1414,7 +1429,13 @@ hip_poll_locked(void)
 			send_add_scan();
 		}
 	}
-	if (want_join >= 0 && del_next == 0) {
+	if (want_join >= 0 && scan_inflight && del_next == 0) {
+		/* a scan is running (the firmware is awake): the CONNECT goes out at its SCAN_DONE, nothing is deleted */
+		join_after_scan = want_join;
+		want_join = -1;
+		want_scan = false;
+		join_on_running++;
+	} else if (want_join >= 0 && del_next == 0) {
 		del_join = want_join;
 		want_join = -1;
 		want_scan = false;
@@ -1798,7 +1819,6 @@ ping_tick(void)
 extern void RedwoodWLANStart(const char *interface, const uint8_t *address);   /* iokit/Kernel/arm/RedwoodWLAN.cpp */
 extern void MiniIONetworkStackStart(void);                                     /* iokit/Kernel/arm/MiniIONetworkStack.cpp */
 
-static volatile int sta_phase = REDWOOD_STA_IDLE;
 static uint32_t ui_scans, ui_joins, ui_leaves;
 
 static void
@@ -2369,6 +2389,9 @@ xc5_wlbt_heartbeat(void)
 		printf("XC5 w fw vif %x scancfm %x ind %u sent %u got %u irqclr %u sr0 %x ids %x %x %x %x\n", vif_res, scan_res, scan_inds, mlme_sent,
 		    mlme_got, irq_cleared, rd(mbox, INTSR0), mlme_ids[(mlme_got + 4) % 8], mlme_ids[(mlme_got + 5) % 8], mlme_ids[(mlme_got + 6) % 8],
 		    mlme_ids[(mlme_got + 7) % 8]);
+		/* wifi33: whether the firmware still takes what we queue (FH ctrl r/w) and what it last logged */
+		printf("XC5 w keep done %u chain %u onrun %u | q0 w%u r%u q3 w%u r%u | fw: %.48s\n", scan_done, chain_scans,
+		    join_on_running, *scb(0, 0), *scb(0, 1), *scb(3, 0), *scb(3, 1), loglines[log_recs % LOGN]);
 	}
 }
 void xc5_wlbt_start(void);
