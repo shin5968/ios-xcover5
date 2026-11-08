@@ -453,6 +453,10 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   ADD_SCAN 연달아)이 안 끝난 상태(ind 3 done 1) → 펌웨어가 검색 중 CONNECT를 보류하는 것으로 추정. 조치(커밋 93fd461, xnu CI 42468613276 — 1·2차는 CI의 KDK
   다운로드가 GitHub 504로 실패, dortania/KdkSupportPkg 릴리스 회복 뒤 3차 성공): 연결 전 항상 DEL_SCAN → 확인(0x2106) 또는 2초 뒤 CONNECT, 새 검색도 DEL_SCAN
   확인 뒤. heartbeat `XC5 w ui join assoc why key | stage err | cfm ind | del <DEL_SCAN 확인> next <대기 중 다음 동작>`. 이미지 `xc5-ios-wifi32-console.tar`.
+- **wifi32 결과(영상 20261108_191510)**: 여전히 "연결할 수 없음"(콘솔 진단 줄은 영상에 안 잡힘). 성공했던 연결(wifi17-22)은 모두 검색이 끝난 순간 바로 보낸 CONNECT였고,
+  삼성 드라이버도 연결 직전 그 네트워크를 다시 검색함(cfg80211_ops.c slsi_connect → slsi_mlme_connect_scan). 조치(커밋 1efcac0, xnu CI 42470910224): 연결 요청 →
+  DEL_SCAN → 확인 뒤 새 ADD_SCAN → **SCAN_DONE을 받는 즉시 CONNECT**, 연결 대기 25초, 실패하면 콘솔에 바로 `XC5 WLBT: JOIN FAILED cfm ind del scans done sent got`,
+  성공하면 `XC5 WLBT: joined (from Settings)`. 이미지 `xc5-ios-wifi33-console.tar`.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
