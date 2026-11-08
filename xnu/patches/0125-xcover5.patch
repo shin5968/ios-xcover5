@@ -2110,10 +2110,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..236e8ef
+index 0000000..c463614
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,1852 @@
+@@ -0,0 +1,1890 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -3062,7 +3062,8 @@ index 0000000..236e8ef
 +static int ap_sel = -1;
 +static uint32_t conn_cfm = 0xffff, conn_ind = 0xffff, disc_reason = 0xffff, data_cfm = 0xffff, data_tx, data_rx;
 +static uint32_t dhcp_state, dhcp_xid = 0x58433501, offer_ip, offer_srv, ack_ip, ack_gw, ack_dns, ack_mask;
-+static uint64_t dhcp_next, rescan_at;
++static uint64_t dhcp_next, rescan_at, tx_freed_at, tx_busy;
++static uint32_t tx_full, tx_force, tx_back, disc_count;
 +static char want_ssid[33];
 +
 +static void
@@ -3116,8 +3117,30 @@ index 0000000..236e8ef
 +send_frame(const uint8_t *fr, uint32_t len)
 +{
 +	struct hip_cfg_head *h = fw_cfg();
++	/*
++	 * A slot is the firmware's from the moment it is queued until it comes back on the FH RFB queue (hip_poll_locked).
++	 * Before (wifi20: 2117 frames out), the 64 slots were simply taken in turn, so a slot could be written again while
++	 * the firmware still read it. With every slot out for half a second, they are taken back as a last resort.
++	 */
 +	static uint32_t slot;
-+	uint32_t moff = HIP_TX + (slot++ % 64) * 2048;
++	uint32_t n;
++	for (n = 0; n < 64 && (tx_busy & (1ull << ((slot + n) % 64))) != 0; n++) {
++	}
++	if (n == 64) {
++		uint64_t ns;
++		absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
++		if (ns - tx_freed_at < 500000000ull) {
++			tx_full++;
++			return;
++		}
++		tx_busy = 0;
++		tx_force++;
++		n = 0;
++	}
++	slot = (slot + n) % 64;
++	tx_busy |= 1ull << slot;
++	uint32_t moff = HIP_TX + (slot++) * 2048;
++	slot %= 64;
 +	uint8_t *m = hip + moff;
 +	uint8_t s[34] = { 0x00, 0x10 };
 +	s[10] = 1;                              /* vif */
@@ -3335,9 +3358,17 @@ index 0000000..236e8ef
 +		}
 +		break;
 +	}
-+	case 0x2309:                            /* MLME_DISCONNECTED_IND */
++	case 0x2309: {                          /* MLME_DISCONNECTED_IND: join again (a scan first, as at the start) */
 +		disc_reason = *(uint16_t *)(sig + 18);
++		disc_count++;
++		conn_ind = 0xffff;
++		conn_cfm = 0xffff;
++		ap_sel = -1;
++		uint64_t ns;
++		absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
++		rescan_at = ns + 2000000000ull;
 +		break;
++	}
 +	case 0x2104:                            /* MLME_ADD_INFO_ELEMENTS_CFM */
 +		info_res = *(uint16_t *)(sig + 12);
 +		if (conn_try == 1) {
@@ -3390,7 +3421,14 @@ index 0000000..236e8ef
 +		send_mlme_get();
 +	}
 +	while (*scb(2, 1) != *scb(2, 0)) {
-+		*scb(2, 1) = (uint8_t)(*scb(2, 1) + 1);
++		uint8_t r = *scb(2, 1);
++		uint32_t ref = qarr(2)[r];
++		if (ref >= HIP_OFF + HIP_TX && ref < HIP_OFF + HIP_TX + 64 * 2048) {
++			tx_busy &= ~(1ull << ((ref - HIP_OFF - HIP_TX) / 2048));
++			absolutetime_to_nanoseconds(mach_absolute_time(), &tx_freed_at);
++			tx_back++;
++		}
++		*scb(2, 1) = (uint8_t)(r + 1);
 +		fh_rfb++;
 +	}
 +	dhcp_tick();
@@ -3940,8 +3978,8 @@ index 0000000..236e8ef
 +	printf("XC5 w req %u ids %x %x %x %x %x %x r %x %x %x %x %x %x %x %x\n", req_len, req_ids[0], req_ids[1], req_ids[2],
 +	    req_ids[3], req_ids[4], req_ids[5], req_rates[0], req_rates[1], req_rates[2], req_rates[3], req_rates[4],
 +	    req_rates[5], req_rates[6], req_rates[7]);
-+	printf("XC5 w join cfm %x ind %x st %u try %u info %x disc %x\n", conn_cfm, conn_ind,
-+	    conn_len >= 28 ? (conn_data[26] | conn_data[27] << 8) : 0xffff, conn_try, info_res, disc_reason);
++	printf("XC5 w join cfm %x ind %x st %u disc %x n %u | tx back %u full %u force %u\n", conn_cfm, conn_ind,
++	    conn_len >= 28 ? (conn_data[26] | conn_data[27] << 8) : 0xffff, disc_reason, disc_count, tx_back, tx_full, tx_force);
 +	const uint8_t *ip = (const uint8_t *)&ack_ip, *of = (const uint8_t *)&offer_ip;
 +	printf("XC5 w data tx %u cfm %x rx %u dhcp %u offer %u.%u.%u.%u ip %u.%u.%u.%u\n", data_tx, data_cfm, data_rx,
 +	    dhcp_state, of[0], of[1], of[2], of[3], ip[0], ip[1], ip[2], ip[3]);
