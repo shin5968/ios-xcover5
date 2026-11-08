@@ -3295,10 +3295,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..53586f9
+index 0000000..5c97ea7
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,2286 @@
+@@ -0,0 +1,2311 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -4263,7 +4263,8 @@ index 0000000..53586f9
 +static char want_ssid[33];
 +/* Step 4e (xc5wifiui=1): iOS's own Wi-Fi side asks for scans and joins (y2sios's redwood_sta/redwood_apple80211) */
 +static int wifi_ui;
-+static bool ui_ready, ui_lost, want_scan;
++static bool ui_ready, ui_lost, want_scan, scan_inflight;
++static uint64_t scan_done_ns;
 +static int want_join = -1;
 +static bool want_leave;
 +static uint8_t leave_sig[32];                /* (signals go out from the Wi-Fi thread's poll: see sta_scan) */
@@ -4516,6 +4517,7 @@ index 0000000..53586f9
 +		vif_res = *(uint16_t *)(sig + 12);
 +		if (vif_res == 0 && wifi_ui) {
 +			ui_ready = true;                /* the Wi-Fi thread makes en0 and hands the station to wifid's side */
++			scan_inflight = true;
 +			send_add_scan();                /* (and a first scan at once, as the working runs did: kept for wifid) */
 +		} else if (vif_res == 0) {
 +			send_add_scan();
@@ -4529,6 +4531,8 @@ index 0000000..53586f9
 +		break;
 +	case 0x2301:                            /* MLME_SCAN_DONE_IND */
 +		scan_done++;
++		scan_inflight = false;
++		absolutetime_to_nanoseconds(mach_absolute_time(), &scan_done_ns);
 +		if (!wifi_ui && ap_sel < 0 && conn_cfm == 0xffff) {
 +			send_connect();
 +			if (ap_sel < 0) {
@@ -4651,10 +4655,23 @@ index 0000000..53586f9
 +		fh_rfb++;
 +	}
 +	dhcp_tick();
++	/*
++	 * wifi28: the first scan (right after ADD_VIF) ended -- 2 networks heard, SCAN_DONE -- but wifid's scans that came
++	 * after it emptied the list (ap_count = 0) and sent ADD_SCAN with the same scan id again and again, and none of
++	 * those was confirmed: "scancfm ffff ind 2 done 1 aps 0 sent 10". Now what was heard is kept (by BSSID), a scan
++	 * already running is not asked for again, and before another ADD_SCAN the last one is deleted (MLME-DEL-SCAN,
++	 * 0x2006 {vif 0; scan_id}, as the driver does before it scans again in mgt.c / cfg80211_ops.c).
++	 */
 +	if (want_scan) {
 +		want_scan = false;
-+		ap_count = 0;
-+		send_add_scan();
++		if (!scan_inflight) {
++			uint8_t d[24] = { 0x06, 0x20 };
++			d[12] = 0x00;
++			d[13] = 0x01;                   /* scan id 0x100 */
++			send_sig(d, sizeof(d), NULL, 0);
++			scan_inflight = true;
++			send_add_scan();
++		}
 +	}
 +	if (want_join >= 0) {
 +		send_connect_to(want_join);
@@ -5103,6 +5120,14 @@ index 0000000..53586f9
 +	 */
 +	lck_mtx_lock(&xc5w_mtx);
 +	uint32_t seen = scan_done;
++	uint64_t now;
++	absolutetime_to_nanoseconds(mach_absolute_time(), &now);
++	/* a scan that ended within the last 20 s answers at once (wifid asks every few seconds while Settings is open) */
++	if (!scan_inflight && scan_done != 0 && now - scan_done_ns < 20000000000ull) {
++		lck_mtx_unlock(&xc5w_mtx);
++		ui_scans++;
++		return 0;
++	}
 +	scan_res = 0xffff;
 +	if (sta_phase != REDWOOD_STA_JOINED) {
 +		sta_phase = REDWOOD_STA_SCANNING;
