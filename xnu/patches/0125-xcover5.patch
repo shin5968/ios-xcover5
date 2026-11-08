@@ -3304,10 +3304,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..2c22c16
+index 0000000..d04d017
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,2413 @@
+@@ -0,0 +1,2414 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -4285,6 +4285,7 @@ index 0000000..2c22c16
 +static bool want_leave;
 +static uint8_t leave_sig[32];                /* (signals go out from the Wi-Fi thread's poll: see sta_scan) */
 +static void send_connect_to(int best);
++static void send_del_scan(int next, uint64_t now_ns);
 +
 +static void
 +send_connect(void)

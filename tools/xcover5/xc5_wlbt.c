@@ -975,6 +975,7 @@ static volatile int sta_phase = REDWOOD_STA_IDLE;
 static bool want_leave;
 static uint8_t leave_sig[32];                /* (signals go out from the Wi-Fi thread's poll: see sta_scan) */
 static void send_connect_to(int best);
+static void send_del_scan(int next, uint64_t now_ns);
 
 static void
 send_connect(void)
