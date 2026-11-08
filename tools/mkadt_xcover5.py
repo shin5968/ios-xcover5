@@ -101,6 +101,13 @@ def build(canvas=(FB_W, FB_H), dram=(DRAM_BASE, DRAM_SIZE)):
         ('virtual-timer-intid', mkadt.u32(30)),
         ('reg', mkadt.u64(0x2a01000, 0x1000, 0x2a02000, 0x1000)),
     ]))
+    # launchd starts wifid only on a device tree with a node "wlan" or "marconi-wifi" (its job's
+    # _LimitLoadToDeviceTree); the Wi-Fi itself is bsd/dev/xc5_wlbt.c's, so nothing matches this node.
+    arm_io.children.append(mkadt.node('wlan', [
+        ('device_type', mkadt.cstr('wlan')),
+        ('compatible', mkadt.cstr('samsung,xcover5-wlbt')),
+        ('local-mac-address', bytes([0x02, 0x58, 0x43, 0x35, 0x00, 0x01])),
+    ]))
     arm_io.children.append(mkadt.node('disp0', [
         ('device_type', mkadt.cstr('display-subsystem')),
         # AppleCLCD (SweetFramebuffer.cpp) matches 'samsung,a5xelte-display'.

@@ -1703,6 +1703,7 @@ ping_tick(void)
  * it is known why not. Open networks only so far: a WPA2 join is refused (Settings: "Unable to join").
  */
 extern void RedwoodWLANStart(const char *interface, const uint8_t *address);   /* iokit/Kernel/arm/RedwoodWLAN.cpp */
+extern void MiniIONetworkStackStart(void);                                     /* iokit/Kernel/arm/MiniIONetworkStack.cpp */
 
 static volatile int sta_phase = REDWOOD_STA_IDLE;
 static uint32_t ui_scans, ui_joins, ui_leaves;
@@ -1936,6 +1937,8 @@ ui_up(void)
 		return;
 	}
 	memcpy(xc5_sta_ops.address, vif_mac, 6);
+	/* configd's interface namer waits for IONetworkStack before it calls the registry quiet, and wifid for that */
+	MiniIONetworkStackStart();
 	RedwoodWLANStart(if_nm, vif_mac);
 	redwood_sta_attach(&xc5_sta_ops);
 	printf("XC5 WLBT: %s handed to iOS's Wi-Fi side\n", if_nm);

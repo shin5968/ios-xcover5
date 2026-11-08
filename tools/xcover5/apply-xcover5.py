@@ -1616,7 +1616,8 @@ print('wrote bsd/dev/xc5_wlbt.c')
 _y2s = Path(__file__).resolve().parent / 'y2sios'
 for src, dst in (('redwood_sta.c', 'bsd/dev/redwood_sta.c'), ('redwood_apple80211.c', 'bsd/dev/redwood_apple80211.c'),
                  ('redwood_sta.h', 'bsd/sys/redwood_sta.h'), ('redwood_net.h', 'bsd/sys/redwood_net.h'),
-                 ('RedwoodWLAN.cpp', 'iokit/Kernel/arm/RedwoodWLAN.cpp')):
+                 ('RedwoodWLAN.cpp', 'iokit/Kernel/arm/RedwoodWLAN.cpp'),
+                 ('MiniIONetworkStack.cpp', 'iokit/Kernel/arm/MiniIONetworkStack.cpp')):
     (tree / dst).write_text((_y2s / src).read_text())
     print('wrote ' + dst)
 edit('bsd/conf/files', [
@@ -1628,7 +1629,8 @@ edit('bsd/conf/files', [
 edit('iokit/conf/files.arm64', [
     ('iokit/Kernel/arm/XC5AMFI.cpp                                     optional iokitcpp\n',
      'iokit/Kernel/arm/XC5AMFI.cpp                                     optional iokitcpp\n'
-     'iokit/Kernel/arm/RedwoodWLAN.cpp                                 optional iokitcpp\n', 1),
+     'iokit/Kernel/arm/RedwoodWLAN.cpp                                 optional iokitcpp\n'
+     'iokit/Kernel/arm/MiniIONetworkStack.cpp                          optional iokitcpp\n', 1),
 ])
 edit('bsd/dev/a5xelte_emmc.c', [
     ('\tif ((uint64_t)lba < emmc_first_lba ||\n'
