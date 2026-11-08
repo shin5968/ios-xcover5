@@ -967,7 +967,7 @@ static uint64_t scan_done_ns;
 static uint32_t irq_cleared;
 static int join_sec = -1, join_len, join_bssid_given, join_stage, join_err = -1;
 static int want_join = -1;
-static int del_next, del_join = -1;
+static int del_next, del_join = -1, join_after_scan = -1;
 static bool del_done;
 static uint64_t del_sent_ns;
 static uint32_t del_cfm = 0xffff;
@@ -1242,6 +1242,10 @@ on_signal(uint32_t ref)
 		scan_done++;
 		scan_inflight = false;
 		absolutetime_to_nanoseconds(mach_absolute_time(), &scan_done_ns);
+		if (join_after_scan >= 0) {
+			send_connect_to(join_after_scan);       /* at once, as the working joins did */
+			join_after_scan = -1;
+		}
 		if (!wifi_ui && ap_sel < 0 && conn_cfm == 0xffff) {
 			send_connect();
 			if (ap_sel < 0) {
@@ -1399,9 +1403,15 @@ hip_poll_locked(void)
 			scan_inflight = true;
 			send_add_scan();
 		} else if (next == 2 && del_join >= 0) {
-			scan_inflight = false;
-			send_connect_to(del_join);
+			/*
+			 * wifi32: CONNECT after the DEL_SCAN still went unanswered. The CONNECTs that worked (wifi17-22) went out
+			 * the moment a scan ended, and Samsung's driver scans for the network just before it connects
+			 * (cfg80211_ops.c slsi_connect: slsi_mlme_connect_scan). So: a fresh scan, and the CONNECT on its end.
+			 */
+			scan_inflight = true;
+			join_after_scan = del_join;
 			del_join = -1;
+			send_add_scan();
 		}
 	}
 	if (want_join >= 0 && del_next == 0) {
@@ -1970,15 +1980,19 @@ sta_join(const struct redwood_sta_join *what)
 	sta_phase = REDWOOD_STA_JOINING;
 	want_join = k;
 	lck_mtx_unlock(&xc5w_mtx);
-	wait_until((volatile uint32_t *)&conn_ind, 0xffff, 15000);
+	wait_until((volatile uint32_t *)&conn_ind, 0xffff, 25000);     /* (a scan comes first now) */
 	join_stage = 5;
 	if (conn_ind != 0) {
 		sta_phase = REDWOOD_STA_IDLE;
+		/* said at once on the console (the heartbeat line came too seldom to be filmed, wifi31/32) */
+		printf("XC5 WLBT: JOIN FAILED cfm %x ind %x del %x scans done %u sent %u got %u\n", conn_cfm, conn_ind, del_cfm,
+		    scan_done, mlme_sent, mlme_got);
 		return join_err = conn_ind == 0xffff ? ETIMEDOUT : ECONNREFUSED;
 	}
 	join_err = 0;
 	sta_phase = REDWOOD_STA_JOINED;
 	link_state(true);
+	printf("XC5 WLBT: joined (from Settings)\n");
 	return 0;
 }
 
