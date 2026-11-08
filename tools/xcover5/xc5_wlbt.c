@@ -964,6 +964,7 @@ static char want_ssid[33];
 static int wifi_ui;
 static bool ui_ready, ui_lost, want_scan, scan_inflight;
 static uint64_t scan_done_ns;
+static uint32_t irq_cleared;
 static int want_join = -1;
 static bool want_leave;
 static uint8_t leave_sig[32];                /* (signals go out from the Wi-Fi thread's poll: see sta_scan) */
@@ -1466,6 +1467,16 @@ static void
 hip_poll(void)
 {
 	lck_mtx_lock(&xc5w_mtx);
+	/*
+	 * wifi29: after an idle while the firmware logged "[DEEPSLEEP] infrastructure" and then answered nothing we sent
+	 * (CONNECT: no confirm). We had never cleared its interrupts to us: Samsung's driver clears each one it handles
+	 * (platform_mif_irq_bit_clear: INTCR0 = bit << 16). Cleared here, before the queues are read.
+	 */
+	uint32_t pend = rd(mbox, INTSR0) & 0xffff0000u;
+	if (pend != 0) {
+		wr(mbox, 0x00c, pend);          /* INTCR0 */
+		irq_cleared++;
+	}
 	hip_poll_locked();
 	mbuf_t head = rx_head;
 	uint32_t n = rx_n;
@@ -2287,8 +2298,8 @@ xc5_wlbt_heartbeat(void)
 		    xc5_a80211_requests, xc5_a80211_refused, xc5_a80211_last_type, xc5_a80211_last_error, ap_count, scan_done,
 		    xc5_a80211_scandone, xc5_a80211_results, xc5_a80211_given);
 		/* wifi26: scans asked by wifid never ended (done 0, aps 0): what the firmware said to them */
-		printf("XC5 w fw vif %x scancfm %x ind %u sent %u got %u ids %x %x %x %x\n", vif_res, scan_res, scan_inds, mlme_sent,
-		    mlme_got, mlme_ids[(mlme_got + 4) % 8], mlme_ids[(mlme_got + 5) % 8], mlme_ids[(mlme_got + 6) % 8],
+		printf("XC5 w fw vif %x scancfm %x ind %u sent %u got %u irqclr %u sr0 %x ids %x %x %x %x\n", vif_res, scan_res, scan_inds, mlme_sent,
+		    mlme_got, irq_cleared, rd(mbox, INTSR0), mlme_ids[(mlme_got + 4) % 8], mlme_ids[(mlme_got + 5) % 8], mlme_ids[(mlme_got + 6) % 8],
 		    mlme_ids[(mlme_got + 7) % 8]);
 	}
 }
