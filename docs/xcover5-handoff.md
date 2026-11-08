@@ -381,6 +381,11 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   → **Safari 검은 화면은 네트워크가 아니라 WebKit GPU 프로세스 렌더링**(추정: GPU 프로세스의 DOM 렌더링/가속 그리기가 Metal을
   요구하는데 Metal은 chronod에만 공개). 시험: 설정 > Safari > 고급 > Feature Flags(실험적 기능)에서 "GPU Process: DOM Rendering"
   (과 Canvas) 끄기 → 다시 Safari. 안 되면 `xc5metalfor`에 com.apple.WebKit.GPU 추가 시험(위험: Metal 실험 단계).
+- **사용자: Feature Flags 꺼도 똑같음.** 영상의 콘솔 `XC5 mesa: backboardd: hakios-gl: -attachImage: target 0xde1, texture N, an IOSurface of
+  'w30r': not done`가 원인: WebKit GPU 프로세스가 넓은 색역 화면용 **'w30r'**(kCVPixelFormatType_30RGBLEPackedWideGamut, 10비트
+  B/G/R XR 384..894, 단일 평면, 불투명)로 페이지 타일을 그리는데 backboardd의 GL 층(gpu/hakios-gl/src/eagl.c my_attachImage)이 'BGRA'·
+  'b3a8'만 받음. 조치(커밋 d3c96ad, mesa-ios CI 42442158791): 'b3a8' 경로(deep_to_bgra/bgra_to_deep)를 단일 평면 'w30r'도 받게(투명도 0xff).
+  이미지 `xc5-ios-wifi21-console.tar`(**새 드롭 1794108066**, 인자 wifi20과 같음). WSL vhdx 압축 57.8→28.2 GB(사용자, diskpart).
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
