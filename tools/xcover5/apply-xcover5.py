@@ -1611,10 +1611,24 @@ print('wrote bsd/dev/xc5_pmic.c')
 (tree / 'bsd/dev/xc5_wlbt.c').write_text(
     (Path(__file__).resolve().parent / 'xc5_wlbt.c').read_text())
 print('wrote bsd/dev/xc5_wlbt.c')
+# Wi-Fi step 4e: iOS's own Wi-Fi side (wifid, Settings) on the kernel's driver, with y2sios's (MIT) station
+# boundary, Apple80211 answers and registry entries (tools/xcover5/y2sios/; boot-arg xc5wifiui).
+_y2s = Path(__file__).resolve().parent / 'y2sios'
+for src, dst in (('redwood_sta.c', 'bsd/dev/redwood_sta.c'), ('redwood_apple80211.c', 'bsd/dev/redwood_apple80211.c'),
+                 ('redwood_sta.h', 'bsd/sys/redwood_sta.h'), ('redwood_net.h', 'bsd/sys/redwood_net.h'),
+                 ('RedwoodWLAN.cpp', 'iokit/Kernel/arm/RedwoodWLAN.cpp')):
+    (tree / dst).write_text((_y2s / src).read_text())
+    print('wrote ' + dst)
 edit('bsd/conf/files', [
     ('bsd/dev/a5xelte_emmc.c\t\t\tstandard\n',
      'bsd/dev/a5xelte_emmc.c\t\t\tstandard\nbsd/dev/xc5_drop.c\t\t\tstandard\n'
-     'bsd/dev/xc5_pmic.c\t\t\tstandard\nbsd/dev/xc5_wlbt.c\t\t\tstandard\n', 1),
+     'bsd/dev/xc5_pmic.c\t\t\tstandard\nbsd/dev/xc5_wlbt.c\t\t\tstandard\n'
+     'bsd/dev/redwood_sta.c\t\t\tstandard\nbsd/dev/redwood_apple80211.c\t\tstandard\n', 1),
+])
+edit('iokit/conf/files.arm64', [
+    ('iokit/Kernel/arm/XC5AMFI.cpp                                     optional iokitcpp\n',
+     'iokit/Kernel/arm/XC5AMFI.cpp                                     optional iokitcpp\n'
+     'iokit/Kernel/arm/RedwoodWLAN.cpp                                 optional iokitcpp\n', 1),
 ])
 edit('bsd/dev/a5xelte_emmc.c', [
     ('\tif ((uint64_t)lba < emmc_first_lba ||\n'

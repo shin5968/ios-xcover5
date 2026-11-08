@@ -58,6 +58,10 @@
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 #include <sys/sysctl.h>
+#include <sys/kern_event.h>
+#include <net/if_media.h>
+#include <sys/redwood_sta.h>
+#include <sys/redwood_net.h>
 
 extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern vm_offset_t ml_io_map_wcomb(vm_offset_t phys_addr, vm_size_t size);
@@ -657,7 +661,7 @@ static uint8_t req_ids[12], req_rates[12], n_req_ids, n_req_rates;
 static uint32_t req_len, conn_try, info_res = 0xffff;
 static int rate_retry;
 static uint32_t mib_chip, mib_plat, mib_build, vif_res = 0xffff, scan_res = 0xffff, scan_inds, scan_done;
-#define APN 16
+#define APN 24
 static struct {
 	char ssid[33];
 	uint8_t ssid_len;
@@ -669,6 +673,9 @@ static struct {
 	uint8_t rates[16];                      /* Supported Rates then Extended Supported Rates */
 	uint8_t nrates;
 	uint8_t caps;                           /* 1 HT, 2 VHT, 4 HE (extension 35) present */
+	uint16_t capability, beacon_interval;   /* (step 4e: what wifid is given of a network, with its elements) */
+	uint16_t elements_length;
+	uint8_t elements[REDWOOD_STA_ELEMENTS_MOST];
 } aps[APN];
 static uint32_t ap_count;
 static const uint8_t vif_mac[6] = { 0x02, 0x58, 0x43, 0x35, 0x00, 0x01 };   /* locally administered: "XC5" */
@@ -917,6 +924,10 @@ scan_result(const uint8_t *sig, const uint8_t *f, uint32_t n)
 	memcpy(aps[k].raw_ssid, raw, rawl);
 	aps[k].ssid_len = (uint8_t)rawl;
 	aps[k].open = !(f[34] & 0x10);          /* capability: privacy bit */
+	aps[k].capability = (uint16_t)(f[34] | f[35] << 8);
+	aps[k].beacon_interval = (uint16_t)(f[32] | f[33] << 8);
+	aps[k].elements_length = (uint16_t)MIN(n - 36, (uint32_t)REDWOOD_STA_ELEMENTS_MOST);
+	memcpy(aps[k].elements, f + 36, aps[k].elements_length);
 	memcpy(aps[k].rates, rates, nr);
 	aps[k].nrates = nr;
 	aps[k].caps = caps;
@@ -949,6 +960,10 @@ static uint32_t dhcp_state, dhcp_xid = 0x58433501, offer_ip, offer_srv, ack_ip, 
 static uint64_t dhcp_next, rescan_at, tx_freed_at, tx_busy;
 static uint32_t tx_full, tx_force, tx_back, disc_count;
 static char want_ssid[33];
+/* Step 4e (xc5wifiui=1): iOS's own Wi-Fi side asks for scans and joins (y2sios's redwood_sta/redwood_apple80211) */
+static int wifi_ui;
+static bool ui_ready, ui_lost;
+static void send_connect_to(int best);
 
 static void
 send_connect(void)
@@ -967,6 +982,12 @@ send_connect(void)
 		printf("XC5 WLBT: no network to join (%s)\n", want_ssid[0] ? want_ssid : "no open one found");
 		return;
 	}
+	send_connect_to(best);
+}
+
+static void
+send_connect_to(int best)
+{
 	ap_sel = best;
 	uint8_t s[34] = { 0x0b, 0x20 };
 	s[10] = 1;
@@ -1150,6 +1171,9 @@ on_frame(const uint8_t *fr, uint32_t n)
 static void
 dhcp_tick(void)
 {
+	if (wifi_ui) {
+		return;                         /* configd does DHCP on the interface it now knows */
+	}
 	if (conn_ind != 0 || dhcp_state >= 3) {
 		return;
 	}
@@ -1186,7 +1210,9 @@ on_signal(uint32_t ref)
 		break;
 	case 0x2107:                            /* MLME_ADD_VIF_CFM */
 		vif_res = *(uint16_t *)(sig + 12);
-		if (vif_res == 0) {
+		if (vif_res == 0 && wifi_ui) {
+			ui_ready = true;                /* the Wi-Fi thread makes en0 and hands the station to wifid's side */
+		} else if (vif_res == 0) {
 			send_add_scan();
 		}
 		break;
@@ -1198,7 +1224,7 @@ on_signal(uint32_t ref)
 		break;
 	case 0x2301:                            /* MLME_SCAN_DONE_IND */
 		scan_done++;
-		if (ap_sel < 0 && conn_cfm == 0xffff) {
+		if (!wifi_ui && ap_sel < 0 && conn_cfm == 0xffff) {
 			send_connect();
 			if (ap_sel < 0) {
 				uint64_t ns;
@@ -1247,6 +1273,10 @@ on_signal(uint32_t ref)
 		disc_count++;
 		conn_ind = 0xffff;
 		conn_cfm = 0xffff;
+		if (wifi_ui) {
+			ui_lost = true;                 /* told to wifid by the Wi-Fi thread; iOS decides whether to join again */
+			break;
+		}
 		ap_sel = -1;
 		uint64_t ns;
 		absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
@@ -1436,22 +1466,60 @@ xc5_if_output(ifnet_t ifp, mbuf_t m)
 	return 0;
 }
 
+static bool link_up;
+
+/*
+ * Step 4e: as y2sios's redwood_net.c answers for its en0 -- the media (802.11, and whether the link is there, which is
+ * what configd asks), the MTU, and every request it does not know handed to bsd/dev/redwood_apple80211.c: wifid's
+ * Apple80211 ioctls (SIOCGA80211, SIOCSA80211) come to the interface that way.
+ */
 static errno_t
 xc5_if_ioctl(ifnet_t ifp, unsigned long cmd, void *data)
 {
-	(void)data;
+	const int media[] = { (wifi_ui ? IFM_IEEE80211 : IFM_ETHER) | IFM_AUTO };
+	struct ifreq *request = data;
+	struct ifmediareq *mr = data;
+	user_addr_t list;
+	errno_t error = 0;
+
 	switch (cmd) {
 	case SIOCSIFADDR:
 	case SIOCAIFADDR:
 		ifnet_set_flags(ifp, IFF_UP, IFF_UP);
-		return 0;
+		break;
 	case SIOCSIFFLAGS:
+		if (wifi_ui) {
+			ifnet_set_flags(ifp, (ifnet_flags(ifp) & IFF_UP) ? IFF_RUNNING : 0, IFF_RUNNING);
+		}
+		break;
 	case SIOCADDMULTI:
 	case SIOCDELMULTI:
-		return 0;
+		break;
+	case SIOCGIFMEDIA32:
+	case SIOCGIFMEDIA64:
+		list = cmd == SIOCGIFMEDIA64 ? ((struct ifmediareq64 *)mr)->ifmu_ulist :
+		    CAST_USER_ADDR_T(((struct ifmediareq32 *)mr)->ifmu_ulist);
+		mr->ifm_active = mr->ifm_current = media[0];
+		mr->ifm_mask = 0;
+		mr->ifm_status = IFM_AVALID | ((wifi_ui ? link_up : conn_ind == 0) ? IFM_ACTIVE : 0);
+		if (list != USER_ADDR_NULL && mr->ifm_count > 0) {
+			error = copyout(media, list, sizeof(media));
+		}
+		mr->ifm_count = 1;
+		break;
+	case SIOCGIFDEVMTU:
+		request->ifr_devmtu.ifdm_current = ifnet_mtu(ifp);
+		request->ifr_devmtu.ifdm_max = ETHERMTU;
+		request->ifr_devmtu.ifdm_min = IF_MINMTU;
+		break;
+	case SIOCSIFMTU:
+		error = request->ifr_mtu > ETHERMTU || request->ifr_mtu < IF_MINMTU ? EINVAL : ifnet_set_mtu(ifp, request->ifr_mtu);
+		break;
 	default:
-		return EOPNOTSUPP;
+		error = wifi_ui ? redwood_apple80211_ioctl(cmd, data) : EOPNOTSUPP;
+		break;
 	}
+	return error;
 }
 
 static void
@@ -1487,6 +1555,7 @@ net_up(void)
 	p.name = "en";
 	p.unit = unit;
 	p.family = IFNET_FAMILY_ETHERNET;
+	p.subfamily = wifi_ui ? IFNET_SUBFAMILY_WIFI : IFNET_SUBFAMILY_ANY;     /* (how the stack and configd tell a radio) */
 	p.type = IFT_ETHER;
 	p.output = xc5_if_output;
 	p.demux = ether_demux;
@@ -1514,6 +1583,14 @@ net_up(void)
 		return;
 	}
 	ifnet_set_lladdr(ifp, vif_mac, ETHER_ADDR_LEN);
+	if (wifi_ui) {
+		/* up is configd's to say; the link comes with a join (link_state) */
+		lck_mtx_lock(&xc5w_mtx);
+		xc5_ifp = ifp;
+		lck_mtx_unlock(&xc5w_mtx);
+		printf("XC5 WLBT: %s made for iOS's Wi-Fi side\n", if_nm);
+		return;
+	}
 	ifnet_set_flags(ifp, IFF_UP | IFF_RUNNING, IFF_UP | IFF_RUNNING);
 	lck_mtx_lock(&xc5w_mtx);
 	xc5_ifp = ifp;
@@ -1616,6 +1693,248 @@ ping_tick(void)
 		const uint8_t *icmp = (got >= 20 && (r[0] >> 4) == 4) ? r + (r[0] & 15) * 4 : r;
 		if (icmp < r + got && icmp[0] == 0) {
 			ping_got++;
+		}
+	}
+}
+/*
+ * Step 4e: the station side of y2sios's station boundary (sys/redwood_sta.h): what iOS's Wi-Fi side (wifid, Settings,
+ * through bsd/dev/redwood_apple80211.c and redwood_sta.c's thread) asks of the radio, done with this file's signals.
+ * Each call may take as long as the thing takes; scan() returns when the scan is over, join() when frames can pass or
+ * it is known why not. Open networks only so far: a WPA2 join is refused (Settings: "Unable to join").
+ */
+extern void RedwoodWLANStart(const char *interface, const uint8_t *address);   /* iokit/Kernel/arm/RedwoodWLAN.cpp */
+
+static volatile int sta_phase = REDWOOD_STA_IDLE;
+static uint32_t ui_scans, ui_joins, ui_leaves;
+
+static void
+link_event(uint32_t code)
+{
+	_Alignas(struct kern_event_msg) char message[sizeof(struct kern_event_msg) + sizeof(struct net_event_data)] = { 0 };
+	struct kern_event_msg *header = (struct kern_event_msg *)message;
+	struct net_event_data *about = (struct net_event_data *)(header + 1);
+
+	header->total_size = sizeof(message);
+	header->vendor_code = KEV_VENDOR_APPLE;
+	header->kev_class = KEV_NETWORK_CLASS;
+	header->kev_subclass = KEV_DL_SUBCLASS;
+	header->event_code = code;
+	about->if_family = ifnet_family(xc5_ifp);
+	about->if_unit = ifnet_unit(xc5_ifp);
+	strlcpy(about->if_name, ifnet_name(xc5_ifp), IFNAMSIZ);
+	ifnet_event(xc5_ifp, header);
+}
+
+/* frames can pass now / no longer: configd starts DHCP on the first */
+static void
+link_state(bool up)
+{
+	if (xc5_ifp == NULL || up == link_up) {
+		return;
+	}
+	link_up = up;
+	printf("XC5 WLBT: %s link %s\n", if_nm, up ? "up" : "down");
+	link_event(up ? KEV_DL_LINK_ON : KEV_DL_LINK_OFF);
+}
+
+static bool
+wait_until(volatile uint32_t *value, uint32_t from, unsigned ms)
+{
+	for (unsigned t = 0; t < ms / 20; t++) {
+		if (*value != from) {
+			return true;
+		}
+		delay(20000);
+	}
+	return *value != from;
+}
+
+int sta_leave_call(void);
+
+static int
+sta_power(bool on)
+{
+	if (!on && sta_phase == REDWOOD_STA_JOINED) {
+		return sta_leave_call();
+	}
+	return 0;
+}
+
+static int
+sta_scan(const struct redwood_sta_scan *what)
+{
+	(void)what;                             /* every 2.4 GHz channel, any name, actively: what this file's scan does */
+	lck_mtx_lock(&xc5w_mtx);
+	uint32_t seen = scan_done;
+	ap_count = 0;
+	if (sta_phase != REDWOOD_STA_JOINED) {
+		sta_phase = REDWOOD_STA_SCANNING;
+	}
+	send_add_scan();
+	lck_mtx_unlock(&xc5w_mtx);
+	ui_scans++;
+	bool done = wait_until((volatile uint32_t *)&scan_done, seen, 12000);
+	if (sta_phase == REDWOOD_STA_SCANNING) {
+		sta_phase = REDWOOD_STA_IDLE;
+	}
+	return done ? 0 : ETIMEDOUT;
+}
+
+static void
+bss_of(uint32_t k, struct redwood_sta_bss *b)
+{
+	bzero(b, sizeof(*b));
+	memcpy(b->bssid, aps[k].bssid, 6);
+	memcpy(b->ssid, aps[k].raw_ssid, aps[k].ssid_len);
+	b->ssid_length = aps[k].ssid_len;
+	b->frequency = aps[k].mhz;
+	b->rssi = aps[k].rssi;
+	b->beacon_interval = aps[k].beacon_interval;
+	b->capability = aps[k].capability;
+	b->elements_length = aps[k].elements_length;
+	memcpy(b->elements, aps[k].elements, aps[k].elements_length);
+}
+
+static void
+sta_heard(void (*each)(const struct redwood_sta_bss *bss, void *context), void *context)
+{
+	static struct redwood_sta_bss b;        /* (one caller: redwood_sta.c's thread) */
+	for (uint32_t k = 0; k < ap_count && k < APN; k++) {
+		lck_mtx_lock(&xc5w_mtx);
+		bss_of(k, &b);
+		lck_mtx_unlock(&xc5w_mtx);
+		each(&b, context);
+	}
+}
+
+static int
+find_ap(const struct redwood_sta_join *what)
+{
+	static const uint8_t none[6];
+	int best = -1;
+	for (uint32_t k = 0; k < ap_count && k < APN; k++) {
+		if (aps[k].ssid_len == what->ssid_length && memcmp(aps[k].raw_ssid, what->ssid, what->ssid_length) == 0 &&
+		    (memcmp(what->bssid, none, 6) == 0 || memcmp(what->bssid, aps[k].bssid, 6) == 0) &&
+		    (best < 0 || aps[k].rssi > aps[best].rssi)) {
+			best = (int)k;
+		}
+	}
+	return best;
+}
+
+static int
+sta_join(const struct redwood_sta_join *what)
+{
+	ui_joins++;
+	if (what->security != REDWOOD_STA_OPEN) {
+		printf("XC5 WLBT: a WPA2 join is asked for: not built yet\n");
+		return EOPNOTSUPP;              /* (Apple80211's "unable to join", not "wrong password": EAUTH would say that) */
+	}
+	lck_mtx_lock(&xc5w_mtx);
+	int k = find_ap(what);
+	lck_mtx_unlock(&xc5w_mtx);
+	if (k < 0) {
+		static const struct redwood_sta_scan any;
+		sta_scan(&any);
+		lck_mtx_lock(&xc5w_mtx);
+		k = find_ap(what);
+		lck_mtx_unlock(&xc5w_mtx);
+	}
+	if (k < 0) {
+		return ENOENT;
+	}
+	lck_mtx_lock(&xc5w_mtx);
+	conn_cfm = 0xffff;
+	conn_ind = 0xffff;
+	sta_phase = REDWOOD_STA_JOINING;
+	send_connect_to(k);
+	lck_mtx_unlock(&xc5w_mtx);
+	wait_until((volatile uint32_t *)&conn_ind, 0xffff, 15000);
+	if (conn_ind != 0) {
+		sta_phase = REDWOOD_STA_IDLE;
+		return conn_ind == 0xffff ? ETIMEDOUT : ECONNREFUSED;
+	}
+	sta_phase = REDWOOD_STA_JOINED;
+	link_state(true);
+	return 0;
+}
+
+int
+sta_leave_call(void)
+{
+	ui_leaves++;
+	if (ap_sel >= 0 && conn_ind == 0) {
+		/* MLME-DISCONNECT.request 0x200e {vif 1; peer_sta_address; reason_code 3 (leaving)} */
+		uint8_t s[32] = { 0x0e, 0x20 };
+		s[10] = 1;
+		lck_mtx_lock(&xc5w_mtx);
+		memcpy(s + 12, aps[ap_sel].bssid, 6);
+		s[18] = 3;
+		send_sig(s, sizeof(s), NULL, 0);
+		conn_ind = 0xffff;
+		lck_mtx_unlock(&xc5w_mtx);
+	}
+	link_state(false);
+	sta_phase = REDWOOD_STA_IDLE;
+	return 0;
+}
+
+static int
+sta_leave(void)
+{
+	return sta_leave_call();
+}
+
+static void
+sta_state(struct redwood_sta_state *state)
+{
+	state->phase = (enum redwood_sta_phase)sta_phase;
+	if (ap_sel >= 0 && ap_sel < APN) {
+		bss_of((uint32_t)ap_sel, &state->bss);
+	}
+}
+
+static unsigned
+sta_channels(struct redwood_sta_channel *ch, unsigned most)
+{
+	unsigned n = 0;
+	for (unsigned c = 1; c <= 13 && n < most; c++) {
+		ch[n].frequency = (uint16_t)(2407 + 5 * c);
+		ch[n].flags = 0;
+		n++;
+	}
+	return n;
+}
+
+static struct redwood_sta_ops xc5_sta_ops = {
+	.power = sta_power, .scan = sta_scan, .heard = sta_heard, .join = sta_join, .leave = sta_leave, .state = sta_state,
+	.channels = sta_channels,
+};
+
+/* In the Wi-Fi thread once the station interface (vif 1) exists: en0, its registry entries, the station boundary */
+static void
+ui_up(void)
+{
+	net_up();
+	if (xc5_ifp == NULL) {
+		return;
+	}
+	memcpy(xc5_sta_ops.address, vif_mac, 6);
+	RedwoodWLANStart(if_nm, vif_mac);
+	redwood_sta_attach(&xc5_sta_ops);
+	printf("XC5 WLBT: %s handed to iOS's Wi-Fi side\n", if_nm);
+}
+
+/* In the Wi-Fi thread: the network was lost (MLME-DISCONNECTED.indication) */
+static void
+ui_tick(void)
+{
+	if (ui_lost) {
+		ui_lost = false;
+		if (sta_phase == REDWOOD_STA_JOINED) {
+			sta_phase = REDWOOD_STA_IDLE;
+			link_state(false);
+			redwood_sta_lost(ECONNRESET);
 		}
 	}
 }
@@ -1806,8 +2125,14 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 			poll_log(200 + tick / 10);
 		}
 		hip_poll();
-		if (xc5_ifp == NULL && dhcp_state == 3 && if_err == -1) {
+		if (xc5_ifp == NULL && dhcp_state == 3 && if_err == -1 && !wifi_ui) {
 			net_up();
+		}
+		if (wifi_ui && ui_ready && xc5_ifp == NULL && if_err == -1) {
+			ui_up();
+		}
+		if (wifi_ui) {
+			ui_tick();
 		}
 		ping_tick();
 		if (tick % 2000 != 0 || i >= 9) {
@@ -1870,7 +2195,8 @@ xc5_wlbt_heartbeat(void)
 	printf("XC5 w if %s %d addr %d route %d out %u in %u drop %u ping %u/%u (%d)\n", if_nm, if_err, addr_err, route_err,
 	    if_out, if_in, if_drop, ping_got, ping_sent, ping_err);
 	const uint8_t *dn = (const uint8_t *)&ack_dns;
-	printf("XC5 w net %#x dns %u.%u.%u.%u\n", xc5net_stat, dn[0], dn[1], dn[2], dn[3]);
+	printf("XC5 w net %#x dns %u.%u.%u.%u | ui %d phase %d link %d scans %u joins %u leaves %u\n", xc5net_stat, dn[0],
+	    dn[1], dn[2], dn[3], wifi_ui, sta_phase, link_up, ui_scans, ui_joins, ui_leaves);
 }
 void xc5_wlbt_start(void);
 void
@@ -1883,6 +2209,7 @@ xc5_wlbt_start(void)
 	PE_parse_boot_argn("xc5wlan", &wlan_mode, sizeof(wlan_mode));
 	PE_parse_boot_argn("xc5ssid", want_ssid, sizeof(want_ssid) - 1);
 	PE_parse_boot_argn("xc5wretry", &rate_retry, sizeof(rate_retry));
+	PE_parse_boot_argn("xc5wifiui", &wifi_ui, sizeof(wifi_ui));
 	thread_t thread;
 	if (kernel_thread_start(wlbt_thread, NULL, &thread) == KERN_SUCCESS) {
 		thread_deallocate(thread);
