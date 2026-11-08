@@ -2232,6 +2232,13 @@ xc5_wlbt_heartbeat(void)
 	const uint8_t *dn = (const uint8_t *)&ack_dns;
 	printf("XC5 w net %#x dns %u.%u.%u.%u | ui %d phase %d link %d scans %u joins %u leaves %u\n", xc5net_stat, dn[0],
 	    dn[1], dn[2], dn[3], wifi_ui, sta_phase, link_up, ui_scans, ui_joins, ui_leaves);
+	if (wifi_ui) {
+		extern unsigned xc5_a80211_requests, xc5_a80211_refused, xc5_a80211_results, xc5_a80211_given, xc5_a80211_scandone;
+		extern int xc5_a80211_last_type, xc5_a80211_last_error;
+		printf("XC5 w a80211 req %u refused %u (last %d err %d) | scan aps %u done %u ev %u | results asked %u given %u\n",
+		    xc5_a80211_requests, xc5_a80211_refused, xc5_a80211_last_type, xc5_a80211_last_error, ap_count, scan_done,
+		    xc5_a80211_scandone, xc5_a80211_results, xc5_a80211_given);
+	}
 }
 void xc5_wlbt_start(void);
 void

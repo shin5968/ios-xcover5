@@ -214,6 +214,9 @@ static const char interface_name[16] = "en0";   /* (bsd/dev/redwood_net.c makes 
 static LCK_GRP_DECLARE(apple80211_lock_group, "redwood-apple80211");
 static LCK_MTX_DECLARE(apple80211_lock, &apple80211_lock_group);
 static unsigned result_next;                    /* which of what the last scan heard a SCAN_RESULT request gets next */
+/* XCover5: for the heartbeat (bsd/dev/xc5_wlbt.c) -- requests seen, SCAN_RESULTs asked and given, scan-done events */
+unsigned xc5_a80211_requests, xc5_a80211_refused, xc5_a80211_results, xc5_a80211_given, xc5_a80211_scandone;
+int xc5_a80211_last_type, xc5_a80211_last_error;
 static uint32_t join_result;                    /* of the last join asked for: 0 while it runs, then Apple80211's number */
 
 /* ---- channels ---------------------------------------------------------------------------------------- */
@@ -389,6 +392,7 @@ get(struct apple80211req *request)
 		lck_mtx_unlock(&apple80211_lock);
 		return 0;
 	case 11: {                              /* what the last scan heard, one access point a request; EIO: that was all */
+		xc5_a80211_results++;           /* XCover5 */
 		struct redwood_sta_bss *bss = kalloc_data(sizeof(*bss), Z_WAITOK);
 		unsigned index;
 		bool there;
@@ -401,6 +405,7 @@ get(struct apple80211req *request)
 		lck_mtx_unlock(&apple80211_lock);
 		there = redwood_sta_heard(index, bss);
 		error = there ? give_network(request, bss) : EIO;
+		xc5_a80211_given += there && error == 0;        /* XCover5 */
 		kfree_data(bss, sizeof(*bss));
 		return error;
 	}
@@ -658,6 +663,7 @@ redwood_apple80211_event(enum redwood_sta_event event, int status)
 		post(EVENT_POWER_CHANGED, NULL, 0);
 		break;
 	case REDWOOD_STA_SCAN_DONE:
+		xc5_a80211_scandone++;          /* XCover5 */
 		lck_mtx_lock(&apple80211_lock);
 		result_next = 0;
 		lck_mtx_unlock(&apple80211_lock);
@@ -758,6 +764,12 @@ redwood_apple80211_ioctl(u_long command, void *data)
 	proc_selfname(who, sizeof(who));
 	error = is_set ? set(request, what, sizeof(what)) : get(request);
 	note(request, is_set, error);
+	xc5_a80211_requests++;                  /* XCover5 */
+	if (error != 0) {
+		xc5_a80211_refused++;
+		xc5_a80211_last_type = (is_set ? 1000 : 0) + request->req_type;
+		xc5_a80211_last_error = error;
+	}
 	/* (a request that is repeated for ever is said a few hundred times) */
 	if (said < 800) {
 		said++;
