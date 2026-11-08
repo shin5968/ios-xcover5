@@ -1781,6 +1781,7 @@ sta_scan(const struct redwood_sta_scan *what)
 	lck_mtx_lock(&xc5w_mtx);
 	uint32_t seen = scan_done;
 	ap_count = 0;
+	scan_res = 0xffff;
 	if (sta_phase != REDWOOD_STA_JOINED) {
 		sta_phase = REDWOOD_STA_SCANNING;
 	}
@@ -2238,6 +2239,10 @@ xc5_wlbt_heartbeat(void)
 		printf("XC5 w a80211 req %u refused %u (last %d err %d) | scan aps %u done %u ev %u | results asked %u given %u\n",
 		    xc5_a80211_requests, xc5_a80211_refused, xc5_a80211_last_type, xc5_a80211_last_error, ap_count, scan_done,
 		    xc5_a80211_scandone, xc5_a80211_results, xc5_a80211_given);
+		/* wifi26: scans asked by wifid never ended (done 0, aps 0): what the firmware said to them */
+		printf("XC5 w fw vif %x scancfm %x ind %u sent %u got %u ids %x %x %x %x\n", vif_res, scan_res, scan_inds, mlme_sent,
+		    mlme_got, mlme_ids[(mlme_got + 4) % 8], mlme_ids[(mlme_got + 5) % 8], mlme_ids[(mlme_got + 6) % 8],
+		    mlme_ids[(mlme_got + 7) % 8]);
 	}
 }
 void xc5_wlbt_start(void);

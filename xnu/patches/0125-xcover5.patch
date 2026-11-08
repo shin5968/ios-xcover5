@@ -3295,10 +3295,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..c1019eb
+index 0000000..3d54a08
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,2259 @@
+@@ -0,0 +1,2264 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -5082,6 +5082,7 @@ index 0000000..c1019eb
 +	lck_mtx_lock(&xc5w_mtx);
 +	uint32_t seen = scan_done;
 +	ap_count = 0;
++	scan_res = 0xffff;
 +	if (sta_phase != REDWOOD_STA_JOINED) {
 +		sta_phase = REDWOOD_STA_SCANNING;
 +	}
@@ -5539,6 +5540,10 @@ index 0000000..c1019eb
 +		printf("XC5 w a80211 req %u refused %u (last %d err %d) | scan aps %u done %u ev %u | results asked %u given %u\n",
 +		    xc5_a80211_requests, xc5_a80211_refused, xc5_a80211_last_type, xc5_a80211_last_error, ap_count, scan_done,
 +		    xc5_a80211_scandone, xc5_a80211_results, xc5_a80211_given);
++		/* wifi26: scans asked by wifid never ended (done 0, aps 0): what the firmware said to them */
++		printf("XC5 w fw vif %x scancfm %x ind %u sent %u got %u ids %x %x %x %x\n", vif_res, scan_res, scan_inds, mlme_sent,
++		    mlme_got, mlme_ids[(mlme_got + 4) % 8], mlme_ids[(mlme_got + 5) % 8], mlme_ids[(mlme_got + 6) % 8],
++		    mlme_ids[(mlme_got + 7) % 8]);
 +	}
 +}
 +void xc5_wlbt_start(void);
