@@ -974,6 +974,9 @@ static uint32_t del_cfm = 0xffff, chain_scans, join_on_running;
 static uint32_t q_kicks, q_kick_ok, q_stall_ms;
 static uint64_t q_stall_since, q_kick_at;
 static uint8_t q_stall_r;
+static volatile uint8_t *apmbox;
+static uint64_t q_stall_at_s;
+static bool q_stall_told;
 static volatile int sta_phase = REDWOOD_STA_IDLE;
 static bool want_leave;
 static uint8_t leave_sig[32];                /* (signals go out from the Wi-Fi thread's poll: see sta_scan) */
@@ -1429,6 +1432,7 @@ hip_poll_locked(void)
 				q_kick_ok++;
 			}
 			q_stall_since = now_ns;
+			q_stall_at_s = now_ns / 1000000000ull;
 			q_stall_r = qr;
 			q_kick_at = 0;
 		} else {
@@ -1441,6 +1445,13 @@ hip_poll_locked(void)
 					    q_stall_ms, rd(pmu, WLBT_STATES), rd(mbox, INTSR1), rd(mbox, INTMSR1), mlme_got, scan_done);
 				}
 				wr(mbox, 0x01c, 1u << HIP_FH_BIT);      /* INTGR1 */
+				if (!q_stall_told && q_stall_ms > 5000) {
+					/* wifi35/35r: the firmware's last log line was always "Speedy drive strength changed": its lines before */
+					q_stall_told = true;
+					for (uint32_t k = 1; k <= LOGN; k++) {
+						printf("XC5 WLBT: FW LOG -%u: %.100s\n", LOGN - k, loglines[(log_recs + k) % LOGN]);
+					}
+				}
 			}
 		}
 	}
@@ -2216,6 +2227,7 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 	remap = (volatile uint8_t *)ml_io_map(REMAP_PA, 0x1000);
 	bootcfg = (volatile uint8_t *)ml_io_map(BOOT_CFG_PA, 0x2000);
 	mbox = (volatile uint8_t *)ml_io_map(MBOX_PA, 0x1000);
+	apmbox = (volatile uint8_t *)ml_io_map(0x119B0000, 0x1000);    /* MAILBOX_APM2WLBT (mif_reg_S5E3830.h) */
 	gicd = (volatile uint8_t *)ml_io_map(GICD_PA, 0x1000);
 	report("before");
 	if (rd(pmu, WLBT_STATUS) & 1) {
@@ -2435,6 +2447,16 @@ xc5_wlbt_heartbeat(void)
 		    rd(pmu, WLBT_STATES), rd(mbox, INTSR1), rd(mbox, INTMSR1), rd(mbox, ISSR(0)),
 		    *(volatile uint32_t *)(shm + conf->mxlog.buf.write_index_loc), log_recs, q_kicks, q_kick_ok, q_stall_ms,
 		    hb_panic_off ? pw[0] : 0, hb_panic_off ? pw[1] : 0);
+		/*
+		 * wifi35r: the halt came ~35 s after boot with or without our RTC code (xc5rtc=0). The firmware reaches the
+		 * PMIC through the APM ("the APM IPC in FW will be used instead", platform_mif_3830.c): the APM2WLBT mailbox
+		 * says whether it asked the APM and was not answered. And the uptime at which the queue stopped.
+		 */
+		if (apmbox != NULL) {
+			printf("XC5 w apm sr0 %x msr0 %x sr1 %x msr1 %x issr %x %x %x %x | stall at %llu s\n", rd(apmbox, INTSR0),
+			    rd(apmbox, INTMSR0), rd(apmbox, INTSR1), rd(apmbox, INTMSR1), rd(apmbox, ISSR(0)), rd(apmbox, ISSR(1)),
+			    rd(apmbox, ISSR(2)), rd(apmbox, ISSR(3)), q_stall_at_s);
+		}
 	}
 }
 void xc5_wlbt_start(void);
