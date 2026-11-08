@@ -391,6 +391,17 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   칸은 FH RFB 큐로 돌아올 때까지 펌웨어 것(비트맵), 0.5초 동안 전부 나가 있으면 강제 회수(force 셈), 빈 칸 없으면 버림(full 셈);
   (2) MLME-DISCONNECTED.ind를 기록만 했음 → 횟수 세고 2초 뒤 재검색·재연결. heartbeat `XC5 w join cfm ind st disc <이유> n <횟수> | tx
   back <회수> full <버림> force <강제>`. 이미지 `xc5-ios-wifi22-console.tar`(드롭 wifi21과 같음 1794108066).
+- **비슷한 사례 조사(2026-11-08)**: 가장 가까운 것은 **stormtroopxyz/y2sios**(MIT, Galaxy S20+, BCM4375 PCIe): README에 Wi-Fi "Working —
+  WPA2, DHCP, IPv4/IPv6, HTTPS; signal, noise floor and security reported to iOS". iOS 쪽 층(칩 무관, 상류 hakios-sm7325에서 옴):
+  `kernel/xnu/files/bsd/dev/redwood_net.c`(en0, ifnet_allocate_extended), `redwood_sta.c`(검색·연결 상태 기계, ops 표),
+  `redwood_apple80211.c`(693줄: wifid/IO80211.framework의 Apple80211 ioctl 전부 흉내 — SCAN_REQ 10, SCAN_RESULT 11(1164 B 구조),
+  ASSOCIATE 20(592 B), ASSOCIATE_RESULT 21, 이벤트 9 등, 16.5 IO80211.framework에서 레이아웃 확인), `iokit/Kernel/RedwoodWLAN.cpp`
+  (165줄: IOService `IO80211Controller` + 그 아래 `IONetworkInterface`(속성 IO80211InterfaceRole="Infrastructure" 등)만 만들어 wifid가
+  찾게 함), `userland/src/net_test.m`, 문서 `docs/plans/06-wireless.md`. WPA2 4-way는 Broadcom 펌웨어 쪽(ASSOCIATE의 RSN 키 정보는 안 씀).
+  다른 사례: Liquidation0619/hakios-thyme-mi10s(QCA6390 ath11k, LinuxKPI, 검색까지), oosexgang/hakios-sm7325(WCN6750, y2sios의 상류).
+  우리 쪽 적용: 설정 앱 Wi-Fi 목록·연결 = y2sios의 RedwoodWLAN + redwood_apple80211을 xc5_wlbt의 검색/연결 함수에 연결(MIT, 출처 표기).
+  WPA2 = SCSC는 보통 호스트 wpa_supplicant가 4-way를 함; `MLME_SET_PMK_REQ 0x201c`(cfg80211 WLAN_CIPHER_SUITE_PMK, 키 관리 오프로드)가
+  있어 펌웨어가 PMK로 4-way를 할 수도 있음(미확인) → 안 되면 커널에 PBKDF2·EAPOL·MLME-SETKEYS(0x2018) 구현.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
