@@ -491,6 +491,11 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   멈춘 때 ≈ 부팅 후 35~37초(wifi35도 비슷). 삼성 platform_mif_3830.c: "The APM IPC in FW will be used instead" — 펌웨어는 PMIC(LDO 등)를
   APM 메일박스(APM2WLBT, 0x119B0000)로 요청. 그 응답이 없어 멈추는지 확인용 진단 추가(커밋 649ff91): 하트비트 `XC5 w apm sr0 msr0 sr1 msr1
   issr0-3 | stall at <uptime s>`, 멈춘 지 5초 뒤 콘솔 `XC5 WLBT: FW LOG -4..-0`(펌웨어 마지막 로그 5줄). 이미지 `xc5-ios-wifi36-console.tar`.
+- **wifi36 결과(영상 20261108_214952)**: 연결 실패 같음. `keep done 23 chain 23 onrun 1 | q0 w49 r48 ... | fw: Speedy drive strength changed
+  from 1 to 2`, `why st 10 sr1 20 msr1 20 issr0 2222001b ... kick 111/0`, **`apm sr0 0 msr0 0 sr1 0 msr1 0 issr d50179 30002 d50000 0 | stall
+  at 50 s`** → APM2WLBT 메일박스에 걸린 인터럽트 없음(APM 응답 대기로 멈춘 것은 아닌 듯). 멈춘 시점은 매번 다름(wifi33 검색 1번, 34 22번,
+  35 4번, 35r 7번, 36 23번; 부팅 후 30~50초대) — 고정 시각이 아니라 검색 도중 어느 때. 마지막 fw 로그는 항상 Speedy 줄.
+  `FW LOG -4..-0`(한 번만 찍힘)은 영상에 안 잡힘 → PREV BOOT LOG에서 읽어야 함.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
