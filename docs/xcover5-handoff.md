@@ -478,6 +478,14 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   MLME_SET_COUNTRY와 host_state(CELLULAR_ACTIVE) 설정. 조치(커밋 772e3f8): 큐에 300 ms 넘게 남아 있으면 도어벨을 1초마다 다시 울림
   (`kick n/ok`), 콘솔 `XC5 WLBT: FW STALL q0 w r ms | st sr1 msr1 | got done`, 하트비트 `XC5 w why st sr1 msr1 issr0 logw recs kick stall pan`.
   이미지 `xc5-ios-wifi35-console.tar`. 다음 후보: 연결 때 DEL_VIF/ADD_VIF 후 바로 CONNECT(삼성 순서), MLME_SET_COUNTRY.
+- **wifi35 결과(PREV BOOT LOG 사진 18장)**: `XC5 w why st 10 sr1 20 msr1 20 issr0 2222001b logw 203 recs 58 kick 161/0 stall 161961 ms
+  pan 0 0`, `keep done 4 chain 4 onrun 1 | q0 w11 r10`, `got 214`, ids 마지막 `2301 2106`, 요약 `STATUS 0x1 STATES 0x10 ... INTSR1 0x20 |
+  mgmt r2 w2, mxlog w203 | panic 0`. 즉 전원은 켜진 상태(STATES 0x10은 정상 때와 같음), **우리 도어벨(INTSR1 bit5)이 걸린 채 펌웨어가
+  인터럽트를 아예 처리하지 않음**, 다시 울려도(161번) 소용없음, 패닉 기록·mgmt 메시지 없음, 로그 멈춤(마지막 `Speedy drive strength
+  changed from 1 to 2` — wifi34도 같은 마지막 줄). 펌웨어 R4가 멎음. **시점**: 같은 로그에서 RTC 줄 `calendar now ... (uptime 190 s)`
+  바로 뒤 하트비트가 stall 162 s → 멎은 때 ≈ 부팅 후 33초, 커널 RTC 코드(xc5_pmic.c rtc_sync)가 ACPM으로 PMIC를 읽고 **쓰는** 때가
+  uptime 30초. WLBT도 PMIC(SPEEDY 버스)를 씀(마지막 로그가 Speedy) → 충돌 의심. 시험 이미지 `xc5-ios-wifi35r-console.tar`
+  (= wifi35 + `xc5rtc=0`, ACPM 접근 없음; 날짜는 1970). 멈춤이 사라지면 RTC를 Wi-Fi 전에(또는 쓰기 없이) 하도록 고침.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
