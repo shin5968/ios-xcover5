@@ -687,6 +687,10 @@ surface_changed(struct eagl *e, struct image *image)
  * the home screen, the dock and their caches into such surfaces; refused, the texture had no storage, the
  * framebuffer was incomplete and every draw into it failed (GL_INVALID_FRAMEBUFFER_OPERATION): no icons, no
  * wallpaper. Here the texture is an ordinary blue-first one, filled from and read back into the two planes.
+ *
+ * XCover5: and 'w30r' (kCVPixelFormatType_30RGBLEPackedWideGamut), the same colour word in a single plane with
+ * no opacity (opaque): WebKit's GPU process draws the pages' tiles into these on a wide-colour display. Refused,
+ * Safari's page stayed black (white for a moment, then black; "-attachImage ... 'w30r': not done", wifi20).
  */
 static uint8_t
 deep_channel(uint32_t code)
@@ -699,20 +703,23 @@ deep_channel(uint32_t code)
 static void
 deep_to_bgra(IOSurfaceRef surface, uint8_t *out, GLsizei width, GLsizei height, bool invert)
 {
-	const uint8_t *colour = IOSurfaceGetBaseAddressOfPlane(surface, 0), *opacity = IOSurfaceGetBaseAddressOfPlane(surface, 1);
-	size_t crow = IOSurfaceGetBytesPerRowOfPlane(surface, 0), arow = IOSurfaceGetBytesPerRowOfPlane(surface, 1);
+	bool planar = IOSurfaceGetPlaneCount(surface) >= 2;
+	const uint8_t *colour = planar ? IOSurfaceGetBaseAddressOfPlane(surface, 0) : IOSurfaceGetBaseAddress(surface);
+	const uint8_t *opacity = planar ? IOSurfaceGetBaseAddressOfPlane(surface, 1) : NULL;
+	size_t crow = planar ? IOSurfaceGetBytesPerRowOfPlane(surface, 0) : IOSurfaceGetBytesPerRow(surface);
+	size_t arow = planar ? IOSurfaceGetBytesPerRowOfPlane(surface, 1) : 0;
 
 	for (GLsizei y = 0; y < height; y++) {
 		size_t from = (size_t)(invert ? height - 1 - y : y);
 		const uint32_t *c = (const uint32_t *)(colour + crow * from);
-		const uint8_t *a = opacity + arow * from;
+		const uint8_t *a = opacity != NULL ? opacity + arow * from : NULL;
 		uint8_t *to = out + (size_t)y * (size_t)width * 4;
 
 		for (GLsizei x = 0; x < width; x++) {
 			to[x * 4] = deep_channel(c[x] & 0x3ff);
 			to[x * 4 + 1] = deep_channel((c[x] >> 10) & 0x3ff);
 			to[x * 4 + 2] = deep_channel((c[x] >> 20) & 0x3ff);
-			to[x * 4 + 3] = a[x];
+			to[x * 4 + 3] = a != NULL ? a[x] : 0xff;
 		}
 	}
 }
@@ -720,19 +727,24 @@ deep_to_bgra(IOSurfaceRef surface, uint8_t *out, GLsizei width, GLsizei height, 
 static void
 bgra_to_deep(const uint8_t *in, IOSurfaceRef surface, GLsizei width, GLsizei height, bool invert)
 {
-	uint8_t *colour = IOSurfaceGetBaseAddressOfPlane(surface, 0), *opacity = IOSurfaceGetBaseAddressOfPlane(surface, 1);
-	size_t crow = IOSurfaceGetBytesPerRowOfPlane(surface, 0), arow = IOSurfaceGetBytesPerRowOfPlane(surface, 1);
+	bool planar = IOSurfaceGetPlaneCount(surface) >= 2;
+	uint8_t *colour = planar ? IOSurfaceGetBaseAddressOfPlane(surface, 0) : IOSurfaceGetBaseAddress(surface);
+	uint8_t *opacity = planar ? IOSurfaceGetBaseAddressOfPlane(surface, 1) : NULL;
+	size_t crow = planar ? IOSurfaceGetBytesPerRowOfPlane(surface, 0) : IOSurfaceGetBytesPerRow(surface);
+	size_t arow = planar ? IOSurfaceGetBytesPerRowOfPlane(surface, 1) : 0;
 
 	for (GLsizei y = 0; y < height; y++) {
 		size_t to_row = (size_t)(invert ? height - 1 - y : y);
 		uint32_t *c = (uint32_t *)(colour + crow * to_row);
-		uint8_t *a = opacity + arow * to_row;
+		uint8_t *a = opacity != NULL ? opacity + arow * to_row : NULL;
 		const uint8_t *from = in + (size_t)y * (size_t)width * 4;
 
 		for (GLsizei x = 0; x < width; x++) {
 			c[x] = (384u + from[x * 4] * 510u / 255u) | (384u + from[x * 4 + 1] * 510u / 255u) << 10 |
 			    (384u + from[x * 4 + 2] * 510u / 255u) << 20;
-			a[x] = from[x * 4 + 3];
+			if (a != NULL) {
+				a[x] = from[x * 4 + 3];
+			}
 		}
 	}
 }
@@ -4238,8 +4250,9 @@ my_attachImage(id self, SEL selector, unsigned long target, IOSurfaceRef surface
 	clear_now(e);
 	glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture);
 	pixels = IOSurfaceGetPixelFormat(surface);
-	/* (Galaxy S7 port: and 'b3a8', see deep_to_bgra()) */
-	bool deep = pixels == 'b3a8' && IOSurfaceGetPlaneCount(surface) == 2;
+	/* (Galaxy S7 port: and 'b3a8'; XCover5: and 'w30r', WebKit's page tiles; see deep_to_bgra()) */
+	bool deep = (pixels == 'b3a8' && IOSurfaceGetPlaneCount(surface) == 2) ||
+	    (pixels == 'w30r' && IOSurfaceGetPlaneCount(surface) == 0 && IOSurfaceGetBytesPerElement(surface) == 4);
 	if (target != GL_TEXTURE_2D || texture == 0 || (pixels != 'BGRA' && pixels != 0 && !deep) ||
 	    (!deep && (IOSurfaceGetBytesPerElement(surface) != 4 || IOSurfaceGetPlaneCount(surface) != 0)) ||
 	    (image = image_new(e, (GLuint)texture, surface)) == NULL) {
@@ -4267,7 +4280,7 @@ my_attachImage(id self, SEL selector, unsigned long target, IOSurfaceRef surface
 	 */
 	image->wrapped = image->alpha_first = pixels == 0;
 	image->deep = deep;
-	note_format(deep ? "IOSurface attached, b3a8" : "IOSurface attached", GL_BGRA, GL_BGRA, GL_UNSIGNED_BYTE, image->width,
+	note_format(deep ? (pixels == 'w30r' ? "IOSurface attached, w30r" : "IOSurface attached, b3a8") : "IOSurface attached", GL_BGRA, GL_BGRA, GL_UNSIGNED_BYTE, image->width,
 	    image->height);
 	/*
 	 * What is attached is as often read as drawn into (a picture CoreAnimation has made a surface
