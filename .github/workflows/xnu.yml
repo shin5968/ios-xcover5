@@ -97,6 +97,32 @@ jobs:
           echo "CCACHE_SLOPPINESS=time_macros,include_file_mtime,include_file_ctime,file_stat_matches" >> "$GITHUB_ENV"
           echo "CCACHE_COMPILERCHECK=content" >> "$GITHUB_ENV"
 
+      # The KDK (13.5, 22G74, 659 MB) comes from a GitHub release of dortania/KdkSupportPkg, which on
+      # 2026-11-08 answered 504 for an hour at a time: build.sh then mounted the error page and failed
+      # ("hdiutil: attach failed"). Kept in the Actions cache, fetched with retries only when the cache
+      # has none, and installed here, so build.sh finds KDKROOT and downloads nothing.
+      - uses: actions/cache@v4
+        with:
+          path: /tmp/kdk
+          key: kdk-13.5-22G74
+      - name: KDK
+        run: |
+          mkdir -p /tmp/kdk
+          url=https://github.com/dortania/KdkSupportPkg/releases/download/22G74/Kernel_Debug_Kit_13.5_build_22G74.dmg
+          for i in $(seq 1 30); do
+            [ "$(stat -f %z /tmp/kdk/KDK.dmg 2>/dev/null || echo 0)" = 658949979 ] && break
+            rm -f /tmp/kdk/KDK.dmg
+            curl -fsSL --max-time 900 --connect-timeout 60 -o /tmp/kdk/KDK.dmg "$url" || true
+            [ "$(stat -f %z /tmp/kdk/KDK.dmg 2>/dev/null || echo 0)" = 658949979 ] && break
+            echo "KDK download $i failed; waiting 60 s"; sleep 60
+          done
+          [ "$(stat -f %z /tmp/kdk/KDK.dmg)" = 658949979 ]
+          hdiutil attach /tmp/kdk/KDK.dmg
+          sudo mkdir -p /Library/Developer/KDKs
+          sudo installer -pkg '/Volumes/Kernel Debug Kit/KernelDebugKit.pkg' -target /
+          hdiutil detach '/Volumes/Kernel Debug Kit'
+          ls -lah /Library/Developer/KDKs
+
       - name: Build
         working-directory: dxb
         env:
