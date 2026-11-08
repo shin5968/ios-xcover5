@@ -962,7 +962,10 @@ static uint32_t tx_full, tx_force, tx_back, disc_count;
 static char want_ssid[33];
 /* Step 4e (xc5wifiui=1): iOS's own Wi-Fi side asks for scans and joins (y2sios's redwood_sta/redwood_apple80211) */
 static int wifi_ui;
-static bool ui_ready, ui_lost;
+static bool ui_ready, ui_lost, want_scan;
+static int want_join = -1;
+static bool want_leave;
+static uint8_t leave_sig[32];                /* (signals go out from the Wi-Fi thread's poll: see sta_scan) */
 static void send_connect_to(int best);
 
 static void
@@ -1212,6 +1215,7 @@ on_signal(uint32_t ref)
 		vif_res = *(uint16_t *)(sig + 12);
 		if (vif_res == 0 && wifi_ui) {
 			ui_ready = true;                /* the Wi-Fi thread makes en0 and hands the station to wifid's side */
+			send_add_scan();                /* (and a first scan at once, as the working runs did: kept for wifid) */
 		} else if (vif_res == 0) {
 			send_add_scan();
 		}
@@ -1346,6 +1350,19 @@ hip_poll_locked(void)
 		fh_rfb++;
 	}
 	dhcp_tick();
+	if (want_scan) {
+		want_scan = false;
+		ap_count = 0;
+		send_add_scan();
+	}
+	if (want_join >= 0) {
+		send_connect_to(want_join);
+		want_join = -1;
+	}
+	if (want_leave) {
+		want_leave = false;
+		send_sig(leave_sig, sizeof(leave_sig), NULL, 0);
+	}
 	if (rescan_at != 0) {
 		uint64_t ns;
 		absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
@@ -1778,14 +1795,18 @@ sta_scan(const struct redwood_sta_scan *what)
 	if (!sta_wait_ready()) {
 		return EBUSY;
 	}
+	/*
+	 * wifi27: an ADD_SCAN sent from this (redwood_sta's) thread got no confirm at all -- "sent 3 got 10 scancfm ffff",
+	 * nothing more from the firmware after ADD_VIF's confirm -- while every signal sent from the Wi-Fi thread's poll
+	 * was answered. So the scan is asked of that thread (want_scan), which sends it as it sent the others.
+	 */
 	lck_mtx_lock(&xc5w_mtx);
 	uint32_t seen = scan_done;
-	ap_count = 0;
 	scan_res = 0xffff;
 	if (sta_phase != REDWOOD_STA_JOINED) {
 		sta_phase = REDWOOD_STA_SCANNING;
 	}
-	send_add_scan();
+	want_scan = true;
 	lck_mtx_unlock(&xc5w_mtx);
 	ui_scans++;
 	bool done = wait_until((volatile uint32_t *)&scan_done, seen, 12000);
@@ -1865,7 +1886,7 @@ sta_join(const struct redwood_sta_join *what)
 	conn_cfm = 0xffff;
 	conn_ind = 0xffff;
 	sta_phase = REDWOOD_STA_JOINING;
-	send_connect_to(k);
+	want_join = k;
 	lck_mtx_unlock(&xc5w_mtx);
 	wait_until((volatile uint32_t *)&conn_ind, 0xffff, 15000);
 	if (conn_ind != 0) {
@@ -1888,7 +1909,8 @@ sta_leave_call(void)
 		lck_mtx_lock(&xc5w_mtx);
 		memcpy(s + 12, aps[ap_sel].bssid, 6);
 		s[18] = 3;
-		send_sig(s, sizeof(s), NULL, 0);
+		memcpy(leave_sig, s, sizeof(s));
+		want_leave = true;
 		conn_ind = 0xffff;
 		lck_mtx_unlock(&xc5w_mtx);
 	}
