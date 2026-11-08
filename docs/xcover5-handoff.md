@@ -467,6 +467,17 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   `XC5 w keep done <검색 완료 수> chain <이어 붙인 검색> onrun <검색 중 받은 연결> | q0 w r(FH 제어 큐) q3 w r(TH 제어 큐) | fw: <펌웨어 마지막 로그>`.
   done이 계속 늘면 가설(쉬면 잠듦) 맞음; done이 1에서 멈추면 펌웨어가 첫 검색 뒤 바로 멎는 것 → q0 r(펌웨어가 큐를 읽는지)·fw 로그로 판단.
   이미지 `xc5-ios-wifi34-console.tar`.
+- **wifi34 결과(영상 20261108_205414)**: 여전히 실패. `keep done 22 chain 22 onrun 3 | q0 w47 r46 q3 w82 r82 | fw: Speedy drive strength
+  changed from 1 to 2`가 44초~59초 그대로, `ui join assoc 3 ... stage 4 err 60 | cfm ffff ind ffff | del 0`. 즉 이어 붙인 검색은 22번 정상
+  (펌웨어가 쉬지 않으면 응답함 — 가설 일부 맞음), 그러다 **펌웨어가 FH 제어 큐를 더 읽지 않음**(w47인데 r46), 그 뒤로 아무 신호도 없음.
+  세 연결 모두 실행 중인 검색 위에 걸렸는데 그 검색의 SCAN_DONE이 끝내 안 와서 CONNECT는 한 번도 나가지 못함. 자는 것인지(PMU STATES),
+  멎은/패닉인지, 도어벨(INTSR1 bit5)이 걸린 채인지 아직 모름.
+  사례 조사: SCSC/WLBT를 공개 저장소에서 다룬 사례는 거의 없음(postmarketOS Galaxy A13 = Exynos 850, Wi-Fi 미동작; exynos850-mainline
+  목록에 Wi-Fi 없음). 삼성 소스(A21s mlme.c/cfg80211_ops.c/mgt.c) 대조: CONNECT 내용은 우리와 같음. 차이: 삼성은 **연결할 때 ADD_VIF**
+  (slsi_connect: add_vif → register_action_frame → set_boost → set_ext_cap → CONNECT, 검색은 망 정보가 없을 때만), 시작 때
+  MLME_SET_COUNTRY와 host_state(CELLULAR_ACTIVE) 설정. 조치(커밋 772e3f8): 큐에 300 ms 넘게 남아 있으면 도어벨을 1초마다 다시 울림
+  (`kick n/ok`), 콘솔 `XC5 WLBT: FW STALL q0 w r ms | st sr1 msr1 | got done`, 하트비트 `XC5 w why st sr1 msr1 issr0 logw recs kick stall pan`.
+  이미지 `xc5-ios-wifi35-console.tar`. 다음 후보: 연결 때 DEL_VIF/ADD_VIF 후 바로 CONNECT(삼성 순서), MLME_SET_COUNTRY.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
