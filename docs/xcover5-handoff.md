@@ -421,6 +421,10 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   지움). 조치(커밋 87fc9e1, xnu CI 42457341777): ADT에 `arm-io/wlan`(device_type wlan, compatible samsung,xcover5-wlbt, local-mac-address) 추가,
   y2sios **MiniIONetworkStack.cpp**(MIT, IOResources/IONetworkStack + 열 수 있는 user client: configd 인터페이스 namer가 이게 없으면 레지스트리
   quiet를 5분 뒤에야 선언 → wifid의 SCNetworkInterfaceCopyAll이 그만큼 대기) 추가, ui_up에서 시작. 이미지 `xc5-ios-wifi25-console.tar`.
+- **wifi25 결과(영상 20261108_162240): wifid 실행됨 — 설정의 Wi-Fi 스위치 켜짐**, 네트워크 목록은 빙글(핫스팟 안 뜸). `XC5 w ... ui 1 phase 1 link 0
+  scans 9 joins 0`, 콘솔 `apple80211: wifid gets 19 (POWER)`, `wifid gets 103 (CURRENT_NETWORK) ... error 6`(연결 전이라 정상). locationd 반복 크래시.
+  진단(커밋 9396409, xnu CI 42458833319): heartbeat `XC5 w a80211 req <요청> refused <거절> (last <타입, set은 +1000> err <errno>) | scan aps <마지막
+  검색에서 찾은 AP 수> done <검색 끝 횟수> ev <SCAN_DONE 이벤트> | results asked <SCAN_RESULT(11) 요청> given <AP를 준 횟수>`. 이미지 `xc5-ios-wifi26-console.tar`.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
