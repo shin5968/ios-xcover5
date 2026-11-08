@@ -486,6 +486,11 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   바로 뒤 하트비트가 stall 162 s → 멎은 때 ≈ 부팅 후 33초, 커널 RTC 코드(xc5_pmic.c rtc_sync)가 ACPM으로 PMIC를 읽고 **쓰는** 때가
   uptime 30초. WLBT도 PMIC(SPEEDY 버스)를 씀(마지막 로그가 Speedy) → 충돌 의심. 시험 이미지 `xc5-ios-wifi35r-console.tar`
   (= wifi35 + `xc5rtc=0`, ACPM 접근 없음; 날짜는 1970). 멈춤이 사라지면 RTC를 Wi-Fi 전에(또는 쓰기 없이) 하도록 고침.
+- **wifi35r 결과(사진 20장)**: RTC를 꺼도 똑같이 멈춤 → **RTC 원인 아님**. `keep done 7 chain 7 | q0 w17 r16`, `why st 10 sr1 20 kick 159/0
+  stall 159716 ms`, 마지막 fw 로그 같음(Speedy drive strength 1→2). heartbeat 39 `t=5117057448`(26 MHz → 196.8 s) 근처에서 stall 160 s →
+  멈춘 때 ≈ 부팅 후 35~37초(wifi35도 비슷). 삼성 platform_mif_3830.c: "The APM IPC in FW will be used instead" — 펌웨어는 PMIC(LDO 등)를
+  APM 메일박스(APM2WLBT, 0x119B0000)로 요청. 그 응답이 없어 멈추는지 확인용 진단 추가(커밋 649ff91): 하트비트 `XC5 w apm sr0 msr0 sr1 msr1
+  issr0-3 | stall at <uptime s>`, 멈춘 지 5초 뒤 콘솔 `XC5 WLBT: FW LOG -4..-0`(펌웨어 마지막 로그 5줄). 이미지 `xc5-ios-wifi36-console.tar`.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
