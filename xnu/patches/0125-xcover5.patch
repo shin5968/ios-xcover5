@@ -3304,10 +3304,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..122c2f2
+index 0000000..76cf878
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,2339 @@
+@@ -0,0 +1,2376 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -4277,6 +4277,10 @@ index 0000000..122c2f2
 +static uint32_t irq_cleared;
 +static int join_sec = -1, join_len, join_bssid_given, join_stage, join_err = -1;
 +static int want_join = -1;
++static int del_next, del_join = -1;
++static bool del_done;
++static uint64_t del_sent_ns;
++static uint32_t del_cfm = 0xffff;
 +static bool want_leave;
 +static uint8_t leave_sig[32];                /* (signals go out from the Wi-Fi thread's poll: see sta_scan) */
 +static void send_connect_to(int best);
@@ -4534,6 +4538,10 @@ index 0000000..122c2f2
 +			send_add_scan();
 +		}
 +		break;
++	case 0x2106:                            /* MLME_DEL_SCAN_CFM */
++		del_cfm = *(uint16_t *)(sig + 12);
++		del_done = true;
++		break;
 +	case 0x2105:                            /* MLME_ADD_SCAN_CFM */
 +		scan_res = *(uint16_t *)(sig + 12);
 +		break;
@@ -4643,6 +4651,19 @@ index 0000000..122c2f2
 +	}
 +}
 +
++/* MLME-DEL-SCAN.request 0x2006 {vif 0; scan_id 0x100}; then (next) 1 an ADD_SCAN or 2 the CONNECT, once confirmed */
++static void
++send_del_scan(int next, uint64_t now_ns)
++{
++	uint8_t d[24] = { 0x06, 0x20 };
++	d[12] = 0x00;
++	d[13] = 0x01;
++	del_done = false;
++	del_next = next;
++	del_sent_ns = now_ns;
++	send_sig(d, sizeof(d), NULL, 0);
++}
++
 +/* Signals from the firmware (queues 3 and 4) and our buffers it gave back (queue 2); the caller holds xc5w_mtx */
 +static void
 +hip_poll_locked(void)
@@ -4673,20 +4694,36 @@ index 0000000..122c2f2
 +	 * already running is not asked for again, and before another ADD_SCAN the last one is deleted (MLME-DEL-SCAN,
 +	 * 0x2006 {vif 0; scan_id}, as the driver does before it scans again in mgt.c / cfg80211_ops.c).
 +	 */
-+	if (want_scan) {
-+		want_scan = false;
-+		if (!scan_inflight) {
-+			uint8_t d[24] = { 0x06, 0x20 };
-+			d[12] = 0x00;
-+			d[13] = 0x01;                   /* scan id 0x100 */
-+			send_sig(d, sizeof(d), NULL, 0);
++	/*
++	 * wifi31: a join from Settings sent its CONNECT (stage 4) and nothing came back (cfm ffff, 15 s): the scan after the
++	 * first one had not ended ("ind 3 done 1") -- DEL_SCAN and ADD_SCAN had gone out back to back -- and the firmware
++	 * keeps a CONNECT waiting behind a running scan. So now each DEL_SCAN is waited for (its confirm, 0x2106, or 2 s)
++	 * before what it makes room for: the next ADD_SCAN, or the CONNECT. A join always deletes the scan first.
++	 */
++	uint64_t now_ns;
++	absolutetime_to_nanoseconds(mach_absolute_time(), &now_ns);
++	if (del_next != 0 && (del_done || now_ns - del_sent_ns > 2000000000ull)) {
++		int next = del_next;
++		del_next = 0;
++		if (next == 1) {
 +			scan_inflight = true;
 +			send_add_scan();
++		} else if (next == 2 && del_join >= 0) {
++			scan_inflight = false;
++			send_connect_to(del_join);
++			del_join = -1;
 +		}
 +	}
-+	if (want_join >= 0) {
-+		send_connect_to(want_join);
++	if (want_join >= 0 && del_next == 0) {
++		del_join = want_join;
 +		want_join = -1;
++		want_scan = false;
++		send_del_scan(2, now_ns);
++	} else if (want_scan && del_next == 0) {
++		want_scan = false;
++		if (!scan_inflight) {
++			send_del_scan(1, now_ns);
++		}
 +	}
 +	if (want_leave) {
 +		want_leave = false;
@@ -5621,9 +5658,9 @@ index 0000000..122c2f2
 +		/* wifi30: S24 listed, its join failed with nothing sent: how far a join came, and why it stopped */
 +		extern unsigned xc5_a80211_joins;
 +		extern int xc5_a80211_join_why, xc5_a80211_join_cipher, xc5_a80211_join_keylen;
-+		printf("XC5 w ui join assoc %u why %d cipher %d key %d | stage %d err %d sec %d ssid %d bssid %d | cfm %x ind %x\n",
-+		    xc5_a80211_joins, xc5_a80211_join_why, xc5_a80211_join_cipher, xc5_a80211_join_keylen, join_stage, join_err,
-+		    join_sec, join_len, join_bssid_given, conn_cfm, conn_ind);
++		printf("XC5 w ui join assoc %u why %d key %d | stage %d err %d | cfm %x ind %x | del %x next %d\n",
++		    xc5_a80211_joins, xc5_a80211_join_why, xc5_a80211_join_keylen, join_stage, join_err, conn_cfm, conn_ind, del_cfm,
++		    del_next);
 +		/* wifi26: scans asked by wifid never ended (done 0, aps 0): what the firmware said to them */
 +		printf("XC5 w fw vif %x scancfm %x ind %u sent %u got %u irqclr %u sr0 %x ids %x %x %x %x\n", vif_res, scan_res, scan_inds, mlme_sent,
 +		    mlme_got, irq_cleared, rd(mbox, INTSR0), mlme_ids[(mlme_got + 4) % 8], mlme_ids[(mlme_got + 5) % 8], mlme_ids[(mlme_got + 6) % 8],
