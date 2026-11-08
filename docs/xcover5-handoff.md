@@ -434,6 +434,10 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   보낸 ADD_SCAN에 확인(CFM)조차 없음**, ADD_VIF 확인 뒤 펌웨어 무응답. 지금까지 응답받은 신호는 모두 Wi-Fi 스레드의 hip_poll 안에서 보낸 것.
   조치(커밋 de5e483, xnu CI 42461129954): station ops는 요청만 표시(want_scan/want_join/want_leave), hip_poll이 보냄; UI 모드에서도 ADD_VIF 직후
   첫 검색을 바로(예전 동작 방식), 결과는 wifid용으로 보관. 원인(다른 스레드에서의 q_put이 왜 무시되는지)은 미확인. 이미지 `xc5-ios-wifi28-console.tar`.
+- **wifi28 결과(영상 20261108_171422)**: `XC5 w fw vif 0 scancfm ffff ind 2 sent 10 got 82`, `XC5 w cfm 2 vif 0 scan ffff ind 2 done 1 aps 0` → 첫 검색(ADD_VIF 직후)은
+  AP 2개·SCAN_DONE 정상. 하지만 이후 wifid 검색마다 목록 비우고(ap_count=0) 같은 scan id로 ADD_SCAN 반복 → 확인 없음 → 목록 0. 조치(커밋 b1009d1,
+  xnu CI 42462437237): 찾은 AP 보존(BSSID로 중복 제거), 20초 안에 끝난 검색이 있으면 wifid에 바로 응답, 진행 중이면 재요청 안 함, 다시 검색할 땐
+  **MLME-DEL-SCAN.request 0x2006**(scan id 0x100) 뒤 ADD_SCAN. 이미지 `xc5-ios-wifi29-console.tar`.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
