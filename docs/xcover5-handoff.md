@@ -496,6 +496,12 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   at 50 s`** → APM2WLBT 메일박스에 걸린 인터럽트 없음(APM 응답 대기로 멈춘 것은 아닌 듯). 멈춘 시점은 매번 다름(wifi33 검색 1번, 34 22번,
   35 4번, 35r 7번, 36 23번; 부팅 후 30~50초대) — 고정 시각이 아니라 검색 도중 어느 때. 마지막 fw 로그는 항상 Speedy 줄.
   `FW LOG -4..-0`(한 번만 찍힘)은 영상에 안 잡힘 → PREV BOOT LOG에서 읽어야 함.
+- **wifi36 두 번째 부팅(PREV BOOT LOG 사진 20장)**: `keep done 51 chain 51 onrun 1 | q0 w105 r103`, `stall at 66 s`, `kick 129/0`, `apm` 모두 0,
+  `got 2156`. 펌웨어 로그는 이번에도 `log w203 recs 58`(wifi34·35·35r·36 모두 같은 값) → 펌웨어 로그는 멈춤과 상관없이 부팅 초기 고정
+  지점에서 끊김(멈춤 시점은 매번 다름) → FW LOG 줄은 단서가 안 됨. 정리: 펌웨어가 검색 1~51번 뒤 무작위로 완전히 멎음(전원 켜짐, 도어벨
+  미처리, 패닉 없음). **자동 모드(xc5net=1, wifi19-22)에서는 몇 분간 연결·ping·DNS가 됐음** → ui 모드에만 있는 것(wifid/RedwoodWLAN/
+  IOKit 스택, 연속 검색)이 원인인지, 지금 커널 전체 문제인지 가르기 위해 비교 이미지 `xc5-ios-wifi36a-console.tar`(같은 커널,
+  `xc5net=1`, wifiui 없음) 시험. 자동 모드가 2분 넘게 살아 있으면(ping 증가) ui 모드 쪽을 좁힘.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
