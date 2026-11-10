@@ -502,6 +502,12 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   미처리, 패닉 없음). **자동 모드(xc5net=1, wifi19-22)에서는 몇 분간 연결·ping·DNS가 됐음** → ui 모드에만 있는 것(wifid/RedwoodWLAN/
   IOKit 스택, 연속 검색)이 원인인지, 지금 커널 전체 문제인지 가르기 위해 비교 이미지 `xc5-ios-wifi36a-console.tar`(같은 커널,
   `xc5net=1`, wifiui 없음) 시험. 자동 모드가 2분 넘게 살아 있으면(ping 증가) ui 모드 쪽을 좁힘.
+- **wifi36a 결과(사진 20장)**: 자동 모드는 **정상** — `done 1`, `join cfm 0 ind 0`, `ip 10.168.19.211`, `dns 10.168.19.73`, ping 58→68/68,
+  data tx 8846 / rx 21468, `got 32304`, 펌웨어 멈춤 없음(heartbeat 32~36 내내 증가). → 커널·펌웨어·전원은 문제없고 **ui 모드에만 있는 것**이
+  원인. 차이: 자동 모드는 검색 1번 후 바로 CONNECT, **MLME-DEL-SCAN을 한 번도 안 보냄**; ui 모드는 wifi28부터 끝난 검색마다 DEL_SCAN 후
+  ADD_SCAN(34부터는 연속). 삼성 드라이버는 DEL_SCAN을 진행 중인 검색 중단에만 씀(끝난 검색엔 안 씀). 조치(커밋 5f93d21): 검색·연결용 검색은
+  ADD_SCAN만, 연결은 그 SCAN_DONE에서 CONNECT, DEL_SCAN은 15초 넘게 SCAN_DONE이 없는 검색에만, 연속 검색 끔(`xc5wchain=1`로 켬). 하트비트
+  `XC5 w keep done chain abort onrun | q0 ...`. 이미지 `xc5-ios-wifi37-console.tar`. (참고: locationd가 계속 SIGTRAP으로 죽음 — 별건.)
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
