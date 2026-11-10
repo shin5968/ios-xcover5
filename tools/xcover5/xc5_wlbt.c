@@ -718,6 +718,10 @@ fw_cfg(void)
  * One FAPI signal (sig: the signal from its id on, siglen bytes) with data, as hip4_skb_to_mbulk makes it, in the next
  * of 32 slots of 2 KiB of the TX control area, into the FH control queue.
  */
+static bool sig_quiet;
+static uint64_t sig_last_ns;
+static uint32_t ka_sent, ka_got;
+
 static void
 send_sig(const uint8_t *sigp, uint32_t siglen, const uint8_t *data, uint32_t dlen)
 {
@@ -743,6 +747,8 @@ send_sig(const uint8_t *sigp, uint32_t siglen, const uint8_t *data, uint32_t dle
 	__asm__ volatile ("dsb sy" ::: "memory");
 	if (q_put(0, HIP_OFF + moff)) {
 		mlme_sent++;
+		absolutetime_to_nanoseconds(mach_absolute_time(), &sig_last_ns);
+		if (!sig_quiet)
 		printf("XC5 WLBT: signal %#x (%u + %u bytes) sent, mbulk %#x\n", *(const uint16_t *)sigp, siglen, dlen,
 		    HIP_OFF + moff);
 	}
@@ -789,6 +795,7 @@ send_add_vif(void)
 static uint64_t scan_sent_ns;
 static uint32_t scan_aborts;
 static int wifi_chain;
+static uint32_t ka_ms = 200;
 
 static void
 send_add_scan(void)
@@ -1367,7 +1374,10 @@ on_signal(uint32_t ref)
 	default:
 		break;
 	}
-	if (id != 0x1300 && id != 0x8301) {
+	if (id == 0x2101 && ka_sent != 0) {
+		ka_got++;
+	}
+	if (id != 0x1300 && id != 0x8301 && !(id == 0x2101 && ka_sent != 0)) {
 		printf("XC5 WLBT: signal %#x from the firmware, %u data bytes\n", id, n);
 	}
 }
@@ -1459,6 +1469,22 @@ hip_poll_locked(void)
 				}
 			}
 		}
+	}
+	/*
+	 * wifi37: with no DEL_SCAN and no chaining, the firmware read the first 3 signals (GET, ADD_VIF, ADD_SCAN), sent the
+	 * first scan's results and SCAN_DONE, and read nothing after (q0 w53 r3, got 87, INTSR1 bit 5 never cleared). Every
+	 * ui-mode stall came after a gap with nothing sent; the auto mode never had one (DHCP, ARP and pings at once). The
+	 * firmware's idle deep sleep ("[DEEPSLEEP] infrastructure", wifi29) is not woken by our doorbell. So it is never left
+	 * idle: when nothing was sent for xc5wka ms (default 200; 0 off) and the queue is empty, a one-key MLME-GET goes out.
+	 */
+	if (ka_ms != 0 && vif_res == 0 && *scb(0, 0) == *scb(0, 1) && sig_last_ns != 0 &&
+	    now_ns - sig_last_ns > (uint64_t)ka_ms * 1000000ull) {
+		static const uint8_t key[] = { 0xE6, 0x07, 0, 0 };     /* unifiChipVersion */
+		uint8_t s[24] = { 0x01, 0x20 };
+		sig_quiet = true;
+		send_sig(s, sizeof(s), key, sizeof(key));
+		sig_quiet = false;
+		ka_sent++;
 	}
 	if (del_next != 0 && (del_done || now_ns - del_sent_ns > 2000000000ull)) {
 		int next = del_next;
@@ -2455,8 +2481,8 @@ xc5_wlbt_heartbeat(void)
 		    mlme_got, irq_cleared, rd(mbox, INTSR0), mlme_ids[(mlme_got + 4) % 8], mlme_ids[(mlme_got + 5) % 8], mlme_ids[(mlme_got + 6) % 8],
 		    mlme_ids[(mlme_got + 7) % 8]);
 		/* wifi33: whether the firmware still takes what we queue (FH ctrl r/w) and what it last logged */
-		printf("XC5 w keep done %u chain %u abort %u onrun %u | q0 w%u r%u q3 w%u r%u | fw: %.48s\n", scan_done, chain_scans,
-		    scan_aborts, join_on_running, *scb(0, 0), *scb(0, 1), *scb(3, 0), *scb(3, 1), loglines[log_recs % LOGN]);
+		printf("XC5 w keep done %u chain %u abort %u onrun %u ka %u/%u | q0 w%u r%u q3 w%u r%u | fw: %.48s\n", scan_done, chain_scans,
+		    scan_aborts, join_on_running, ka_sent, ka_got, *scb(0, 0), *scb(0, 1), *scb(3, 0), *scb(3, 1), loglines[log_recs % LOGN]);
 		/*
 		 * wifi34: scans went on (done 22) until the firmware stopped reading the FH control queue (q0 w47 r46, from 44 s
 		 * to 59 s) and sent nothing more: asleep (PMU STATES), hung or panicked (panic words), or our doorbell left
@@ -2492,6 +2518,7 @@ xc5_wlbt_start(void)
 	PE_parse_boot_argn("xc5wretry", &rate_retry, sizeof(rate_retry));
 	PE_parse_boot_argn("xc5wifiui", &wifi_ui, sizeof(wifi_ui));
 	PE_parse_boot_argn("xc5wchain", &wifi_chain, sizeof(wifi_chain));
+	PE_parse_boot_argn("xc5wka", &ka_ms, sizeof(ka_ms));
 	thread_t thread;
 	if (kernel_thread_start(wlbt_thread, NULL, &thread) == KERN_SUCCESS) {
 		thread_deallocate(thread);
