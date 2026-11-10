@@ -660,6 +660,7 @@ static uint32_t conn_len;
 static uint8_t req_ids[12], req_rates[12], n_req_ids, n_req_rates;
 static uint32_t req_len, conn_try, info_res = 0xffff;
 static int rate_retry;
+static uint32_t mib_idle = 0xff, mib_staidle = 0xff, mib_idlelite = 0xff, set_res = 0xffff;
 static uint32_t mib_chip, mib_plat, mib_build, vif_res = 0xffff, scan_res = 0xffff, scan_inds, scan_done;
 #define APN 24
 static struct {
@@ -759,7 +760,7 @@ send_mlme_get(void)
 {
 	/* + unifiHtActivated 0x07FE, unifiVhtActivated 0x07FD, unifiSupportedDataRates 0x07F9 (wifi13: association refused) */
 	static const uint8_t keys[] = { 0xE6, 0x07, 0, 0, 0x41, 0x09, 0, 0, 0xE5, 0x07, 0, 0, 0xFE, 0x07, 0, 0, 0xFD, 0x07, 0, 0,
-		                        0xF9, 0x07, 0, 0 };
+		                        0xF9, 0x07, 0, 0, 0xDF, 0x09, 0, 0, 0xBD, 0x09, 0, 0, 0xDE, 0x09, 0, 0 };
 	uint8_t s[24] = { 0x01, 0x20 };         /* MLME_GET_REQ, vif 0 */
 	send_sig(s, sizeof(s), keys, sizeof(keys));
 }
@@ -776,6 +777,23 @@ send_mlme_get(void)
  *   MLME-SCAN.indication 0x2300 {header; vif; channel_frequency (2 x MHz); rssi; ...} with the received beacon or
  *   probe response as data, and MLME-SCAN-DONE.indication 0x2301.
  */
+static int wifi_idle;           /* xc5widle=1: leave the firmware's idle modes as the hcf sets them */
+
+/*
+ * wifi38: kept busy with MLME-GETs, the firmware still stopped (ka 11/10, q0 w30 r13) about 2 s after its first
+ * SCAN_DONE, with one station vif and no connection -- the case UnifiIdleModeEnabled (0x09DF, "if single vif station is
+ * active or there is no vif, and there has been no activity for a time") and UnifiStaIdleModeEnabled (0x09BD) cover;
+ * the auto mode connected at once and never was idle. Our doorbell does not bring it back. So both, and the softAP's
+ * UnifiIdleModeLiteEnabled (0x09DE), are switched off with MLME-SET.request 0x2002 before the vif is added.
+ */
+static void
+send_idle_off(void)
+{
+	static const uint8_t d[] = { 0xDF, 0x09, 1, 0, 0, 0, 0xBD, 0x09, 1, 0, 0, 0, 0xDE, 0x09, 1, 0, 0, 0 };
+	uint8_t s[24] = { 0x02, 0x20 };         /* MLME_SET_REQ, vif 0 */
+	send_sig(s, sizeof(s), d, sizeof(d));
+}
+
 static void
 send_add_vif(void)
 {
@@ -875,6 +893,12 @@ mib_values(const uint8_t *d, uint32_t n)
 			mib_ht = val;
 		} else if (psid == 0x07FD) {
 			mib_vht = val;
+		} else if (psid == 0x09DF) {
+			mib_idle = val;
+		} else if (psid == 0x09BD) {
+			mib_staidle = val;
+		} else if (psid == 0x09DE) {
+			mib_idlelite = val;
 		} else if (psid == 0x07F9 && p + 4 + l <= n) {
 			bzero(mib_rates, sizeof(mib_rates));
 			memcpy(mib_rates, v, MIN((size_t)l, sizeof(mib_rates)));
@@ -1234,6 +1258,14 @@ on_signal(uint32_t ref)
 	switch (id) {
 	case 0x2101:                            /* MLME_GET_CFM */
 		mib_values(data, n);
+		if (vif_res == 0xffff && set_res == 0xffff && !wifi_idle) {
+			send_idle_off();        /* ADD_VIF follows its confirm */
+		} else if (vif_res == 0xffff) {
+			send_add_vif();
+		}
+		break;
+	case 0x2102:                            /* MLME_SET_CFM */
+		set_res = *(uint16_t *)(sig + 12);
 		if (vif_res == 0xffff) {
 			send_add_vif();
 		}
@@ -2481,7 +2513,7 @@ xc5_wlbt_heartbeat(void)
 		    mlme_got, irq_cleared, rd(mbox, INTSR0), mlme_ids[(mlme_got + 4) % 8], mlme_ids[(mlme_got + 5) % 8], mlme_ids[(mlme_got + 6) % 8],
 		    mlme_ids[(mlme_got + 7) % 8]);
 		/* wifi33: whether the firmware still takes what we queue (FH ctrl r/w) and what it last logged */
-		printf("XC5 w keep done %u chain %u abort %u onrun %u ka %u/%u | q0 w%u r%u q3 w%u r%u | fw: %.48s\n", scan_done, chain_scans,
+		printf("XC5 w keep idle %x %x %x set %x | done %u chain %u abort %u onrun %u ka %u/%u | q0 w%u r%u q3 w%u r%u | fw: %.48s\n", mib_idle, mib_staidle, mib_idlelite, set_res, scan_done, chain_scans,
 		    scan_aborts, join_on_running, ka_sent, ka_got, *scb(0, 0), *scb(0, 1), *scb(3, 0), *scb(3, 1), loglines[log_recs % LOGN]);
 		/*
 		 * wifi34: scans went on (done 22) until the firmware stopped reading the FH control queue (q0 w47 r46, from 44 s
@@ -2519,6 +2551,7 @@ xc5_wlbt_start(void)
 	PE_parse_boot_argn("xc5wifiui", &wifi_ui, sizeof(wifi_ui));
 	PE_parse_boot_argn("xc5wchain", &wifi_chain, sizeof(wifi_chain));
 	PE_parse_boot_argn("xc5wka", &ka_ms, sizeof(ka_ms));
+	PE_parse_boot_argn("xc5widle", &wifi_idle, sizeof(wifi_idle));
 	thread_t thread;
 	if (kernel_thread_start(wlbt_thread, NULL, &thread) == KERN_SUCCESS) {
 		thread_deallocate(thread);
