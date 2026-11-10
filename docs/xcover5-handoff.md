@@ -508,6 +508,14 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   ADD_SCAN(34부터는 연속). 삼성 드라이버는 DEL_SCAN을 진행 중인 검색 중단에만 씀(끝난 검색엔 안 씀). 조치(커밋 5f93d21): 검색·연결용 검색은
   ADD_SCAN만, 연결은 그 SCAN_DONE에서 CONNECT, DEL_SCAN은 15초 넘게 SCAN_DONE이 없는 검색에만, 연속 검색 끔(`xc5wchain=1`로 켬). 하트비트
   `XC5 w keep done chain abort onrun | q0 ...`. 이미지 `xc5-ios-wifi37-console.tar`. (참고: locationd가 계속 SIGTRAP으로 죽음 — 별건.)
+- **wifi37 결과(사진 20장)**: 여전히 실패, 더 빨리 멎음: `keep done 1 chain 0 abort 25 | q0 w53 r3`, `got 87`, `why sr1 20 msr1 20 kick 64/0`.
+  펌웨어는 처음 3개 신호(GET, ADD_VIF, ADD_SCAN)만 읽고 첫 검색 결과·SCAN_DONE을 보낸 뒤 **그 다음 신호부터 아예 안 읽음**. → DEL_SCAN 탓이
+  아니라 **쉬는 틈**이 원인: ui 모드는 첫 검색 뒤 wifid가 다음 요청을 보낼 때까지 아무것도 안 보냄(→ 펌웨어 딥슬립, 도어벨로 안 깨어남;
+  wifi29 로그 `[DEEPSLEEP] infrastructure`), 자동 모드는 SCAN_DONE 즉시 CONNECT → DHCP·ARP·ping이 이어져 쉴 틈이 없음. wifi34~36의 연속
+  검색이 1~51번 버틴 것도 같은 이유(검색 사이 DEL_SCAN 확인 대기 2초가 가끔 틈이 됨). 조치(커밋 cd247a7): 큐가 비고 `xc5wka`ms(기본 200,
+  0=끔) 동안 보낸 것이 없으면 조용한 MLME-GET(unifiChipVersion) 1개 전송 — 펌웨어를 쉬지 않게. 하트비트 `keep ... ka <보냄>/<응답>`.
+  이미지 `xc5-ios-wifi38-console.tar`. ka 응답이 계속 늘고 q0 r가 w를 따라가면 해결 방향 맞음. 근본 해결(깨우는 방법) 후보: PMU
+  WLBT_INT_EN(0x3144) [3],[5] — 삼성 리셋 해제 주석에는 있으나 코드엔 없음.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
