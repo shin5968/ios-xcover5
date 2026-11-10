@@ -813,6 +813,7 @@ send_add_vif(void)
 static uint64_t scan_sent_ns;
 static uint32_t scan_aborts;
 static int wifi_chain;
+static uint32_t fault_n, fault_id, fault_count, fault_arg, fault_cpu;
 static uint32_t ka_ms = 200;
 
 static void
@@ -1280,6 +1281,22 @@ on_signal(uint32_t ref)
 			send_add_scan();
 		}
 		break;
+	case 0x8302: {                          /* DEBUG_FAULT_IND {vif; faultid; count; timestamp; arg; cpu} */
+		/*
+		 * wifi39: with the idle modes off the firmware lasted ~13 s more and, before it stopped, sent DEBUG_FAULT_IND
+		 * (ids 8302 2101 8302 2101): its own report of what went wrong. Kept and said.
+		 */
+		fault_n++;
+		fault_id = *(uint16_t *)(sig + 12);
+		fault_count = *(uint16_t *)(sig + 14);
+		fault_arg = *(uint32_t *)(sig + 20);
+		fault_cpu = *(uint16_t *)(sig + 24);
+		if (fault_n <= 12) {
+			printf("XC5 WLBT: FW FAULT id %#x count %u arg %#x cpu %u (n %u, got %u)\n", fault_id, fault_count, fault_arg,
+			    fault_cpu, fault_n, mlme_got);
+		}
+		break;
+	}
 	case 0x2106:                            /* MLME_DEL_SCAN_CFM */
 		del_cfm = *(uint16_t *)(sig + 12);
 		del_done = true;
@@ -1409,7 +1426,7 @@ on_signal(uint32_t ref)
 	if (id == 0x2101 && ka_sent != 0) {
 		ka_got++;
 	}
-	if (id != 0x1300 && id != 0x8301 && !(id == 0x2101 && ka_sent != 0)) {
+	if (id != 0x1300 && id != 0x8301 && id != 0x8302 && !(id == 0x2101 && ka_sent != 0)) {
 		printf("XC5 WLBT: signal %#x from the firmware, %u data bytes\n", id, n);
 	}
 }
@@ -2521,6 +2538,7 @@ xc5_wlbt_heartbeat(void)
 		 * pending (INTSR1 bit 5 still set) -- and whether ringing it again (kick) brought it back.
 		 */
 		const uint32_t *pw = (const uint32_t *)(shm + hb_panic_off);
+		printf("XC5 w fault n %u id %x count %u arg %x cpu %u\n", fault_n, fault_id, fault_count, fault_arg, fault_cpu);
 		printf("XC5 w why st %x sr1 %x msr1 %x issr0 %x logw %u recs %u kick %u/%u stall %ums pan %x %x\n",
 		    rd(pmu, WLBT_STATES), rd(mbox, INTSR1), rd(mbox, INTMSR1), rd(mbox, ISSR(0)),
 		    *(volatile uint32_t *)(shm + conf->mxlog.buf.write_index_loc), log_recs, q_kicks, q_kick_ok, q_stall_ms,
