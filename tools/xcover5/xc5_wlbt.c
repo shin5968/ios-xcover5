@@ -786,6 +786,10 @@ send_add_vif(void)
 	send_sig(s, sizeof(s), NULL, 0);
 }
 
+static uint64_t scan_sent_ns;
+static uint32_t scan_aborts;
+static int wifi_chain;
+
 static void
 send_add_scan(void)
 {
@@ -812,6 +816,7 @@ send_add_scan(void)
 		d[n++] = 0;
 	}
 	send_sig(s, sizeof(s), d, n);
+	absolutetime_to_nanoseconds(mach_absolute_time(), &scan_sent_ns);
 }
 
 /* The data of an mbulk and of the ones chained to it, up to max bytes */
@@ -1253,7 +1258,7 @@ on_signal(uint32_t ref)
 		if (join_after_scan >= 0) {
 			send_connect_to(join_after_scan);       /* at once, as the working joins did */
 			join_after_scan = -1;
-		} else if (wifi_ui && sta_phase != REDWOOD_STA_JOINED && sta_phase != REDWOOD_STA_JOINING && del_next == 0 &&
+		} else if (wifi_chain && wifi_ui && sta_phase != REDWOOD_STA_JOINED && sta_phase != REDWOOD_STA_JOINING && del_next == 0 &&
 		    want_join < 0 && del_join < 0) {
 			/*
 			 * wifi33: after the first scan's SCAN_DONE the firmware sent nothing more (got 86 from 35 s to 55 s, last id
@@ -1473,6 +1478,19 @@ hip_poll_locked(void)
 			send_add_scan();
 		}
 	}
+	/*
+	 * wifi36a: the same kernel in the auto mode (xc5net=1) stayed up for minutes (ping 68/68, 8846 frames out, got 32304):
+	 * that mode never sends MLME-DEL-SCAN and scans once. The ui mode deleted every finished scan before the next one
+	 * (wifi28 on) and stalled the firmware after 1-51 of them. Samsung's driver deletes a scan only to abort one still
+	 * running (cfg80211_ops.c slsi_abort_hw_scan, mgt.c "Mlme_scan_done_ind not received"), never a finished one. So now:
+	 * a scan or a join's scan is an ADD_SCAN alone; DEL_SCAN only for a scan with no SCAN_DONE after 15 s; no chaining
+	 * (xc5wchain=1 brings it back).
+	 */
+	if (scan_inflight && del_next == 0 && scan_sent_ns != 0 && now_ns - scan_sent_ns > 15000000000ull) {
+		scan_sent_ns = 0;
+		scan_aborts++;
+		send_del_scan(1, now_ns);               /* (then a new ADD_SCAN) */
+	}
 	if (want_join >= 0 && scan_inflight && del_next == 0) {
 		/* a scan is running (the firmware is awake): the CONNECT goes out at its SCAN_DONE, nothing is deleted */
 		join_after_scan = want_join;
@@ -1480,14 +1498,16 @@ hip_poll_locked(void)
 		want_scan = false;
 		join_on_running++;
 	} else if (want_join >= 0 && del_next == 0) {
-		del_join = want_join;
+		join_after_scan = want_join;            /* scan for it, CONNECT at SCAN_DONE (as the auto mode and slsi_connect) */
 		want_join = -1;
 		want_scan = false;
-		send_del_scan(2, now_ns);
+		scan_inflight = true;
+		send_add_scan();
 	} else if (want_scan && del_next == 0) {
 		want_scan = false;
 		if (!scan_inflight) {
-			send_del_scan(1, now_ns);
+			scan_inflight = true;
+			send_add_scan();
 		}
 	}
 	if (want_leave) {
@@ -2435,8 +2455,8 @@ xc5_wlbt_heartbeat(void)
 		    mlme_got, irq_cleared, rd(mbox, INTSR0), mlme_ids[(mlme_got + 4) % 8], mlme_ids[(mlme_got + 5) % 8], mlme_ids[(mlme_got + 6) % 8],
 		    mlme_ids[(mlme_got + 7) % 8]);
 		/* wifi33: whether the firmware still takes what we queue (FH ctrl r/w) and what it last logged */
-		printf("XC5 w keep done %u chain %u onrun %u | q0 w%u r%u q3 w%u r%u | fw: %.48s\n", scan_done, chain_scans,
-		    join_on_running, *scb(0, 0), *scb(0, 1), *scb(3, 0), *scb(3, 1), loglines[log_recs % LOGN]);
+		printf("XC5 w keep done %u chain %u abort %u onrun %u | q0 w%u r%u q3 w%u r%u | fw: %.48s\n", scan_done, chain_scans,
+		    scan_aborts, join_on_running, *scb(0, 0), *scb(0, 1), *scb(3, 0), *scb(3, 1), loglines[log_recs % LOGN]);
 		/*
 		 * wifi34: scans went on (done 22) until the firmware stopped reading the FH control queue (q0 w47 r46, from 44 s
 		 * to 59 s) and sent nothing more: asleep (PMU STATES), hung or panicked (panic words), or our doorbell left
@@ -2471,6 +2491,7 @@ xc5_wlbt_start(void)
 	PE_parse_boot_argn("xc5ssid", want_ssid, sizeof(want_ssid) - 1);
 	PE_parse_boot_argn("xc5wretry", &rate_retry, sizeof(rate_retry));
 	PE_parse_boot_argn("xc5wifiui", &wifi_ui, sizeof(wifi_ui));
+	PE_parse_boot_argn("xc5wchain", &wifi_chain, sizeof(wifi_chain));
 	thread_t thread;
 	if (kernel_thread_start(wlbt_thread, NULL, &thread) == KERN_SUCCESS) {
 		thread_deallocate(thread);
