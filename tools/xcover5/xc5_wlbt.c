@@ -813,6 +813,7 @@ send_add_vif(void)
 static uint64_t scan_sent_ns;
 static uint32_t scan_aborts;
 static int wifi_chain;
+static uint32_t rfb_back, rfb_chained, rfb_full;
 static int wifi_pmu = 1;
 static uint32_t pmu_before[3];
 static uint32_t fault_n, fault_id, fault_count, fault_arg, fault_cpu;
@@ -1610,7 +1611,29 @@ hip_poll_locked(void)
 			}
 			*scb(q, 1) = (uint8_t)(r + 1);
 			__asm__ volatile ("dsb sy" ::: "memory");
-			q_put(5, ref);          /* back to the firmware */
+			/*
+			 * wifi41/41k: the firmware stopped reading our queue after exactly 33 keepalives both with 200 ms and with
+			 * 5 ms between them -- a count, not a time. Every buffer of a chained signal (signal + data: GET confirms,
+			 * scan results) has to go back to the firmware (hip4.c hip4_mbulk_to_skb: to_free[] holds the head and each
+			 * chain_next, all put on TH_RFB); only the head went back, so its pool ran dry, it could not answer, and it
+			 * stopped taking requests. The auto mode sends few such signals, so it never ran out.
+			 */
+			uint32_t back = ref;
+			for (int seg = 0; seg < 8; seg++) {
+				if (!q_put(5, back)) {
+				    rfb_full++;
+				}
+				rfb_back++;
+				uint8_t *mb = shm + back;
+				if (!(mb[4] & 0x80)) {          /* MBULK_F_CHAIN: another buffer follows */
+					break;
+				}
+				back = *(uint32_t *)(mb + 16); /* chain_next_offset */
+				if (back < HIP_OFF || back + 64 >= SHMEM_MAP) {
+					break;
+				}
+				rfb_chained++;
+			}
 		}
 	}
 }
@@ -2550,7 +2573,7 @@ xc5_wlbt_heartbeat(void)
 		    mlme_got, irq_cleared, rd(mbox, INTSR0), mlme_ids[(mlme_got + 4) % 8], mlme_ids[(mlme_got + 5) % 8], mlme_ids[(mlme_got + 6) % 8],
 		    mlme_ids[(mlme_got + 7) % 8]);
 		/* wifi33: whether the firmware still takes what we queue (FH ctrl r/w) and what it last logged */
-		printf("XC5 w keep idle %x %x %x set %x | done %u chain %u abort %u onrun %u ka %u/%u | q0 w%u r%u q3 w%u r%u | fw: %.48s\n", mib_idle, mib_staidle, mib_idlelite, set_res, scan_done, chain_scans,
+		printf("XC5 w rfb %u chained %u full %u | keep idle %x %x %x set %x | done %u chain %u abort %u onrun %u ka %u/%u | q0 w%u r%u q3 w%u r%u | fw: %.48s\n", rfb_back, rfb_chained, rfb_full, mib_idle, mib_staidle, mib_idlelite, set_res, scan_done, chain_scans,
 		    scan_aborts, join_on_running, ka_sent, ka_got, *scb(0, 0), *scb(0, 1), *scb(3, 0), *scb(3, 1), loglines[log_recs % LOGN]);
 		/*
 		 * wifi34: scans went on (done 22) until the firmware stopped reading the FH control queue (q0 w47 r46, from 44 s
