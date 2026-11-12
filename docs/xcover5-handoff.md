@@ -534,6 +534,12 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   TCXO_BUF_CTRL 0x3b78[0], WLBT_INT_EN 0x3144[3][5]** 를 우리는 설정한 적 없음 — 쉬는 코어가 메모리·26 MHz 클록·깨우기 인터럽트를 잃을 수
   있음. 조치(커밋 2e91156): 전원 켤 때 세 레지스터 설정(`xc5wpmu=0`이면 안 함), 콘솔 `XC5 WLBT: MIF_CTRL a -> b, TCXO_BUF_CTRL ..,
   WLBT_INT_EN ..`, 하트비트 `XC5 w fault ... | pmu mif x>y tcxo x>y inten x>y`. 이미지 `xc5-ios-wifi41-console.tar`.
+- **wifi41 결과(사진 20장)**: `pmu mif 3>3 tcxo 1>1 inten 3f>3f` — 세 레지스터는 **이미 켜져 있었음**(S-Boot/펌웨어가 설정) → PMU 가설 탈락.
+  `ka 34/33 | q0 w70..86 r37`, `stall at 38 s`, 오류 보고 없음. 관찰: 매 부팅 **r = 처음 신호 수 + ka 응답 수** (wifi38 3+10=13, 40 4+3=7,
+  41 4+33=37) — 펌웨어는 받은 keepalive를 모두 처리하다가 **다음 keepalive를 꺼내기 전에** 멎음. 즉 특정 신호가 원인이 아니라 신호 사이
+  0.2초 빈틈에서 멎음(딥슬립 진입 후 못 깨어나는 것과 맞음). MIB에 칩 딥슬립 끄기 키는 없음(mib.h: 0x09BE/C4/C5/CE/E4/E8 등은 연결 중 절전).
+  빌드 없이 시험: `xc5-ios-wifi41k-console.tar` = wifi41 + **`xc5wka=5`**(keepalive 5 ms 간격). ka가 계속 늘면(수천) 빈틈 가설 확정 →
+  다음: 짧은 keepalive 유지 + 연결 시도, 근본책은 펌웨어 슬립 허용/금지 신호(mxman·`scsc_mx` 쪽 "host sleep"/WLBT_ACTIVE 처리) 찾기.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
