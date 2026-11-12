@@ -546,6 +546,12 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   돌려줌 → 펌웨어 송신 버퍼 풀이 고갈 → 응답을 못 만들어 요청 처리 중단. 자동 모드는 이런 신호가 적어 안 걸렸음.
   (붙여넣은 외부 분석의 "버퍼 반환 누락" 지적은 방향(FH↔TH)은 달랐지만 같은 종류의 문제.) 조치(커밋 15eb609): 체인의 모든 버퍼 반환,
   하트비트 `XC5 w rfb <반환> chained <추가 버퍼> full <q5 가득>`. 이미지 `xc5-ios-wifi42-console.tar`(keepalive 기본 200 ms).
+- **wifi42 결과(사진 20장)**: `rfb 329 chained 163 full 0`(체인 반환은 동작 — 받은 신호 166개 거의 모두 2버퍼 체인) 그런데도 `ka 10/9 | q0 w68
+  r13`, `stall at 33 s`, `got 166` → **체인 반환 가설도 탈락**. 멈춤 시각 정리: wifi35r 35 s, 38 33~37, 39 45, 40 32, 41 38, 41k 34, 42 33 —
+  거의 늘 **부팅 후 약 33초**(wifid·configd가 en0을 다루기 시작하는 때). 자동 모드(wifi36a)는 같은 커널로 몇 분 정상. 남은 갈래:
+  (가) 연결 안 된 펌웨어 자체가 ~30초에 멎음, (나) ui 모드의 iOS 쪽(wifid/configd/RedwoodWLAN) 활동이 원인. 빌드 없이 가르는 이미지:
+  `xc5-ios-wifi42n-console.tar` = 같은 커널, **자동 모드(`xc5net=1`)인데 `xc5ssid=XC5NONE`**(없는 이름이라 연결 안 하고 8초마다 재검색,
+  keepalive도 동작, wifid는 커널 Wi-Fi와 연결 안 됨). 2분 넘게 `done`·`ka`가 계속 늘면 (나), 33초쯤 멈추면 (가).
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
