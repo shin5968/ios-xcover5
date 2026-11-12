@@ -528,6 +528,12 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   **DEBUG_FAULT_IND(0x8302)** 를 보냄 = 펌웨어 자체 오류 보고 {vif; faultid; count; timestamp; arg; cpu}(fapi.h). 지금까지는 버리고
   있었음. 조치(커밋 6aeb4dd): 콘솔 `XC5 WLBT: FW FAULT id count arg cpu (n got)`(처음 12개), 하트비트 `XC5 w fault n id count arg cpu`.
   이미지 `xc5-ios-wifi40-console.tar`. faultid로 원인 좁히기(공개 자료에 목록은 없음 — id·arg 패턴과 멈춤 시점 대조).
+- **wifi40 결과(사진 20장)**: 이번엔 오류 보고 없음(`fault n 0`), `keep idle 0 1 1 set 0 | done 1 abort 24 | ka 4/3 | q0 w56 r7`,
+  `got 88`, `stall at 32 s`, `kick 149/0`. → 첫 SCAN_DONE 약 1초 뒤 멈춤(wifi38 2 s, 39 13 s, 40 1 s — 무작위). 유휴 모드 끄기는 결정적이지
+  않음. y2sios 코드는 하드웨어를 건드리지 않음(확인). 남은 차이 후보: 삼성 리셋 해제 순서(PMUCAL v2 주석)에 있는 **MIF_CTRL 0x3810[0],
+  TCXO_BUF_CTRL 0x3b78[0], WLBT_INT_EN 0x3144[3][5]** 를 우리는 설정한 적 없음 — 쉬는 코어가 메모리·26 MHz 클록·깨우기 인터럽트를 잃을 수
+  있음. 조치(커밋 2e91156): 전원 켤 때 세 레지스터 설정(`xc5wpmu=0`이면 안 함), 콘솔 `XC5 WLBT: MIF_CTRL a -> b, TCXO_BUF_CTRL ..,
+  WLBT_INT_EN ..`, 하트비트 `XC5 w fault ... | pmu mif x>y tcxo x>y inten x>y`. 이미지 `xc5-ios-wifi41-console.tar`.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
