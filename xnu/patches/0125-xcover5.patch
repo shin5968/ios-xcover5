@@ -3304,10 +3304,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..176c907
+index 0000000..75546ad
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,2577 @@
+@@ -0,0 +1,2600 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -4123,6 +4123,8 @@ index 0000000..176c907
 +static uint64_t scan_sent_ns;
 +static uint32_t scan_aborts;
 +static int wifi_chain;
++static int wifi_pmu = 1;
++static uint32_t pmu_before[3];
 +static uint32_t fault_n, fault_id, fault_count, fault_arg, fault_cpu;
 +static uint32_t ka_ms = 200;
 +
@@ -5675,6 +5677,24 @@ index 0000000..176c907
 +	hb_power = v & 1;
 +	upd(pmu, WLBT_CTRL_NS, 1u << 6, 0);
 +	upd(pmu, WLBT_CTRL_NS, 1u << 5, 1u << 5);
++	/*
++	 * wifi37-40: in the Settings mode the core stops 1-13 s after its first scan (q0 never read again, the doorbell left
++	 * pending, no panic, PMU STATES unchanged), while connected (auto mode) it runs for minutes. Samsung's reset-release
++	 * sequence (platform_mif_3830.c comment, PMUCAL v2) also has MIF_CTRL 0x3810 [0], TCXO_BUF_CTRL 0x3b78 [0] and
++	 * WLBT_INT_EN 0x3144 [3] [5] -- the memory interface and the 26 MHz clock kept for WLBT and its wake-up interrupts --
++	 * which this file never set: a core that idles may lose its clock or memory and not come back. Set here
++	 * (xc5wpmu=0: not); the values before and after are said.
++	 */
++	pmu_before[0] = rd(pmu, 0x3810);
++	pmu_before[1] = rd(pmu, 0x3b78);
++	pmu_before[2] = rd(pmu, 0x3144);
++	if (wifi_pmu) {
++		upd(pmu, 0x3810, 1u, 1u);
++		upd(pmu, 0x3b78, 1u, 1u);
++		upd(pmu, 0x3144, (1u << 3) | (1u << 5), (1u << 3) | (1u << 5));
++	}
++	printf("XC5 WLBT: MIF_CTRL %#x -> %#x, TCXO_BUF_CTRL %#x -> %#x, WLBT_INT_EN %#x -> %#x\n", pmu_before[0],
++	    rd(pmu, 0x3810), pmu_before[1], rd(pmu, 0x3b78), pmu_before[2], rd(pmu, 0x3144));
 +	xcover5_wlbt_state[0] = 2;
 +
 +	/* CFG_REQ (platform_cfg_req_isr): watched for, not taken as an interrupt */
@@ -5848,7 +5868,9 @@ index 0000000..176c907
 +		 * pending (INTSR1 bit 5 still set) -- and whether ringing it again (kick) brought it back.
 +		 */
 +		const uint32_t *pw = (const uint32_t *)(shm + hb_panic_off);
-+		printf("XC5 w fault n %u id %x count %u arg %x cpu %u\n", fault_n, fault_id, fault_count, fault_arg, fault_cpu);
++		printf("XC5 w fault n %u id %x count %u arg %x cpu %u | pmu mif %x>%x tcxo %x>%x inten %x>%x\n", fault_n, fault_id,
++		    fault_count, fault_arg, fault_cpu, pmu_before[0], rd(pmu, 0x3810), pmu_before[1], rd(pmu, 0x3b78), pmu_before[2],
++		    rd(pmu, 0x3144));
 +		printf("XC5 w why st %x sr1 %x msr1 %x issr0 %x logw %u recs %u kick %u/%u stall %ums pan %x %x\n",
 +		    rd(pmu, WLBT_STATES), rd(mbox, INTSR1), rd(mbox, INTMSR1), rd(mbox, ISSR(0)),
 +		    *(volatile uint32_t *)(shm + conf->mxlog.buf.write_index_loc), log_recs, q_kicks, q_kick_ok, q_stall_ms,
@@ -5880,6 +5902,7 @@ index 0000000..176c907
 +	PE_parse_boot_argn("xc5wchain", &wifi_chain, sizeof(wifi_chain));
 +	PE_parse_boot_argn("xc5wka", &ka_ms, sizeof(ka_ms));
 +	PE_parse_boot_argn("xc5widle", &wifi_idle, sizeof(wifi_idle));
++	PE_parse_boot_argn("xc5wpmu", &wifi_pmu, sizeof(wifi_pmu));
 +	thread_t thread;
 +	if (kernel_thread_start(wlbt_thread, NULL, &thread) == KERN_SUCCESS) {
 +		thread_deallocate(thread);
