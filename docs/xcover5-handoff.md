@@ -552,6 +552,15 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   (가) 연결 안 된 펌웨어 자체가 ~30초에 멎음, (나) ui 모드의 iOS 쪽(wifid/configd/RedwoodWLAN) 활동이 원인. 빌드 없이 가르는 이미지:
   `xc5-ios-wifi42n-console.tar` = 같은 커널, **자동 모드(`xc5net=1`)인데 `xc5ssid=XC5NONE`**(없는 이름이라 연결 안 하고 8초마다 재검색,
   keepalive도 동작, wifid는 커널 Wi-Fi와 연결 안 됨). 2분 넘게 `done`·`ka`가 계속 늘면 (나), 33초쯤 멈추면 (가).
+- **사례 조사 2(2026-11-14)**: (1) `github.com/chelovechishee/sm-t510-ubuntu` — Galaxy Tab A 10.1(Exynos 7904, SCSC S612)에서 삼성 SCSC 드라이버를
+  **메인라인 Linux 7.3으로 포팅, Wi-Fi 동작**(`mainline/patches/0013`(scsc core)·`0014`(wlan), `mainline/README.md`). 교훈: S-Boot가 안 켜는
+  WLBT용 **PMIC LDO 4개를 always-on**으로 해야 함(없으면 -84 dBm·인증 실패 0x800c), 펌웨어 이벤트 로그 MLME_EVENT_LOG_IND, NULL 서비스 시험
+  방법. 펌웨어 멈춤 사례는 없음. (2) Exynos9611 커널 PR #16 — mx140 펌웨어는 IGMP 오프로드(MIB 2489)가 기본 켜짐, 받은 IGMP를
+  MLME_RECEIVED_FRAME_IND로 호스트에 올림; `slsi_mlme_set`으로 끔(멈춤과 무관, MLME_SET 사용 예). (3) Exynos 850 벤더 커널 트리:
+  `XhakaTK/PegasusKernel_Exynos3830`(A12s 5.10), `MRIlla/android_kernel_samsung_a145f`(A14 4G, Android 15 소스 — 더 새 scsc 드라이버·
+  platform_mif 비교 가치), `jameskdev/...a21s`. (4) 메인라인: postmarketOS Exynos 850 Wi-Fi "Untested", A13 "broken", exynos850-mainline 목록에
+  Wi-Fi 없음 → Exynos 850에서 벤더 드라이버 밖 Wi-Fi 동작 사례는 못 찾음. 다음 확인 후보: a145f 트리의 platform_mif_3830/hip4와 우리 구현 차이,
+  Exynos 850 DT의 WLBT용 LDO always-on 여부.
 - **Wi-Fi 1단계 결과 읽기**(끝남): 콘솔 `XC5 WLBT: firmware ... entry 0x1a9`, `power on`, `CFG_REQ`/`no CFG_REQ in 1 s`,
   `SMC CONN_IF ...`, `configured ... CFG_ACK given`, `XC5 WLBT t+N ms: ...` 줄들, `panic record ...`. 그다음 2단계:
   mxconf + mxmgmt 전송(공유 메모리 링)을 만들어 MM_START_IND 받기(mxman.c transports_init, mxconf.h, mxmgmt_transport.c).
