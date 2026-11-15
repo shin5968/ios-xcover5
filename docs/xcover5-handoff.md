@@ -559,6 +559,13 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   바뀌는 때와 비슷. 조치(커밋 951ded7): 제어 슬롯을 FH_RFB로 돌아온 뒤에만 재사용(`ctl back/force/busy`), 두 루프 시작 시각 기록, `xc5wpoll=<ms>`
   로 둘째 루프 주기 지정. 하트비트(두 모드 공통) `XC5 w ctl back force busy | loop1 s loop2 s poll ms | q0 w r ka stall at kick`.
   이미지 `xc5-ios-wifi43-console.tar`(ui 모드), `xc5-ios-wifi43p-console.tar`(+`xc5wpoll=100`).
+- **wifi43 결과(사진)**: `ctl back 23 force 11→25 busy ffffffff | loop1 30 s loop2 51 s poll 10 ms | q0 w66 r23 ka 20/19 stall at 35 s`.
+  멈춤(35 s)은 첫 루프 안(둘째 루프 51 s 시작 전)이고, 읽은 23개 슬롯은 모두 반환됨(force는 멈춘 뒤 쌓인 것) → **폴링 주기·슬롯 재사용 둘 다
+  원인 아님**(슬롯 추적은 그대로 둠). 전체 기록 재정리: 펌웨어는 **무선이 일하는 동안만** 살아 있음 — 연결됨(몇 분), 연속 검색(22~51번,
+  30~66 s; DEL_SCAN 확인 2초 대기가 틈), 그 외에는 마지막 검색 뒤 1~13초에 멎음(keepalive GET 유무 무관). 조치(커밋 6576ffa): 연결 전에는
+  SCAN_DONE 즉시 DEL 없이 다음 ADD_SCAN(`xc5wchain=2` 기본; 1=DEL 먼저, 0=끔), 연결 요청은 진행 중 검색의 SCAN_DONE에서 CONNECT.
+  이미지 `xc5-ios-wifi44-console.tar`. 볼 것: `keep done`·`chain`이 계속 늘고 `stall at 0`인지, 그 뒤 S24 연결.
+  같은 scan id 재-ADD가 거부되면(`scancfm` ≠ 0, done 정지) id를 번갈아 쓰기. 근본 원인(무선이 쉬면 왜 멎는가 — 딥슬립 복귀 실패 추정)은 미해결.
 - **사례 조사 2(2026-11-14)**: (1) `github.com/chelovechishee/sm-t510-ubuntu` — Galaxy Tab A 10.1(Exynos 7904, SCSC S612)에서 삼성 SCSC 드라이버를
   **메인라인 Linux 7.3으로 포팅, Wi-Fi 동작**(`mainline/patches/0013`(scsc core)·`0014`(wlan), `mainline/README.md`). 교훈: S-Boot가 안 켜는
   WLBT용 **PMIC LDO 4개를 always-on**으로 해야 함(없으면 -84 dBm·인증 실패 0x800c), 펌웨어 이벤트 로그 MLME_EVENT_LOG_IND, NULL 서비스 시험
