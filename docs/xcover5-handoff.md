@@ -578,6 +578,11 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   벤더 커널(`MRIlla/android_kernel_samsung_a145f`, A14 4G Android 15)의 platform_mif_3830·hip4·mxman 초기화와 우리 순서를 줄 단위 대조,
   (2) Exynos 850 DT의 WLBT용 PMIC LDO always-on 여부(sm-t510 사례), (3) 자동 모드에서 성공한 실행과 같은 커널로 즉시 연결 재현(같은 커널로도
   사는지 = 커널 회귀 여부).
+- **A14 소스 대조(2026-11-15)**: `MRIlla/android_kernel_samsung_a145f`(Galaxy A14 4G, Exynos 850, Android 15)의 platform_mif_3830.c·
+  mxman.c·hip4.c를 A21s와 diff — 차이는 커널 5.4 API·PM QoS·procfs·NAPI·DUAL_FEM(UART_IO_SHARE_CTRL, 옵션)뿐, CFG_REQ·BAAW·PMU 순서·
+  mxconf(fwconfig 0 포함)·HIP4 큐 처리는 같고 우리 구현과도 일치. 시작 때 삼성이 보내고 우리가 안 보낸 신호: **MLME-SET-COUNTRY 0x2033**
+  (`slsi_start` → `slsi_mlme_set_country`, vif 0 전에). 조치(커밋 6e5aa3f): 유휴 모드 SET 확인 뒤 SET_COUNTRY "KR"(dfs 0, 규칙 없음) →
+  확인(0x2133) 뒤 ADD_VIF. `xc5wcountry=0`이면 생략. 하트비트 `XC5 w country <결과> | wdog ...`. 이미지 `xc5-ios-wifi46-console.tar`.
 - **사례 조사 2(2026-11-14)**: (1) `github.com/chelovechishee/sm-t510-ubuntu` — Galaxy Tab A 10.1(Exynos 7904, SCSC S612)에서 삼성 SCSC 드라이버를
   **메인라인 Linux 7.3으로 포팅, Wi-Fi 동작**(`mainline/patches/0013`(scsc core)·`0014`(wlan), `mainline/README.md`). 교훈: S-Boot가 안 켜는
   WLBT용 **PMIC LDO 4개를 always-on**으로 해야 함(없으면 -84 dBm·인증 실패 0x800c), 펌웨어 이벤트 로그 MLME_EVENT_LOG_IND, NULL 서비스 시험
