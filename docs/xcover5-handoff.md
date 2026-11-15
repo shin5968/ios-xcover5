@@ -593,6 +593,12 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   (`XC5 WLBT: joined (from Settings, already joined by the kernel)`), 다른 망이면 먼저 DISCONNECT 후 기존 경로, leave는 연결 유지(link만 down),
   끊기면 다시 검색·재연결. 콘솔 `XC5 WLBT: joined S24 on its own (shadow)`, 하트비트 `XC5 w shadow tries ok used | ap ind`. `xc5wshadow=0`으로 끔.
   이미지 `xc5-ios-wifi47-console.tar`.
+- **wifi47 결과(사진 20장 + 사용자)**: 선연결도 실패 — `shadow tries 1 ok 0 used 0 | ap 1 ind ffff`, `join cfm ffff`, `q0 w128 r7`, `stall at 32 s`
+  (펌웨어 시작 2초 뒤), `done 1`. 첫 SCAN_DONE에 CONNECT를 보냈지만 확인조차 없음. 사용자: 첫 부팅은 설정에서 "연결 중"이 계속·"보안되지 않은
+  네트워크" 표시, 두 번째 부팅은 S24가 "나의 네트워크"에 있으나 연결 안 됨. → 자동 모드(wifi36a)에서는 같은 순서로 몇 분 살았으므로
+  **36a 이후 추가한 것 중 하나가 원인(회귀)**일 가능성. 빌드 없이 가르는 이미지 2개(같은 커널): `xc5-ios-wifi47a-console.tar` = 자동 모드
+  (`xc5net=1`, 36a와 같은 인자; 여기서도 멈추면 커널 회귀 확정), `xc5-ios-wifi47m-console.tar` = 설정 앱 모드 + 36a 이후 추가분 끔(`xc5wka=0
+  xc5widle=1 xc5wcountry=0 xc5wpmu=0 xc5wchain=0`, 선연결은 켬). 끌 수 없는 추가분: 제어 슬롯 추적·체인 버퍼 반환·15초 검색 중단·WDOG/APM 감시.
 - **순정 펌웨어 재확인(2026-11-15)**: `~/xc5/stock/vendor/wifi`(G525NKXSFEYL1) — 우리가 쓰는 mx140.bin·mx140_wlan.hcf·mx140_wlan_sw.hcf는
   md5까지 순정과 **동일**. mx140.bin 빌드 = `S612_E3830_R4-1_Y24W27A`(2024-07-03, `nacho_s612`), platform.txt `nacho_s612_xcover5_kor`.
   **불일치 발견**: `mx140/build_id.txt`와 그 debug 폴더(log-strings.bin, mib_out.xml 등)는 `Y22W51A`(2022-12-19) — 펌웨어보다 오래된 빌드라
