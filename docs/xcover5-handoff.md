@@ -571,6 +571,13 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   후 3~20초 안에 거의 늘 멈춤, 자동 모드에서 바로 연결한 경우만 몇 분 생존. 조치(커밋 29f8025): WLBT의 **WDOG·ALIVE 인터럽트**가 걸리는지와
   처음 걸린 시각, PMU STATUS/STATES/CTRL_NS/CTRL_S/DEBUG를 하트비트 `XC5 w wdog N at s alive N at s | pmu ...`로. 콘솔 `XC5 WLBT: WDOG interrupt
   pending at N s`. 이미지 `xc5-ios-wifi45-console.tar`. WDOG가 걸리면 펌웨어 워치독(호스트가 응답해야 하는 무엇) 쪽.
+- **wifi45 결과(사진 20장)**: `wdog 0 at 0 s alive 0 at 0 s | pmu STATUS 1 STATES 10 CTRL_NS 21 CTRL_S 8 DEBUG 0` — **워치독·ALIVE 없음**,
+  PMU 정상. 이번엔 더 일찍: `got 12`, ids `8301 2102 8301 2107`(GET·SET·ADD_VIF 확인까지), `q0 w93 r3`, `done 0`, `stall at 31 s`(펌웨어 시작
+  `loop1 30 s` 약 1초 뒤, 첫 ADD_SCAN도 못 읽음). → 트래픽·검색·유휴와 무관하게 **시작 후 1~20초 사이 무작위로 R4가 큐 처리를 멈춤**(패닉·워치독·
+  fault 없음, 로그는 늘 w203에서 이미 멈춰 있음). 살아남은 경우는 자동 모드 즉시 연결(wifi17-22, 36a)뿐. 다음 후보: (1) 더 새 Exynos 850
+  벤더 커널(`MRIlla/android_kernel_samsung_a145f`, A14 4G Android 15)의 platform_mif_3830·hip4·mxman 초기화와 우리 순서를 줄 단위 대조,
+  (2) Exynos 850 DT의 WLBT용 PMIC LDO always-on 여부(sm-t510 사례), (3) 자동 모드에서 성공한 실행과 같은 커널로 즉시 연결 재현(같은 커널로도
+  사는지 = 커널 회귀 여부).
 - **사례 조사 2(2026-11-14)**: (1) `github.com/chelovechishee/sm-t510-ubuntu` — Galaxy Tab A 10.1(Exynos 7904, SCSC S612)에서 삼성 SCSC 드라이버를
   **메인라인 Linux 7.3으로 포팅, Wi-Fi 동작**(`mainline/patches/0013`(scsc core)·`0014`(wlan), `mainline/README.md`). 교훈: S-Boot가 안 켜는
   WLBT용 **PMIC LDO 4개를 always-on**으로 해야 함(없으면 -84 dBm·인증 실패 0x800c), 펌웨어 이벤트 로그 MLME_EVENT_LOG_IND, NULL 서비스 시험
