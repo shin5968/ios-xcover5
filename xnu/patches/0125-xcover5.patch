@@ -3304,10 +3304,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..481bbb9
+index 0000000..169c4cc
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,3454 @@
+@@ -0,0 +1,3473 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -4339,6 +4339,7 @@ index 0000000..481bbb9
 +static uint64_t dhcp_next, rescan_at, tx_freed_at, tx_busy;
 +static uint32_t tx_full, tx_force, tx_back, disc_count;
 +static char want_ssid[33];
++static char want_psk[64];             /* xc5psk=: the passphrase of xc5ssid's network, for the kernel's own (shadow) join */
 +/* Step 4e (xc5wifiui=1): iOS's own Wi-Fi side asks for scans and joins (y2sios's redwood_sta/redwood_apple80211) */
 +static int wifi_ui;
 +static bool ui_ready, ui_lost, want_scan, scan_inflight;
@@ -4892,6 +4893,23 @@ index 0000000..481bbb9
 +	if (best < 0) {
 +		printf("XC5 WLBT: no network to join (%s)\n", want_ssid[0] ? want_ssid : "no open one found");
 +		return;
++	}
++	/*
++	 * wifi51: with S24 secured the shadow join (open networks only) never happened, the firmware stopped unjoined at 48 s
++	 * and the WPA2 join from Settings came too late. A secured network named by xc5ssid with xc5psk is joined by the
++	 * kernel as well: the PMK is made here and the 4-way handshake done; Settings then takes that join.
++	 */
++	if (!aps[best].open) {
++		size_t pl = strlen(want_psk);
++		if (pl < 8) {
++			printf("XC5 WLBT: %s is secured and no xc5psk= is given\n", aps[best].ssid);
++			return;
++		}
++		wpa_pbkdf2((const uint8_t *)want_psk, (uint32_t)pl, aps[best].raw_ssid, aps[best].ssid_len, wpa_pmk);
++		wpa_on = true;
++		wpa_done = 0;
++		wpa_install_at = 0;
++		wpa_gtk_len = 0;
 +	}
 +	send_connect_to(best);
 +}
@@ -6225,7 +6243,7 @@ index 0000000..481bbb9
 +		join_stage = 3;
 +		return join_err = ENOENT;
 +	}
-+	if (wifi_shadow && ap_sel >= 0 && conn_ind == 0 && aps[ap_sel].ssid_len == what->ssid_length &&
++	if (wifi_shadow && ap_sel >= 0 && conn_ind == 0 && (!wpa_on || wpa_done) && aps[ap_sel].ssid_len == what->ssid_length &&
 +	    memcmp(aps[ap_sel].raw_ssid, what->ssid, what->ssid_length) == 0) {
 +		/* already joined by the kernel (shadow): nothing to send, the link comes up for iOS now */
 +		shadow_used++;
@@ -6746,6 +6764,7 @@ index 0000000..481bbb9
 +	}
 +	PE_parse_boot_argn("xc5wlan", &wlan_mode, sizeof(wlan_mode));
 +	PE_parse_boot_argn("xc5ssid", want_ssid, sizeof(want_ssid) - 1);
++	PE_parse_boot_argn("xc5psk", want_psk, sizeof(want_psk) - 1);
 +	PE_parse_boot_argn("xc5wretry", &rate_retry, sizeof(rate_retry));
 +	PE_parse_boot_argn("xc5wifiui", &wifi_ui, sizeof(wifi_ui));
 +	PE_parse_boot_argn("xc5wchain", &wifi_chain, sizeof(wifi_chain));
