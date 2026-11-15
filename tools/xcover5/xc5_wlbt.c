@@ -834,7 +834,7 @@ send_add_vif(void)
 
 static uint64_t scan_sent_ns;
 static uint32_t scan_aborts;
-static int wifi_chain;
+static int wifi_chain = 2;      /* 2: the next ADD_SCAN at once, no DEL_SCAN; 1: DEL_SCAN first (wifi34); 0: none */
 static uint32_t rfb_back, rfb_chained, rfb_full;
 static int wifi_pmu = 1;
 static uint32_t pmu_before[3];
@@ -1352,7 +1352,11 @@ on_signal(uint32_t ref)
 			absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
 			scan_inflight = true;
 			chain_scans++;
-			send_del_scan(1, ns);
+			if (wifi_chain == 2) {
+				send_add_scan();
+			} else {
+				send_del_scan(1, ns);
+			}
 		}
 		if (!wifi_ui && ap_sel < 0 && conn_cfm == 0xffff) {
 			send_connect();
@@ -1612,6 +1616,20 @@ hip_poll_locked(void)
 			scan_inflight = true;
 			send_add_scan();
 		}
+	}
+	/*
+	 * wifi43: the stop came at 35 s, in the first poll loop (loop2 began at 51 s) and with every control slot given back
+	 * (back 23 = r23): neither the poll period nor the slots. Over all runs the firmware lived exactly as long as its
+	 * radio had work: joined (minutes), scans chained (22-51 scans, 30-66 s; the 2 s DEL_SCAN waits were the gaps it
+	 * died in), and 1-13 s after the last scan otherwise, keepalive GETs or not. So until joined the radio is never left
+	 * idle: the next ADD_SCAN goes out at SCAN_DONE itself (on_signal) or here, with no DEL_SCAN (Samsung's driver adds
+	 * the same scan id again without deleting a finished one).
+	 */
+	if (wifi_ui && wifi_chain == 2 && ui_ready && !scan_inflight && del_next == 0 && want_join < 0 && join_after_scan < 0 &&
+	    sta_phase != REDWOOD_STA_JOINED && sta_phase != REDWOOD_STA_JOINING) {
+		scan_inflight = true;
+		chain_scans++;
+		send_add_scan();
 	}
 	if (want_leave) {
 		want_leave = false;
