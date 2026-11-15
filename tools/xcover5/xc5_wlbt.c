@@ -54,6 +54,7 @@
 #include <net/ethernet.h>
 #include <net/if_ether.h>
 #include <net/kpi_interface.h>
+#include <net/bpf.h>
 #include <net/route.h>
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -1843,6 +1844,8 @@ static uint64_t ping_next;
 static char xc5wifi_info[128] = "down";
 SYSCTL_STRING(_kern, OID_AUTO, xc5wifi, CTLFLAG_RD | CTLFLAG_LOCKED, xc5wifi_info, sizeof(xc5wifi_info), "");
 static int xc5net_stat;
+static int bpf_err = -1;
+static uint32_t bpf_in, bpf_out;
 static void net_addr(void);
 SYSCTL_INT(_kern, OID_AUTO, xc5netstat, CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_LOCKED, &xc5net_stat, 0, "");
 
@@ -1925,6 +1928,10 @@ hip_poll(void)
 		struct ifnet_stat_increment_param st = {};
 		st.packets_in = n;
 		if_in += n;
+		for (mbuf_t p = head; p != NULL; p = mbuf_nextpkt(p)) {
+			bpf_tap_in(ifp, DLT_EN10MB, p, mbuf_pkthdr_header(p), ETHER_HDR_LEN);
+			bpf_in++;
+		}
 		ifnet_input(ifp, head, &st);
 	}
 }
@@ -1934,6 +1941,8 @@ xc5_if_output(ifnet_t ifp, mbuf_t m)
 {
 	static uint8_t buf[1600];
 	size_t len = mbuf_pkthdr_len(m);
+	bpf_tap_out(ifp, DLT_EN10MB, m, NULL, 0);
+	bpf_out++;
 	lck_mtx_lock(&xc5w_mtx);
 	if (conn_ind == 0 && len >= ETHER_HDR_LEN && len <= sizeof(buf) && mbuf_copydata(m, 0, len, buf) == 0) {
 		send_frame(buf, (uint32_t)len);
@@ -2060,6 +2069,14 @@ net_up(void)
 	ifnet_set_hdrlen(ifp, sizeof(struct ether_header));
 	ifnet_set_offload(ifp, 0);
 	if_err = ifnet_attach(ifp, NULL);
+	/*
+	 * wifi48/49n: joined from Settings, iOS sent IPv6 but never a DHCP DISCOVER, and Settings never showed the network
+	 * as joined: IPConfiguration does DHCP through BPF (bootp over /dev/bpf on the interface), and this interface had
+	 * none attached. Attached here; frames in and out are tapped (bpf_tap_in / bpf_tap_out).
+	 */
+	if (if_err == 0) {
+		bpf_err = bpf_attach(ifp, DLT_EN10MB, sizeof(struct ether_header), NULL, NULL);
+	}
 	if (if_err != 0) {
 		ifnet_release(ifp);
 		return;
@@ -2806,6 +2823,7 @@ xc5_wlbt_heartbeat(void)
 	printf("XC5 w net %#x dns %u.%u.%u.%u | ui %d phase %d link %d scans %u joins %u leaves %u\n", xc5net_stat, dn[0],
 	    dn[1], dn[2], dn[3], wifi_ui, sta_phase, link_up, ui_scans, ui_joins, ui_leaves);
 	/* (both modes) the control slots, when the two poll loops began, and where the firmware stopped reading */
+	printf("XC5 w bpf %d in %u out %u\n", bpf_err, bpf_in, bpf_out);
 	printf("XC5 w txmac ios %02x:%02x:%02x:%02x:%02x:%02x foreign %u mapped %u | types %x %x %x %x n %u | cfm %x rx %u\n",
 	    ios_mac[0], ios_mac[1], ios_mac[2], ios_mac[3], ios_mac[4], ios_mac[5], tx_foreign, rx_mapped, tx_types[0],
 	    tx_types[1], tx_types[2], tx_types[3], tx_ntypes, data_cfm, data_rx);
