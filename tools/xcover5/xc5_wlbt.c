@@ -836,6 +836,8 @@ static uint64_t scan_sent_ns;
 static uint32_t scan_aborts;
 static int wifi_country = 1;
 static uint32_t country_res = 0xffff;
+static int wifi_shadow = 1;    /* xc5wshadow=0: no join of its own before iOS asks */
+static uint32_t shadow_tries, shadow_ok, shadow_used;
 static int wifi_chain = 2;      /* 2: the next ADD_SCAN at once, no DEL_SCAN; 1: DEL_SCAN first (wifi34); 0: none */
 static uint32_t rfb_back, rfb_chained, rfb_full;
 static int wifi_pmu = 1;
@@ -1359,6 +1361,26 @@ on_signal(uint32_t ref)
 		if (join_after_scan >= 0) {
 			send_connect_to(join_after_scan);       /* at once, as the working joins did */
 			join_after_scan = -1;
+		} else if (wifi_ui && wifi_shadow && ap_sel < 0 && conn_cfm == 0xffff && sta_phase != REDWOOD_STA_JOINED &&
+		    sta_phase != REDWOOD_STA_JOINING && want_join < 0) {
+			/*
+			 * wifi37-46: unjoined, the firmware stopped every time, 1 s to ~15 s after it started, whatever was sent
+			 * (nothing, GETs, 28 chained scans, idle modes off, country set); every buffer had come back (wifi46: rfb
+			 * 8388 chained 4137 full 0, q3 w155 r155). Joined the moment its first scan ended (auto mode, wifi19-22,
+			 * 36a) it ran for minutes. So the Settings mode does the same: at this SCAN_DONE the kernel joins the open
+			 * network (xc5ssid=NAME, or the strongest open one) and keeps it; the link stays down for iOS until
+			 * Settings asks for that network (sta_join then answers at once). Before iOS's own DHCP nothing is sent.
+			 */
+			send_connect();
+			if (ap_sel >= 0) {
+				shadow_tries++;
+			}
+		}
+		if (ap_sel < 0 && wifi_ui && wifi_shadow && want_join < 0 && join_after_scan < 0 && !scan_inflight &&
+		    sta_phase != REDWOOD_STA_JOINED && sta_phase != REDWOOD_STA_JOINING) {
+			scan_inflight = true;                   /* no open network yet: look again at once */
+			chain_scans++;
+			send_add_scan();
 		} else if (wifi_chain && wifi_ui && sta_phase != REDWOOD_STA_JOINED && sta_phase != REDWOOD_STA_JOINING && del_next == 0 &&
 		    want_join < 0 && del_join < 0) {
 			/*
@@ -1419,6 +1441,15 @@ on_signal(uint32_t ref)
 		s[10] = 1;
 		if (conn_ind == 0) {
 			send_sig(s, sizeof(s), NULL, 0);        /* MLME_CONNECT_RES */
+			if (wifi_ui && sta_phase != REDWOOD_STA_JOINING) {
+				shadow_ok++;
+				printf("XC5 WLBT: joined %s on its own (shadow), link kept down for iOS\n", ap_sel >= 0 ? aps[ap_sel].ssid : "?");
+			}
+		} else if (wifi_ui && sta_phase != REDWOOD_STA_JOINING) {
+			ap_sel = -1;                    /* shadow join refused: the next SCAN_DONE tries again */
+			conn_cfm = 0xffff;
+			scan_inflight = true;
+			send_add_scan();
 		}
 		break;
 	}
@@ -1429,6 +1460,11 @@ on_signal(uint32_t ref)
 		conn_cfm = 0xffff;
 		if (wifi_ui) {
 			ui_lost = true;                 /* told to wifid by the Wi-Fi thread; iOS decides whether to join again */
+			if (wifi_shadow) {
+				ap_sel = -1;            /* and the kernel joins again on the next SCAN_DONE */
+				scan_inflight = true;
+				send_add_scan();
+			}
 			break;
 		}
 		ap_sel = -1;
@@ -1646,6 +1682,7 @@ hip_poll_locked(void)
 	 * the same scan id again without deleting a finished one).
 	 */
 	if (wifi_ui && wifi_chain == 2 && ui_ready && !scan_inflight && del_next == 0 && want_join < 0 && join_after_scan < 0 &&
+	    !(wifi_shadow && ap_sel >= 0) &&
 	    sta_phase != REDWOOD_STA_JOINED && sta_phase != REDWOOD_STA_JOINING) {
 		scan_inflight = true;
 		chain_scans++;
@@ -2151,7 +2188,7 @@ sta_scan(const struct redwood_sta_scan *what)
 	uint64_t now;
 	absolutetime_to_nanoseconds(mach_absolute_time(), &now);
 	/* a scan that ended within the last 20 s answers at once (wifid asks every few seconds while Settings is open) */
-	if (!scan_inflight && scan_done != 0 && now - scan_done_ns < 20000000000ull) {
+	if ((!scan_inflight && scan_done != 0 && now - scan_done_ns < 20000000000ull) || (wifi_shadow && ap_sel >= 0 && scan_done != 0)) {
 		lck_mtx_unlock(&xc5w_mtx);
 		ui_scans++;
 		return 0;
@@ -2243,6 +2280,31 @@ sta_join(const struct redwood_sta_join *what)
 		join_stage = 3;
 		return join_err = ENOENT;
 	}
+	if (wifi_shadow && ap_sel >= 0 && conn_ind == 0 && aps[ap_sel].ssid_len == what->ssid_length &&
+	    memcmp(aps[ap_sel].raw_ssid, what->ssid, what->ssid_length) == 0) {
+		/* already joined by the kernel (shadow): nothing to send, the link comes up for iOS now */
+		shadow_used++;
+		join_stage = 6;
+		join_err = 0;
+		sta_phase = REDWOOD_STA_JOINED;
+		link_state(true);
+		printf("XC5 WLBT: joined (from Settings, already joined by the kernel)\n");
+		return 0;
+	}
+	if (wifi_shadow && ap_sel >= 0 && conn_ind == 0) {
+		/* another network asked for: the kernel's join is left first (then the usual scan + CONNECT) */
+		uint8_t s[32] = { 0x0e, 0x20 };
+		s[10] = 1;
+		lck_mtx_lock(&xc5w_mtx);
+		memcpy(s + 12, aps[ap_sel].bssid, 6);
+		s[18] = 3;
+		memcpy(leave_sig, s, sizeof(s));
+		want_leave = true;
+		conn_ind = 0xffff;
+		ap_sel = -1;
+		lck_mtx_unlock(&xc5w_mtx);
+		delay(300000);
+	}
 	join_stage = 4;
 	lck_mtx_lock(&xc5w_mtx);
 	conn_cfm = 0xffff;
@@ -2270,7 +2332,7 @@ int
 sta_leave_call(void)
 {
 	ui_leaves++;
-	if (ap_sel >= 0 && conn_ind == 0) {
+	if (ap_sel >= 0 && conn_ind == 0 && !wifi_shadow) {
 		/* MLME-DISCONNECT.request 0x200e {vif 1; peer_sta_address; reason_code 3 (leaving)} */
 		uint8_t s[32] = { 0x0e, 0x20 };
 		s[10] = 1;
@@ -2654,6 +2716,7 @@ xc5_wlbt_heartbeat(void)
 	printf("XC5 w net %#x dns %u.%u.%u.%u | ui %d phase %d link %d scans %u joins %u leaves %u\n", xc5net_stat, dn[0],
 	    dn[1], dn[2], dn[3], wifi_ui, sta_phase, link_up, ui_scans, ui_joins, ui_leaves);
 	/* (both modes) the control slots, when the two poll loops began, and where the firmware stopped reading */
+	printf("XC5 w shadow tries %u ok %u used %u | ap %d ind %x\n", shadow_tries, shadow_ok, shadow_used, ap_sel, conn_ind);
 	printf("XC5 w country %x | wdog %u at %u s alive %u at %u s | pmu STATUS %x STATES %x CTRL_NS %x CTRL_S %x DEBUG %x\n", country_res, wdog_n, wdog_at_s,
 	    alive_n, alive_at_s, rd(pmu, WLBT_STATUS), rd(pmu, WLBT_STATES), rd(pmu, WLBT_CTRL_NS), rd(pmu, WLBT_CTRL_S), rd(pmu, WLBT_DEBUG));
 	printf("XC5 w ctl back %u force %u busy %x | loop1 %u s loop2 %u s poll %u ms | q0 w%u r%u ka %u/%u stall at %llu s kick %u\n",
@@ -2721,6 +2784,7 @@ xc5_wlbt_start(void)
 	PE_parse_boot_argn("xc5widle", &wifi_idle, sizeof(wifi_idle));
 	PE_parse_boot_argn("xc5wpmu", &wifi_pmu, sizeof(wifi_pmu));
 	PE_parse_boot_argn("xc5wcountry", &wifi_country, sizeof(wifi_country));
+	PE_parse_boot_argn("xc5wshadow", &wifi_shadow, sizeof(wifi_shadow));
 	thread_t thread;
 	if (kernel_thread_start(wlbt_thread, NULL, &thread) == KERN_SUCCESS) {
 		thread_deallocate(thread);
