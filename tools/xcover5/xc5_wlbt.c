@@ -3453,8 +3453,9 @@ xc5_wlbt_start(void)
 		return;
 	}
 	PE_parse_boot_argn("xc5wlan", &wlan_mode, sizeof(wlan_mode));
-	PE_parse_boot_argn("xc5ssid", want_ssid, sizeof(want_ssid) - 1);
-	PE_parse_boot_argn("xc5psk", want_psk, sizeof(want_psk) - 1);
+	PE_parse_boot_arg_str("xc5ssid", want_ssid, sizeof(want_ssid));
+	/* (PE_parse_boot_argn takes an all-digit value as a number: "12345678" came out as binary, wifi52) */
+	PE_parse_boot_arg_str("xc5psk", want_psk, sizeof(want_psk));
 	PE_parse_boot_argn("xc5wretry", &rate_retry, sizeof(rate_retry));
 	PE_parse_boot_argn("xc5wifiui", &wifi_ui, sizeof(wifi_ui));
 	PE_parse_boot_argn("xc5wchain", &wifi_chain, sizeof(wifi_chain));

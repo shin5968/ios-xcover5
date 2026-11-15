@@ -3304,10 +3304,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..169c4cc
+index 0000000..e8b8767
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,3473 @@
+@@ -0,0 +1,3474 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -6763,8 +6763,9 @@ index 0000000..169c4cc
 +		return;
 +	}
 +	PE_parse_boot_argn("xc5wlan", &wlan_mode, sizeof(wlan_mode));
-+	PE_parse_boot_argn("xc5ssid", want_ssid, sizeof(want_ssid) - 1);
-+	PE_parse_boot_argn("xc5psk", want_psk, sizeof(want_psk) - 1);
++	PE_parse_boot_arg_str("xc5ssid", want_ssid, sizeof(want_ssid));
++	/* (PE_parse_boot_argn takes an all-digit value as a number: "12345678" came out as binary, wifi52) */
++	PE_parse_boot_arg_str("xc5psk", want_psk, sizeof(want_psk));
 +	PE_parse_boot_argn("xc5wretry", &rate_retry, sizeof(rate_retry));
 +	PE_parse_boot_argn("xc5wifiui", &wifi_ui, sizeof(wifi_ui));
 +	PE_parse_boot_argn("xc5wchain", &wifi_chain, sizeof(wifi_chain));
