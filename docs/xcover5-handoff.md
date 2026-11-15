@@ -610,6 +610,10 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   안 보냄**; 수신 0, `cfm ffff`. fault 2개 `id 203c count 1 arg 3`. 조치(커밋 22c4c7a): 선연결 뒤에는 **커널이 직접 DHCP**(자동 모드에서 동작한
   그 코드) → en0에 주소·경로 설정 → kern.xc5wifi로 configd(libxc5net)에 전달. `xc5wdhcp=0`이면 끔. 이미지 `xc5-ios-wifi49-console.tar`.
   DHCP offer가 오면(`dhcp 2/3 offer ...`) 수신 경로는 정상, 안 오면 연결 후 수신 자체 문제.
+- **wifi49 결과(사진 20장): 설정 앱 모드에서 처음으로 IP·인터넷 경로 성공** — `shadow ok 1 used 1`, stage 6, link 1,
+  `data tx 88 rx 64 dhcp 3 offer/ip 172.24.72.211`, `if en0 addr 0 route 0 out 86 in 61 ping 56/56`, `dns 172.24.72.49`, 펌웨어 끝까지 생존
+  (`q0 w163 r163 ka 605/605`, fault 0). types 800/806(IPv4·ARP) — 커널 DHCP가 동작. 남은 확인: 설정 앱 체크 표시·Safari 실제 동작(사용자 확인 필요),
+  부팅마다 선연결 실패 확률(실패 부팅은 펌웨어가 시작 2초 만에 멈춤 — 근본 원인 미해결), locationd SIGTRAP(별건).
 - **순정 펌웨어 재확인(2026-11-15)**: `~/xc5/stock/vendor/wifi`(G525NKXSFEYL1) — 우리가 쓰는 mx140.bin·mx140_wlan.hcf·mx140_wlan_sw.hcf는
   md5까지 순정과 **동일**. mx140.bin 빌드 = `S612_E3830_R4-1_Y24W27A`(2024-07-03, `nacho_s612`), platform.txt `nacho_s612_xcover5_kor`.
   **불일치 발견**: `mx140/build_id.txt`와 그 debug 폴더(log-strings.bin, mib_out.xml 등)는 `Y22W51A`(2022-12-19) — 펌웨어보다 오래된 빌드라
