@@ -605,6 +605,11 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   → iOS가 보낸 12개는 펌웨어가 모두 소비했지만 수신 0. 가설: iOS의 **비공개 Wi-Fi 주소**(네트워크별 임의 MAC)로 보내서 AP 응답이 vif가 받지
   않는 주소로 감. 조치(커밋 feb67f0): 송신 출발지·DHCP chaddr를 vif 주소로, 수신 vif 주소 앞 프레임을 iOS 주소로 되돌림(`xc5wmacfix=0` 끔).
   하트비트 `XC5 w txmac ios <iOS MAC> foreign <바꾼 수> mapped <되돌린 수> | types <첫 4개 ethertype> n | cfm rx`. 이미지 `xc5-ios-wifi48-console.tar`.
+- **wifi48 결과(사진 20장)**: 선연결 다시 성공(`shadow ok 1 used 1`, stage 6, link 1, 펌웨어 끝까지 생존 `q0 w163 r163 ka 866/866`).
+  `txmac ios 00:.. foreign 0 | types 86dd x4 n 12` → iOS는 비공개 주소를 쓰지 않았고(MAC 가설 탈락), **IPv6만 12개 보내고 DHCP(IPv4)는 아예
+  안 보냄**; 수신 0, `cfm ffff`. fault 2개 `id 203c count 1 arg 3`. 조치(커밋 22c4c7a): 선연결 뒤에는 **커널이 직접 DHCP**(자동 모드에서 동작한
+  그 코드) → en0에 주소·경로 설정 → kern.xc5wifi로 configd(libxc5net)에 전달. `xc5wdhcp=0`이면 끔. 이미지 `xc5-ios-wifi49-console.tar`.
+  DHCP offer가 오면(`dhcp 2/3 offer ...`) 수신 경로는 정상, 안 오면 연결 후 수신 자체 문제.
 - **순정 펌웨어 재확인(2026-11-15)**: `~/xc5/stock/vendor/wifi`(G525NKXSFEYL1) — 우리가 쓰는 mx140.bin·mx140_wlan.hcf·mx140_wlan_sw.hcf는
   md5까지 순정과 **동일**. mx140.bin 빌드 = `S612_E3830_R4-1_Y24W27A`(2024-07-03, `nacho_s612`), platform.txt `nacho_s612_xcover5_kor`.
   **불일치 발견**: `mx140/build_id.txt`와 그 debug 폴더(log-strings.bin, mib_out.xml 등)는 `Y22W51A`(2022-12-19) — 펌웨어보다 오래된 빌드라
