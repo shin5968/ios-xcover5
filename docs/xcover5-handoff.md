@@ -552,6 +552,13 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   (가) 연결 안 된 펌웨어 자체가 ~30초에 멎음, (나) ui 모드의 iOS 쪽(wifid/configd/RedwoodWLAN) 활동이 원인. 빌드 없이 가르는 이미지:
   `xc5-ios-wifi42n-console.tar` = 같은 커널, **자동 모드(`xc5net=1`)인데 `xc5ssid=XC5NONE`**(없는 이름이라 연결 안 하고 8초마다 재검색,
   keepalive도 동작, wifid는 커널 Wi-Fi와 연결 안 됨). 2분 넘게 `done`·`ka`가 계속 늘면 (나), 33초쯤 멈추면 (가).
+- **wifi42n 결과(사진 20장)**: 자동 모드·미연결(`ui 0 phase 1`)에서도 `done 1`, `got 160`이 heartbeat 28~32(약 140~160 s) 내내 그대로, 요약
+  `INTSR1 0x20` → **iOS 쪽(wifid/configd) 원인 아님**, 연결 안 된 채 신호를 많이 주고받으면 멎음. 단서 둘: (a) 멎을 때까지 펌웨어가 읽은
+  신호 수가 wifi41·41k 37(=32+5), wifi39 69(=64+5) — 제어 신호 슬롯 32칸을 반환 확인 없이 돌려 씀(데이터 슬롯은 추적함, 연결된 실행은 제어
+  신호 32개 미만). 단 13·7·3에서 멎은 실행도 있어 확정 아님. (b) 멎는 시각이 대부분 ~33초 = Wi-Fi 스레드의 100 ms 루프(20초)가 10 ms 루프로
+  바뀌는 때와 비슷. 조치(커밋 951ded7): 제어 슬롯을 FH_RFB로 돌아온 뒤에만 재사용(`ctl back/force/busy`), 두 루프 시작 시각 기록, `xc5wpoll=<ms>`
+  로 둘째 루프 주기 지정. 하트비트(두 모드 공통) `XC5 w ctl back force busy | loop1 s loop2 s poll ms | q0 w r ka stall at kick`.
+  이미지 `xc5-ios-wifi43-console.tar`(ui 모드), `xc5-ios-wifi43p-console.tar`(+`xc5wpoll=100`).
 - **사례 조사 2(2026-11-14)**: (1) `github.com/chelovechishee/sm-t510-ubuntu` — Galaxy Tab A 10.1(Exynos 7904, SCSC S612)에서 삼성 SCSC 드라이버를
   **메인라인 Linux 7.3으로 포팅, Wi-Fi 동작**(`mainline/patches/0013`(scsc core)·`0014`(wlan), `mainline/README.md`). 교훈: S-Boot가 안 켜는
   WLBT용 **PMIC LDO 4개를 always-on**으로 해야 함(없으면 -84 dBm·인증 실패 0x800c), 펌웨어 이벤트 로그 MLME_EVENT_LOG_IND, NULL 서비스 시험
