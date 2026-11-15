@@ -587,6 +587,12 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   지금까지 가장 오래 동작(연속 검색 28번)했지만 `q0 w224 r88`, **`stall at 45 s`**로 결국 멈춤. 연결 요청(`assoc 1`)은 멈춘 뒤 와서
   `stage 5 err 60 cfm ffff`. wdog/alive/fault 모두 0. → 국가 코드는 도움은 됐을 수 있으나 해결 아님. 남은 유일한 생존 조건은 "펌웨어 시작
   직후 바로 연결"(자동 모드). 다음 후보: ui 모드에서도 첫 SCAN_DONE 때 커널이 열린 망(또는 지정 SSID)에 바로 연결하고 그 상태를 wifid에 넘김.
+- **선연결(shadow join) 구현(커밋 f6c0ebb)**: 미연결 상태에서는 무엇을 해도 멈추고(wifi37-46, 버퍼 반환은 전부 정상: wifi46 rfb 8388 chained 4137
+  full 0, q3 w155 r155) 즉시 연결한 자동 모드만 살아남으므로, 설정 앱 모드에서도 첫 SCAN_DONE에서 커널이 개방형 망(`xc5ssid=` 또는 가장 강한
+  개방형)에 바로 CONNECT. link는 iOS에 내린 채 유지, 검색 요청은 캐시로 답함, 설정 앱이 그 망을 고르면 sta_join이 즉시 성공·link up
+  (`XC5 WLBT: joined (from Settings, already joined by the kernel)`), 다른 망이면 먼저 DISCONNECT 후 기존 경로, leave는 연결 유지(link만 down),
+  끊기면 다시 검색·재연결. 콘솔 `XC5 WLBT: joined S24 on its own (shadow)`, 하트비트 `XC5 w shadow tries ok used | ap ind`. `xc5wshadow=0`으로 끔.
+  이미지 `xc5-ios-wifi47-console.tar`.
 - **순정 펌웨어 재확인(2026-11-15)**: `~/xc5/stock/vendor/wifi`(G525NKXSFEYL1) — 우리가 쓰는 mx140.bin·mx140_wlan.hcf·mx140_wlan_sw.hcf는
   md5까지 순정과 **동일**. mx140.bin 빌드 = `S612_E3830_R4-1_Y24W27A`(2024-07-03, `nacho_s612`), platform.txt `nacho_s612_xcover5_kor`.
   **불일치 발견**: `mx140/build_id.txt`와 그 debug 폴더(log-strings.bin, mib_out.xml 등)는 `Y22W51A`(2022-12-19) — 펌웨어보다 오래된 빌드라
