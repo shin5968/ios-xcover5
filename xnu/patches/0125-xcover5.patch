@@ -3304,10 +3304,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..17cf221
+index 0000000..822c2a2
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,2708 @@
+@@ -0,0 +1,2728 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -4144,6 +4144,8 @@ index 0000000..17cf221
 +
 +static uint64_t scan_sent_ns;
 +static uint32_t scan_aborts;
++static int wifi_country = 1;
++static uint32_t country_res = 0xffff;
 +static int wifi_chain = 2;      /* 2: the next ADD_SCAN at once, no DEL_SCAN; 1: DEL_SCAN first (wifi34); 0: none */
 +static uint32_t rfb_back, rfb_chained, rfb_full;
 +static int wifi_pmu = 1;
@@ -4603,6 +4605,23 @@ index 0000000..17cf221
 +		break;
 +	case 0x2102:                            /* MLME_SET_CFM */
 +		set_res = *(uint16_t *)(sig + 12);
++		if (vif_res == 0xffff && country_res == 0xffff && wifi_country) {
++			/*
++			 * A14 (Galaxy A14 4G, Exynos 850, Android 15) source compared with ours: the HIP4, mailbox and PMU code match;
++			 * what Samsung's slsi_start sends that we never did is MLME-SET-COUNTRY.request 0x2033 {vif 0; country_code
++			 * (alpha2[0] << 8 | alpha2[1]); dfs_regulatory_domain} before any vif (mgt.c, mlme.c slsi_mlme_set_country).
++			 * Without it the firmware runs in its world domain. "KR", no rules (no regdb here). xc5wcountry=0: not sent.
++			 */
++			uint8_t s[24] = { 0x33, 0x20 };
++			s[12] = 'R';
++			s[13] = 'K';
++			send_sig(s, sizeof(s), NULL, 0);
++		} else if (vif_res == 0xffff) {
++			send_add_vif();
++		}
++		break;
++	case 0x2133:                            /* MLME_SET_COUNTRY_CFM */
++		country_res = *(uint16_t *)(sig + 12);
 +		if (vif_res == 0xffff) {
 +			send_add_vif();
 +		}
@@ -5945,7 +5964,7 @@ index 0000000..17cf221
 +	printf("XC5 w net %#x dns %u.%u.%u.%u | ui %d phase %d link %d scans %u joins %u leaves %u\n", xc5net_stat, dn[0],
 +	    dn[1], dn[2], dn[3], wifi_ui, sta_phase, link_up, ui_scans, ui_joins, ui_leaves);
 +	/* (both modes) the control slots, when the two poll loops began, and where the firmware stopped reading */
-+	printf("XC5 w wdog %u at %u s alive %u at %u s | pmu STATUS %x STATES %x CTRL_NS %x CTRL_S %x DEBUG %x\n", wdog_n, wdog_at_s,
++	printf("XC5 w country %x | wdog %u at %u s alive %u at %u s | pmu STATUS %x STATES %x CTRL_NS %x CTRL_S %x DEBUG %x\n", country_res, wdog_n, wdog_at_s,
 +	    alive_n, alive_at_s, rd(pmu, WLBT_STATUS), rd(pmu, WLBT_STATES), rd(pmu, WLBT_CTRL_NS), rd(pmu, WLBT_CTRL_S), rd(pmu, WLBT_DEBUG));
 +	printf("XC5 w ctl back %u force %u busy %x | loop1 %u s loop2 %u s poll %u ms | q0 w%u r%u ka %u/%u stall at %llu s kick %u\n",
 +	    ctl_back, ctl_force, ctl_busy, t_loop1_s, t_loop2_s, poll_ms, *scb(0, 0), *scb(0, 1), ka_sent, ka_got, q_stall_at_s,
@@ -6011,6 +6030,7 @@ index 0000000..17cf221
 +	PE_parse_boot_argn("xc5wpoll", &poll_ms, sizeof(poll_ms));
 +	PE_parse_boot_argn("xc5widle", &wifi_idle, sizeof(wifi_idle));
 +	PE_parse_boot_argn("xc5wpmu", &wifi_pmu, sizeof(wifi_pmu));
++	PE_parse_boot_argn("xc5wcountry", &wifi_country, sizeof(wifi_country));
 +	thread_t thread;
 +	if (kernel_thread_start(wlbt_thread, NULL, &thread) == KERN_SUCCESS) {
 +		thread_deallocate(thread);
