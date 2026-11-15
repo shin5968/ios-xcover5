@@ -618,6 +618,17 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   SCDynamicStore에 등록)은 `xc5net=1` 부팅 인자로만 켜짐(xc5_drop.c) — 설정 앱 모드 이미지엔 없어 `XC5 w net 0`(xc5netstat 0) → iOS가 주소·
   DNS를 모름. 커널은 xc5net 인자를 읽지 않으므로 빌드 없이 `xc5-ios-wifi49n-console.tar` = wifi49 + `xc5net=1`. 볼 것: `XC5 w net <0이 아닌 값>`
   (bit0 기록, bit1 우리 인터페이스가 기본, 0x10 HTTP 응답). Safari 화면 문제는 예전 w30r(EAGL) 수정이 실기기 미확인인 별건일 수 있음.
+- **wifi49n/50 결과: 설정 앱 체크 표시 성공(2026-11-15)** — 49n: `net 0x1f`(configd 등록·기본 인터페이스·DNS·HTTP 응답), ping 76/76.
+  체크 표시는 안 뜸 → 원인: en0에 BPF 없음(IPConfiguration의 DHCP는 BPF 사용; iOS는 IPv6만 보냈었음). 조치(커밋 0507819) bpf_attach +
+  bpf_tap_in/out → **wifi50에서 설정 앱 체크 표시 뜸**(사용자 확인). Safari 검은/하얀 화면은 네트워크 아닌 화면 그리기 문제(별건).
+  wifid 거절 요청: 115 = POWER_DEBUG_INFO(무관), 383 = 미확인.
+- **WPA2-PSK 구현(커밋 076a67f)**: 커널이 4-way 핸드셰이크 수행 — PMK(wifid가 준 PMK 또는 비밀번호→PBKDF2-SHA1 4096), PTK(PRF-SHA1),
+  EAPOL-Key M2/M4(HMAC-SHA1 MIC), M3 key data AES key unwrap(RFC 3394)로 GTK, 그룹 재키(G1→G2), M4 100 ms 뒤 MLME-SETKEYS 0x2018
+  (pairwise CCMP 0x000FAC04 주소=AP, group은 AP RSN의 그룹 암호 CCMP/TKIP, 주소 FF.., RSC). CONNECT 데이터에 SSID 뒤 우리 RSN IE.
+  10초 안에 끝나지 않으면 EAUTH(비밀번호 틀림)·DISCONNECT. 하트비트 `XC5 w bpf .. | wpa on done m1 m3 g1 micbad unwrapbad keys res gc gtk`,
+  콘솔 `XC5 WLBT: WPA2 FAILED ...` / `joined (from Settings) with WPA2`. 이미지 `xc5-ios-wifi51-console.tar`(설정 앱 모드 + xc5net=1).
+  미확인: SETKEYS 형식(FAPI 레이아웃 오프셋 vif10 len12 id14 type16 addr18 seq24 cipher40), M4 전 키 설치 순서, 펌웨어가 EAPOL을 데이터
+  경로(MA_UNITDATA_IND)로 올리는지.
 - **순정 펌웨어 재확인(2026-11-15)**: `~/xc5/stock/vendor/wifi`(G525NKXSFEYL1) — 우리가 쓰는 mx140.bin·mx140_wlan.hcf·mx140_wlan_sw.hcf는
   md5까지 순정과 **동일**. mx140.bin 빌드 = `S612_E3830_R4-1_Y24W27A`(2024-07-03, `nacho_s612`), platform.txt `nacho_s612_xcover5_kor`.
   **불일치 발견**: `mx140/build_id.txt`와 그 debug 폴더(log-strings.bin, mib_out.xml 등)는 `Y22W51A`(2022-12-19) — 펌웨어보다 오래된 빌드라
