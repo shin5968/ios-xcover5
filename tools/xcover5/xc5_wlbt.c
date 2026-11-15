@@ -1436,7 +1436,18 @@ wpa_send_key(const uint8_t *ap, uint16_t info, const uint8_t replay[8], const ui
 	uint8_t mic[20];
 	hmac_sha1(wpa_ptk, 16, e, 4u + body, NULL, 0, NULL, 0, mic);
 	memcpy(k + 77, mic, 16);
-	send_frame(fr, 14u + 4u + body);
+	/*
+	 * wifi54: the access point's EAPOL frames came up as MLME-RECEIVED-FRAME.indication 0x230d (rf 4), not as data;
+	 * Samsung's driver sends EAPOL with MLME-SEND-FRAME.request 0x2010 {vif; host_tag; data_unit_descriptor 1 (802.3);
+	 * message_type 2 M1-3 / 3 M4; channel_frequency; dwell_time; period} (tx.c, mlme.c slsi_mlme_send_frame_data).
+	 */
+	uint8_t s[40] = { 0x10, 0x20 };
+	s[10] = 1;
+	s[12] = (uint8_t)(0x40 + wpa_m1 + wpa_m3);
+	s[13] = 0x20;
+	s[14] = 1;
+	s[16] = (info & 0x0100) && !(info & 0x0040) && nonce == NULL ? 3 : 2;
+	send_sig(s, sizeof(s), fr, 14u + 4u + body);
 }
 
 static void
@@ -1554,7 +1565,7 @@ wpa_eapol_in(const uint8_t *fr, uint32_t n)
 static void
 wpa_tick(uint64_t now_ns)
 {
-	if (wpa_on && !wpa_done && wpa_m1 == 0 && conn_ind == 0 && wpa_conn_at != 0 && now_ns - wpa_conn_at > 3000000000ull) {
+	if (0 && wpa_on && !wpa_done && wpa_m1 == 0 && conn_ind == 0 && wpa_conn_at != 0 && now_ns - wpa_conn_at > 3000000000ull) {
 		wpa_offload++;
 		wpa_done = 1;                   /* no EAPOL came up: the firmware did the handshake with the PMK */
 	}
@@ -1635,7 +1646,7 @@ send_connect_to(int best)
 		 */
 		uint8_t ps[24] = { 0x1c, 0x20 };
 		ps[10] = 1;
-		send_sig(ps, sizeof(ps), wpa_pmk, sizeof(wpa_pmk));
+		(void)ps;                       /* (wifi54: SET_PMK answered 0x30, refused: not sent) */
 		wpa_rsn_for(aps[best].elements, aps[best].elements_length);
 		memcpy(d + dl, wpa_rsn, sizeof(wpa_rsn));
 		dl += sizeof(wpa_rsn);
@@ -1984,8 +1995,11 @@ on_signal(uint32_t ref)
 	case 0x211c:                            /* MLME_SET_PMK_CFM */
 		wpa_pmk_res = *(uint16_t *)(sig + 12);
 		break;
-	case 0x230d:                            /* MLME_RECEIVED_FRAME_IND */
+	case 0x230d:                            /* MLME_RECEIVED_FRAME_IND {vif; data_unit_descriptor; frequency} */
 		rx_rf_n++;
+		if (*(uint16_t *)(sig + 12) == 1 && n >= 14) {
+			on_frame(data, n);          /* an 802.3 frame (EAPOL, also ARP/DHCP on some firmware) */
+		}
 		break;
 	case 0x2118:                            /* MLME_SETKEYS_CFM */
 		wpa_keys_res = *(uint16_t *)(sig + 12);
