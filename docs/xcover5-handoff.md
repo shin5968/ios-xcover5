@@ -587,6 +587,13 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   지금까지 가장 오래 동작(연속 검색 28번)했지만 `q0 w224 r88`, **`stall at 45 s`**로 결국 멈춤. 연결 요청(`assoc 1`)은 멈춘 뒤 와서
   `stage 5 err 60 cfm ffff`. wdog/alive/fault 모두 0. → 국가 코드는 도움은 됐을 수 있으나 해결 아님. 남은 유일한 생존 조건은 "펌웨어 시작
   직후 바로 연결"(자동 모드). 다음 후보: ui 모드에서도 첫 SCAN_DONE 때 커널이 열린 망(또는 지정 SSID)에 바로 연결하고 그 상태를 wifid에 넘김.
+- **순정 펌웨어 재확인(2026-11-15)**: `~/xc5/stock/vendor/wifi`(G525NKXSFEYL1) — 우리가 쓰는 mx140.bin·mx140_wlan.hcf·mx140_wlan_sw.hcf는
+  md5까지 순정과 **동일**. mx140.bin 빌드 = `S612_E3830_R4-1_Y24W27A`(2024-07-03, `nacho_s612`), platform.txt `nacho_s612_xcover5_kor`.
+  **불일치 발견**: `mx140/build_id.txt`와 그 debug 폴더(log-strings.bin, mib_out.xml 등)는 `Y22W51A`(2022-12-19) — 펌웨어보다 오래된 빌드라
+  우리 로그 해석 문자열이 안 맞음(예: 늘 마지막 줄 "Speedy drive strength changed"는 잘못 풀린 줄일 수 있음; 원시 오프셋으로만 신뢰).
+  순정 커널(boot.img, research/boot.img와 동일)의 **KA 패치 57워드는 우리 ka.bin과 바이트까지 같음**. 순정 커널은 `common.hcf`·`common_sw.hcf`·
+  `localmib.hcf`·`bt.hcf`를 찾지만 vendor에는 mx140_bt.hcf만 있어 common/localmib는 없음(우리 fwconfig 0과 같음). 그 밖의 파일: mx140_t.bin
+  (시험용 펌웨어), mx140_wlan_t*.hcf, slsi_reg_database.bin(국가 규칙), indoorchannel.info, hydra_config.sdb. → 펌웨어 파일·KA 패치는 원인 아님.
 - **사례 조사 2(2026-11-14)**: (1) `github.com/chelovechishee/sm-t510-ubuntu` — Galaxy Tab A 10.1(Exynos 7904, SCSC S612)에서 삼성 SCSC 드라이버를
   **메인라인 Linux 7.3으로 포팅, Wi-Fi 동작**(`mainline/patches/0013`(scsc core)·`0014`(wlan), `mainline/README.md`). 교훈: S-Boot가 안 켜는
   WLBT용 **PMIC LDO 4개를 always-on**으로 해야 함(없으면 -84 dBm·인증 실패 0x800c), 펌웨어 이벤트 로그 MLME_EVENT_LOG_IND, NULL 서비스 시험
