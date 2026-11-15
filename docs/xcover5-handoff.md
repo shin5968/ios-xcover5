@@ -566,6 +566,11 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   SCAN_DONE 즉시 DEL 없이 다음 ADD_SCAN(`xc5wchain=2` 기본; 1=DEL 먼저, 0=끔), 연결 요청은 진행 중 검색의 SCAN_DONE에서 CONNECT.
   이미지 `xc5-ios-wifi44-console.tar`. 볼 것: `keep done`·`chain`이 계속 늘고 `stall at 0`인지, 그 뒤 S24 연결.
   같은 scan id 재-ADD가 거부되면(`scancfm` ≠ 0, done 정지) id를 번갈아 쓰기. 근본 원인(무선이 쉬면 왜 멎는가 — 딥슬립 복귀 실패 추정)은 미해결.
+- **wifi44 결과(사진)**: 연속 검색도 실패 — `done 3 chain 3`, `q0 w159 r15`, `ka 9/9`, `stall at 33 s`, `got 467`, 검색은 3번(AP 3개) 뒤 멈춤.
+  (`abort` 72와 반복된 0x2005/0x2006은 멈춘 뒤 15초 중단 경로가 보낸 것.) "무선이 쉬면 멈춤" 가설도 탈락. 정리: 펌웨어 시작(loop1 = 30 s)
+  후 3~20초 안에 거의 늘 멈춤, 자동 모드에서 바로 연결한 경우만 몇 분 생존. 조치(커밋 29f8025): WLBT의 **WDOG·ALIVE 인터럽트**가 걸리는지와
+  처음 걸린 시각, PMU STATUS/STATES/CTRL_NS/CTRL_S/DEBUG를 하트비트 `XC5 w wdog N at s alive N at s | pmu ...`로. 콘솔 `XC5 WLBT: WDOG interrupt
+  pending at N s`. 이미지 `xc5-ios-wifi45-console.tar`. WDOG가 걸리면 펌웨어 워치독(호스트가 응답해야 하는 무엇) 쪽.
 - **사례 조사 2(2026-11-14)**: (1) `github.com/chelovechishee/sm-t510-ubuntu` — Galaxy Tab A 10.1(Exynos 7904, SCSC S612)에서 삼성 SCSC 드라이버를
   **메인라인 Linux 7.3으로 포팅, Wi-Fi 동작**(`mainline/patches/0013`(scsc core)·`0014`(wlan), `mainline/README.md`). 교훈: S-Boot가 안 켜는
   WLBT용 **PMIC LDO 4개를 always-on**으로 해야 함(없으면 -84 dBm·인증 실패 0x800c), 펌웨어 이벤트 로그 MLME_EVENT_LOG_IND, NULL 서비스 시험
