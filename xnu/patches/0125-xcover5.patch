@@ -3304,10 +3304,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..1315e36
+index 0000000..50847aa
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,2792 @@
+@@ -0,0 +1,2870 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -4413,6 +4413,76 @@ index 0000000..1315e36
 +}
 +
 +/* An Ethernet frame through the data path: MA-UNITDATA.request on the FH data queue, from the TX data area */
++/*
++ * wifi47 (shadow join used): iOS's 12 frames all went out (tx back 12) and nothing came in (rx 0), where the kernel's own
++ * DHCP had worked. iOS gives each network a private (random) Wi-Fi address: frames from it, DHCP's chaddr in it, and
++ * the AP answers to it -- an address the firmware's vif does not take. So (xc5wmacfix=1, the default) a frame's source
++ * and a DHCP chaddr equal to iOS's address are rewritten to the vif's, and frames coming in for the vif get iOS's
++ * address back. The first source, the ethertypes and counts are said in "XC5 w txmac".
++ */
++static int wifi_macfix = 1;
++static uint8_t ios_mac[6];
++static bool ios_mac_set;
++static uint32_t tx_foreign, rx_mapped, tx_types[4], tx_ntypes;
++static uint8_t tx_first[14];
++
++static void
++mac_out(uint8_t *fr, uint32_t len)
++{
++	if (len < 14) {
++		return;
++	}
++	if (tx_ntypes == 0) {
++		memcpy(tx_first, fr, 14);
++	}
++	uint32_t et = (uint32_t)(fr[12] << 8 | fr[13]);
++	if (tx_ntypes < 4) {
++		tx_types[tx_ntypes] = et;
++	}
++	tx_ntypes++;
++	if (memcmp(fr + 6, vif_mac, 6) == 0) {
++		return;
++	}
++	tx_foreign++;
++	if (!ios_mac_set) {
++		memcpy(ios_mac, fr + 6, 6);
++		ios_mac_set = true;
++	}
++	if (!wifi_macfix) {
++		return;
++	}
++	memcpy(fr + 6, vif_mac, 6);
++	/* DHCP (IPv4, UDP 68 -> 67): chaddr too, and the UDP checksum left out (0, allowed for IPv4) */
++	if (et == 0x0800 && len >= 14 + 20 + 8 + 34 && fr[14 + 9] == 17) {
++		uint8_t *ip = fr + 14, *udp = ip + (ip[0] & 15) * 4;
++		if (udp + 8 + 34 <= fr + len && udp[1] == 68 && udp[3] == 67 && memcmp(udp + 8 + 28, ios_mac, 6) == 0) {
++			memcpy(udp + 8 + 28, vif_mac, 6);
++			udp[6] = 0;
++			udp[7] = 0;
++		}
++	}
++}
++
++static void
++mac_in(uint8_t *fr, uint32_t len)
++{
++	if (!wifi_macfix || !ios_mac_set || len < 14) {
++		return;
++	}
++	if (memcmp(fr, vif_mac, 6) == 0) {
++		memcpy(fr, ios_mac, 6);
++		rx_mapped++;
++	}
++	if (fr[12] == 0x08 && fr[13] == 0 && len >= 14 + 20 + 8 + 34 && fr[14 + 9] == 17) {
++		uint8_t *ip = fr + 14, *udp = ip + (ip[0] & 15) * 4;
++		if (udp + 8 + 34 <= fr + len && udp[1] == 67 && udp[3] == 68 && memcmp(udp + 8 + 28, vif_mac, 6) == 0) {
++			memcpy(udp + 8 + 28, ios_mac, 6);
++			udp[6] = 0;
++			udp[7] = 0;
++		}
++	}
++}
++
 +static void
 +send_frame(const uint8_t *fr, uint32_t len)
 +{
@@ -4461,6 +4531,7 @@ index 0000000..1315e36
 +	*(uint16_t *)(m + 14) = head;
 +	memcpy(m + 20 + 4, s, sizeof(s));
 +	memcpy(m + 20 + head, fr, len);
++	mac_out(m + 20 + head, len);
 +	__asm__ volatile ("dsb sy" ::: "memory");
 +	if (q_put(1, HIP_OFF + moff)) {
 +		data_tx++;
@@ -4513,6 +4584,9 @@ index 0000000..1315e36
 +on_frame(const uint8_t *fr, uint32_t n)
 +{
 +	data_rx++;
++	if (wifi_ui) {
++		mac_in((uint8_t *)fr, n);
++	}
 +	deliver(fr, n);
 +	if (n < 14 + 20 + 8 + 240 || fr[12] != 0x08 || fr[13] != 0 || fr[14 + 9] != 17) {
 +		return;
@@ -6026,6 +6100,9 @@ index 0000000..1315e36
 +	printf("XC5 w net %#x dns %u.%u.%u.%u | ui %d phase %d link %d scans %u joins %u leaves %u\n", xc5net_stat, dn[0],
 +	    dn[1], dn[2], dn[3], wifi_ui, sta_phase, link_up, ui_scans, ui_joins, ui_leaves);
 +	/* (both modes) the control slots, when the two poll loops began, and where the firmware stopped reading */
++	printf("XC5 w txmac ios %02x:%02x:%02x:%02x:%02x:%02x foreign %u mapped %u | types %x %x %x %x n %u | cfm %x rx %u\n",
++	    ios_mac[0], ios_mac[1], ios_mac[2], ios_mac[3], ios_mac[4], ios_mac[5], tx_foreign, rx_mapped, tx_types[0],
++	    tx_types[1], tx_types[2], tx_types[3], tx_ntypes, data_cfm, data_rx);
 +	printf("XC5 w shadow tries %u ok %u used %u | ap %d ind %x\n", shadow_tries, shadow_ok, shadow_used, ap_sel, conn_ind);
 +	printf("XC5 w country %x | wdog %u at %u s alive %u at %u s | pmu STATUS %x STATES %x CTRL_NS %x CTRL_S %x DEBUG %x\n", country_res, wdog_n, wdog_at_s,
 +	    alive_n, alive_at_s, rd(pmu, WLBT_STATUS), rd(pmu, WLBT_STATES), rd(pmu, WLBT_CTRL_NS), rd(pmu, WLBT_CTRL_S), rd(pmu, WLBT_DEBUG));
@@ -6095,6 +6172,7 @@ index 0000000..1315e36
 +	PE_parse_boot_argn("xc5wpmu", &wifi_pmu, sizeof(wifi_pmu));
 +	PE_parse_boot_argn("xc5wcountry", &wifi_country, sizeof(wifi_country));
 +	PE_parse_boot_argn("xc5wshadow", &wifi_shadow, sizeof(wifi_shadow));
++	PE_parse_boot_argn("xc5wmacfix", &wifi_macfix, sizeof(wifi_macfix));
 +	thread_t thread;
 +	if (kernel_thread_start(wlbt_thread, NULL, &thread) == KERN_SUCCESS) {
 +		thread_deallocate(thread);
