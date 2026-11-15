@@ -838,6 +838,7 @@ static int wifi_country = 1;
 static uint32_t country_res = 0xffff;
 static int wifi_shadow = 1;    /* xc5wshadow=0: no join of its own before iOS asks */
 static uint32_t shadow_tries, shadow_ok, shadow_used;
+static int wifi_kdhcp = 1;
 static int wifi_chain = 2;      /* 2: the next ADD_SCAN at once, no DEL_SCAN; 1: DEL_SCAN first (wifi34); 0: none */
 static uint32_t rfb_back, rfb_chained, rfb_full;
 static int wifi_pmu = 1;
@@ -1330,8 +1331,13 @@ on_frame(const uint8_t *fr, uint32_t n)
 static void
 dhcp_tick(void)
 {
-	if (wifi_ui) {
-		return;                         /* configd does DHCP on the interface it now knows */
+	/*
+	 * wifi48: Settings took the kernel's join (stage 6, link 1) but iOS sent only IPv6 (12 frames, all 0x86dd, from the
+	 * vif's own address) and never a DHCP DISCOVER; nothing came in. So, joined, the kernel does DHCP itself as in the
+	 * auto mode that worked (xc5wdhcp=0: not), puts the address on en0 and hands it to configd (kern.xc5wifi, libxc5net).
+	 */
+	if (wifi_ui && !(wifi_kdhcp && wifi_shadow && ap_sel >= 0)) {
+		return;
 	}
 	if (conn_ind != 0 || dhcp_state >= 3) {
 		return;
@@ -1837,6 +1843,7 @@ static uint64_t ping_next;
 static char xc5wifi_info[128] = "down";
 SYSCTL_STRING(_kern, OID_AUTO, xc5wifi, CTLFLAG_RD | CTLFLAG_LOCKED, xc5wifi_info, sizeof(xc5wifi_info), "");
 static int xc5net_stat;
+static void net_addr(void);
 SYSCTL_INT(_kern, OID_AUTO, xc5netstat, CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_LOCKED, &xc5net_stat, 0, "");
 
 static void
@@ -2070,7 +2077,12 @@ net_up(void)
 	lck_mtx_lock(&xc5w_mtx);
 	xc5_ifp = ifp;
 	lck_mtx_unlock(&xc5w_mtx);
+	net_addr();
+}
 
+static void
+net_addr(void)
+{
 	uint32_t mask = ack_mask != 0 ? ack_mask : htonl(0xffffff00);
 	socket_t so = NULL;
 	addr_err = sock_socket(PF_INET, SOCK_DGRAM, 0, NULL, NULL, &so);
@@ -2725,6 +2737,10 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 		}
 		if (wifi_ui) {
 			ui_tick();
+			if (xc5_ifp != NULL && dhcp_state == 3 && addr_err == -1) {
+				ifnet_set_flags(xc5_ifp, IFF_UP | IFF_RUNNING, IFF_UP | IFF_RUNNING);
+				net_addr();
+			}
 		}
 		ping_tick();
 		if (tick % 2000 != 0 || i >= 9) {
@@ -2863,6 +2879,7 @@ xc5_wlbt_start(void)
 	PE_parse_boot_argn("xc5wcountry", &wifi_country, sizeof(wifi_country));
 	PE_parse_boot_argn("xc5wshadow", &wifi_shadow, sizeof(wifi_shadow));
 	PE_parse_boot_argn("xc5wmacfix", &wifi_macfix, sizeof(wifi_macfix));
+	PE_parse_boot_argn("xc5wdhcp", &wifi_kdhcp, sizeof(wifi_kdhcp));
 	thread_t thread;
 	if (kernel_thread_start(wlbt_thread, NULL, &thread) == KERN_SUCCESS) {
 		thread_deallocate(thread);
