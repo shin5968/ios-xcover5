@@ -3304,10 +3304,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..e8b8767
+index 0000000..681e378
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,3474 @@
+@@ -0,0 +1,3497 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -4669,7 +4669,8 @@ index 0000000..e8b8767
 +static uint8_t wpa_pmk[32], wpa_ptk[48], wpa_anonce[32], wpa_snonce[32], wpa_gtk[32], wpa_gtk_rsc[8];
 +static uint32_t wpa_gtk_len, wpa_gtk_id, wpa_group_cipher = 0x000FAC04;
 +static uint32_t wpa_m1, wpa_m3, wpa_g1, wpa_mic_bad, wpa_unwrap_bad, wpa_keys_sent, wpa_keys_res = 0xffff;
-+static uint64_t wpa_install_at;
++static uint64_t wpa_install_at, wpa_conn_at;
++static uint32_t wpa_pmk_res = 0xffff, wpa_offload, rx_ind_n, rx_rf_n;
 +static bool wpa_install_group_only;
 +static uint8_t wpa_rsn[22] = { 0x30, 0x14, 0x01, 0x00, 0x00, 0x0F, 0xAC, 0x04, 0x01, 0x00, 0x00, 0x0F, 0xAC, 0x04,
 +	                       0x01, 0x00, 0x00, 0x0F, 0xAC, 0x02, 0x00, 0x00 };
@@ -4863,6 +4864,10 @@ index 0000000..e8b8767
 +static void
 +wpa_tick(uint64_t now_ns)
 +{
++	if (wpa_on && !wpa_done && wpa_m1 == 0 && conn_ind == 0 && wpa_conn_at != 0 && now_ns - wpa_conn_at > 3000000000ull) {
++		wpa_offload++;
++		wpa_done = 1;                   /* no EAPOL came up: the firmware did the handshake with the PMK */
++	}
 +	if (wpa_install_at == 0 || now_ns < wpa_install_at || ap_sel < 0) {
 +		return;
 +	}
@@ -4931,6 +4936,16 @@ index 0000000..e8b8767
 +	memcpy(d + 2, aps[best].raw_ssid, aps[best].ssid_len);
 +	uint32_t dl = 2u + aps[best].ssid_len;
 +	if (wpa_on) {
++		/*
++		 * wifi53: S24 (WPA2) was associated (shadow ok 1) but no EAPOL frame ever came (rx 0, m1 0) and the AP left
++		 * with reason 15 (4-way handshake timeout); the firmware also reported a fault on our CONNECT (2c76 arg
++		 * 200b). Samsung's driver gives the firmware the PMK (MLME-SET-PMK 0x201c, cfg80211_ops.c add_key with
++		 * WLAN_CIPHER_SUITE_PMK) when the handshake is offloaded: then the firmware does it and passes no EAPOL up.
++		 * So the PMK goes in first; if keys are not done by the host within 3 s of the join, the firmware's are taken.
++		 */
++		uint8_t ps[24] = { 0x1c, 0x20 };
++		ps[10] = 1;
++		send_sig(ps, sizeof(ps), wpa_pmk, sizeof(wpa_pmk));
 +		wpa_rsn_for(aps[best].elements, aps[best].elements_length);
 +		memcpy(d + dl, wpa_rsn, sizeof(wpa_rsn));
 +		dl += sizeof(wpa_rsn);
@@ -5276,6 +5291,12 @@ index 0000000..e8b8767
 +		}
 +		break;
 +	}
++	case 0x211c:                            /* MLME_SET_PMK_CFM */
++		wpa_pmk_res = *(uint16_t *)(sig + 12);
++		break;
++	case 0x230d:                            /* MLME_RECEIVED_FRAME_IND */
++		rx_rf_n++;
++		break;
 +	case 0x2118:                            /* MLME_SETKEYS_CFM */
 +		wpa_keys_res = *(uint16_t *)(sig + 12);
 +		break;
@@ -5376,6 +5397,7 @@ index 0000000..e8b8767
 +		s[10] = 1;
 +		if (conn_ind == 0) {
 +			send_sig(s, sizeof(s), NULL, 0);        /* MLME_CONNECT_RES */
++			absolutetime_to_nanoseconds(mach_absolute_time(), &wpa_conn_at);
 +			if (wifi_ui && sta_phase != REDWOOD_STA_JOINING) {
 +				shadow_ok++;
 +				printf("XC5 WLBT: joined %s on its own (shadow), link kept down for iOS\n", ap_sel >= 0 ? aps[ap_sel].ssid : "?");
@@ -5434,6 +5456,7 @@ index 0000000..e8b8767
 +		data_cfm = *(uint16_t *)(sig + 12);
 +		break;
 +	case 0x1300: {                          /* MA_UNITDATA_IND */
++		rx_ind_n++;
 +		uint16_t pil = *(uint16_t *)(sig + 20);
 +		if (pil < n) {
 +			on_frame(data + pil, n - pil);
@@ -6699,8 +6722,8 @@ index 0000000..e8b8767
 +	printf("XC5 w net %#x dns %u.%u.%u.%u | ui %d phase %d link %d scans %u joins %u leaves %u\n", xc5net_stat, dn[0],
 +	    dn[1], dn[2], dn[3], wifi_ui, sta_phase, link_up, ui_scans, ui_joins, ui_leaves);
 +	/* (both modes) the control slots, when the two poll loops began, and where the firmware stopped reading */
-+	printf("XC5 w bpf %d in %u out %u | wpa %d done %d m1 %u m3 %u g1 %u micbad %u unwrapbad %u keys %u res %x gc %x gtk %u\n", bpf_err, bpf_in, bpf_out,
-+	    wpa_on, wpa_done, wpa_m1, wpa_m3, wpa_g1, wpa_mic_bad, wpa_unwrap_bad, wpa_keys_sent, wpa_keys_res, wpa_group_cipher, wpa_gtk_len);
++	printf("XC5 w bpf %d in %u out %u | wpa %d done %d m1 %u m3 %u g1 %u micbad %u unwrapbad %u keys %u res %x gc %x gtk %u | pmk %x offload %u ind %u rf %u\n", bpf_err, bpf_in, bpf_out,
++	    wpa_on, wpa_done, wpa_m1, wpa_m3, wpa_g1, wpa_mic_bad, wpa_unwrap_bad, wpa_keys_sent, wpa_keys_res, wpa_group_cipher, wpa_gtk_len, wpa_pmk_res, wpa_offload, rx_ind_n, rx_rf_n);
 +	printf("XC5 w txmac ios %02x:%02x:%02x:%02x:%02x:%02x foreign %u mapped %u | types %x %x %x %x n %u | cfm %x rx %u\n",
 +	    ios_mac[0], ios_mac[1], ios_mac[2], ios_mac[3], ios_mac[4], ios_mac[5], tx_foreign, rx_mapped, tx_types[0],
 +	    tx_types[1], tx_types[2], tx_types[3], tx_ntypes, data_cfm, data_rx);
