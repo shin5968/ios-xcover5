@@ -55,6 +55,7 @@
 #include <net/if_ether.h>
 #include <net/kpi_interface.h>
 #include <net/bpf.h>
+#include <sys/random.h>
 #include <net/route.h>
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -1052,6 +1053,519 @@ static uint8_t leave_sig[32];                /* (signals go out from the Wi-Fi t
 static void send_connect_to(int best);
 static void send_del_scan(int next, uint64_t now_ns);
 
+/*
+ * WPA2-PSK (step 5): the 4-way handshake is the host's to do (Samsung's driver leaves it to wpa_supplicant and installs
+ * what comes of it with MLME-SETKEYS.request 0x2018 {vif; length (bits); key_id; key_type 1 pairwise / 0 group;
+ * address; sequence_number[8]; cipher_suite_selector}, data the key -- mlme.c slsi_mlme_set_key). Here it is done in
+ * the kernel: the PMK (given by wifid, or PBKDF2-SHA1 of the passphrase and the name, 4096 rounds), the PTK (PRF-384
+ * "Pairwise key expansion"), EAPOL-Key messages 2 and 4 with their HMAC-SHA1 MICs, and the GTK from message 3's key
+ * data (AES key unwrap, RFC 3394, with the KEK). CCMP pairwise, the group cipher the access point names (CCMP or TKIP).
+ * The CONNECT carries our RSN element after the SSID element, as slsi_mlme_connect appends the security element.
+ */
+struct sha1c {
+	uint32_t h[5];
+	uint64_t n;
+	uint8_t b[64];
+	uint32_t bl;
+};
+
+static inline uint32_t
+rol32(uint32_t x, int s)
+{
+	return x << s | x >> (32 - s);
+}
+
+static void
+sha1_blk(struct sha1c *c, const uint8_t *p)
+{
+	uint32_t w[80];
+	for (int i = 0; i < 16; i++) {
+		w[i] = (uint32_t)p[4 * i] << 24 | (uint32_t)p[4 * i + 1] << 16 | (uint32_t)p[4 * i + 2] << 8 | p[4 * i + 3];
+	}
+	for (int i = 16; i < 80; i++) {
+		w[i] = rol32(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+	}
+	uint32_t a = c->h[0], b = c->h[1], cc = c->h[2], d = c->h[3], e = c->h[4];
+	for (int i = 0; i < 80; i++) {
+		uint32_t f, k;
+		if (i < 20) {
+			f = (b & cc) | (~b & d);
+			k = 0x5A827999;
+		} else if (i < 40) {
+			f = b ^ cc ^ d;
+			k = 0x6ED9EBA1;
+		} else if (i < 60) {
+			f = (b & cc) | (b & d) | (cc & d);
+			k = 0x8F1BBCDC;
+		} else {
+			f = b ^ cc ^ d;
+			k = 0xCA62C1D6;
+		}
+		uint32_t t = rol32(a, 5) + f + e + k + w[i];
+		e = d;
+		d = cc;
+		cc = rol32(b, 30);
+		b = a;
+		a = t;
+	}
+	c->h[0] += a;
+	c->h[1] += b;
+	c->h[2] += cc;
+	c->h[3] += d;
+	c->h[4] += e;
+}
+
+static void
+sha1_init(struct sha1c *c)
+{
+	c->h[0] = 0x67452301;
+	c->h[1] = 0xEFCDAB89;
+	c->h[2] = 0x98BADCFE;
+	c->h[3] = 0x10325476;
+	c->h[4] = 0xC3D2E1F0;
+	c->n = 0;
+	c->bl = 0;
+}
+
+static void
+sha1_update(struct sha1c *c, const uint8_t *p, uint32_t n)
+{
+	c->n += n;
+	while (n > 0) {
+		uint32_t k = MIN(n, 64 - c->bl);
+		memcpy(c->b + c->bl, p, k);
+		c->bl += k;
+		p += k;
+		n -= k;
+		if (c->bl == 64) {
+			sha1_blk(c, c->b);
+			c->bl = 0;
+		}
+	}
+}
+
+static void
+sha1_final(struct sha1c *c, uint8_t out[20])
+{
+	uint64_t bits = c->n * 8;
+	uint8_t pad = 0x80, z = 0;
+	sha1_update(c, &pad, 1);
+	while (c->bl != 56) {
+		sha1_update(c, &z, 1);
+	}
+	uint8_t len[8];
+	for (int i = 0; i < 8; i++) {
+		len[i] = (uint8_t)(bits >> (56 - 8 * i));
+	}
+	sha1_update(c, len, 8);
+	for (int i = 0; i < 5; i++) {
+		out[4 * i] = (uint8_t)(c->h[i] >> 24);
+		out[4 * i + 1] = (uint8_t)(c->h[i] >> 16);
+		out[4 * i + 2] = (uint8_t)(c->h[i] >> 8);
+		out[4 * i + 3] = (uint8_t)c->h[i];
+	}
+}
+
+/* HMAC-SHA1 of up to three pieces */
+static void
+hmac_sha1(const uint8_t *key, uint32_t klen, const uint8_t *d1, uint32_t l1, const uint8_t *d2, uint32_t l2,
+    const uint8_t *d3, uint32_t l3, uint8_t out[20])
+{
+	uint8_t k[64], pad[64], inner[20];
+	bzero(k, sizeof(k));
+	if (klen > 64) {
+		struct sha1c c;
+		sha1_init(&c);
+		sha1_update(&c, key, klen);
+		sha1_final(&c, k);
+	} else {
+		memcpy(k, key, klen);
+	}
+	struct sha1c c;
+	for (int i = 0; i < 64; i++) {
+		pad[i] = k[i] ^ 0x36;
+	}
+	sha1_init(&c);
+	sha1_update(&c, pad, 64);
+	if (l1) {
+		sha1_update(&c, d1, l1);
+	}
+	if (l2) {
+		sha1_update(&c, d2, l2);
+	}
+	if (l3) {
+		sha1_update(&c, d3, l3);
+	}
+	sha1_final(&c, inner);
+	for (int i = 0; i < 64; i++) {
+		pad[i] = k[i] ^ 0x5c;
+	}
+	sha1_init(&c);
+	sha1_update(&c, pad, 64);
+	sha1_update(&c, inner, 20);
+	sha1_final(&c, out);
+}
+
+/* PMK = PBKDF2-HMAC-SHA1(passphrase, ssid, 4096, 32) */
+static void
+wpa_pbkdf2(const uint8_t *pass, uint32_t plen, const uint8_t *ssid, uint32_t slen, uint8_t pmk[32])
+{
+	uint8_t out[40];
+	for (uint32_t blk = 1; blk <= 2; blk++) {
+		uint8_t ctr[4] = { 0, 0, 0, (uint8_t)blk }, u[20], t[20];
+		hmac_sha1(pass, plen, ssid, slen, ctr, 4, NULL, 0, u);
+		memcpy(t, u, 20);
+		for (int i = 1; i < 4096; i++) {
+			hmac_sha1(pass, plen, u, 20, NULL, 0, NULL, 0, u);
+			for (int j = 0; j < 20; j++) {
+				t[j] ^= u[j];
+			}
+		}
+		memcpy(out + (blk - 1) * 20, t, 20);
+	}
+	memcpy(pmk, out, 32);
+}
+
+/* AES-128 decryption of one block, for the key unwrap */
+static uint8_t aes_sb[256], aes_isb[256];
+
+static inline uint8_t
+rol8(uint8_t x, int s)
+{
+	return (uint8_t)(x << s | x >> (8 - s));
+}
+
+static void
+aes_tables(void)
+{
+	if (aes_sb[0] == 0x63) {
+		return;
+	}
+	uint8_t p = 1, q = 1;
+	do {
+		p = (uint8_t)(p ^ (uint8_t)(p << 1) ^ ((p & 0x80) ? 0x1B : 0));
+		q ^= (uint8_t)(q << 1);
+		q ^= (uint8_t)(q << 2);
+		q ^= (uint8_t)(q << 4);
+		q ^= (q & 0x80) ? 0x09 : 0;
+		uint8_t x = (uint8_t)(q ^ rol8(q, 1) ^ rol8(q, 2) ^ rol8(q, 3) ^ rol8(q, 4));
+		aes_sb[p] = x ^ 0x63;
+	} while (p != 1);
+	aes_sb[0] = 0x63;
+	for (int i = 0; i < 256; i++) {
+		aes_isb[aes_sb[i]] = (uint8_t)i;
+	}
+}
+
+static uint8_t
+gmul(uint8_t a, uint8_t b)
+{
+	uint8_t r = 0;
+	while (b) {
+		if (b & 1) {
+			r ^= a;
+		}
+		a = (uint8_t)((a << 1) ^ ((a & 0x80) ? 0x1B : 0));
+		b >>= 1;
+	}
+	return r;
+}
+
+static void
+aes128_expand(const uint8_t key[16], uint8_t rk[176])
+{
+	aes_tables();
+	memcpy(rk, key, 16);
+	uint8_t rcon = 1;
+	for (int i = 16; i < 176; i += 4) {
+		uint8_t t[4] = { rk[i - 4], rk[i - 3], rk[i - 2], rk[i - 1] };
+		if (i % 16 == 0) {
+			uint8_t u = t[0];
+			t[0] = aes_sb[t[1]] ^ rcon;
+			t[1] = aes_sb[t[2]];
+			t[2] = aes_sb[t[3]];
+			t[3] = aes_sb[u];
+			rcon = (uint8_t)((rcon << 1) ^ ((rcon & 0x80) ? 0x1B : 0));
+		}
+		for (int j = 0; j < 4; j++) {
+			rk[i + j] = rk[i - 16 + j] ^ t[j];
+		}
+	}
+}
+
+static void
+aes128_decrypt(const uint8_t rk[176], uint8_t s[16])
+{
+	for (int i = 0; i < 16; i++) {
+		s[i] ^= rk[160 + i];
+	}
+	for (int round = 9; round >= 0; round--) {
+		uint8_t t[16];
+		for (int r = 0; r < 4; r++) {                   /* InvShiftRows (s[r + 4c]) */
+			for (int c = 0; c < 4; c++) {
+				t[r + 4 * ((c + r) % 4)] = s[r + 4 * c];
+			}
+		}
+		for (int i = 0; i < 16; i++) {                  /* InvSubBytes, AddRoundKey */
+			s[i] = aes_isb[t[i]] ^ rk[16 * round + i];
+		}
+		if (round > 0) {                                /* InvMixColumns */
+			for (int c = 0; c < 4; c++) {
+				uint8_t a0 = s[4 * c], a1 = s[4 * c + 1], a2 = s[4 * c + 2], a3 = s[4 * c + 3];
+				s[4 * c] = gmul(a0, 14) ^ gmul(a1, 11) ^ gmul(a2, 13) ^ gmul(a3, 9);
+				s[4 * c + 1] = gmul(a0, 9) ^ gmul(a1, 14) ^ gmul(a2, 11) ^ gmul(a3, 13);
+				s[4 * c + 2] = gmul(a0, 13) ^ gmul(a1, 9) ^ gmul(a2, 14) ^ gmul(a3, 11);
+				s[4 * c + 3] = gmul(a0, 11) ^ gmul(a1, 13) ^ gmul(a2, 9) ^ gmul(a3, 14);
+			}
+		}
+	}
+}
+
+/* RFC 3394 key unwrap: in n+1 64-bit blocks, out n; true if the integrity value checks */
+static bool
+aes_unwrap(const uint8_t kek[16], const uint8_t *in, uint32_t len, uint8_t *out)
+{
+	if (len < 24 || len % 8 != 0 || len > 256) {
+		return false;
+	}
+	uint32_t n = len / 8 - 1;
+	uint8_t rk[176], a[8], b[16];
+	aes128_expand(kek, rk);
+	memcpy(a, in, 8);
+	memcpy(out, in + 8, n * 8);
+	for (int j = 5; j >= 0; j--) {
+		for (uint32_t i = n; i >= 1; i--) {
+			uint64_t t = (uint64_t)n * (uint64_t)j + i;
+			for (int x = 0; x < 8; x++) {
+				b[x] = a[x] ^ (uint8_t)(t >> (56 - 8 * x));
+			}
+			memcpy(b + 8, out + (i - 1) * 8, 8);
+			aes128_decrypt(rk, b);
+			memcpy(a, b, 8);
+			memcpy(out + (i - 1) * 8, b + 8, 8);
+		}
+	}
+	for (int x = 0; x < 8; x++) {
+		if (a[x] != 0xA6) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool wpa_on;
+static volatile uint32_t wpa_done;
+static uint8_t wpa_pmk[32], wpa_ptk[48], wpa_anonce[32], wpa_snonce[32], wpa_gtk[32], wpa_gtk_rsc[8];
+static uint32_t wpa_gtk_len, wpa_gtk_id, wpa_group_cipher = 0x000FAC04;
+static uint32_t wpa_m1, wpa_m3, wpa_g1, wpa_mic_bad, wpa_unwrap_bad, wpa_keys_sent, wpa_keys_res = 0xffff;
+static uint64_t wpa_install_at;
+static bool wpa_install_group_only;
+static uint8_t wpa_rsn[22] = { 0x30, 0x14, 0x01, 0x00, 0x00, 0x0F, 0xAC, 0x04, 0x01, 0x00, 0x00, 0x0F, 0xAC, 0x04,
+	                       0x01, 0x00, 0x00, 0x0F, 0xAC, 0x02, 0x00, 0x00 };
+static void send_frame(const uint8_t *fr, uint32_t len);
+
+/* the group cipher the access point's RSN element names (CCMP 4 or TKIP 2), into our element */
+static void
+wpa_rsn_for(const uint8_t *ies, uint32_t n)
+{
+	wpa_group_cipher = 0x000FAC04;
+	for (uint32_t p = 0; p + 2 <= n && p + 2 + ies[p + 1] <= n; p += 2u + ies[p + 1]) {
+		if (ies[p] == 48 && ies[p + 1] >= 6) {
+			uint8_t g = ies[p + 7];
+			if (g == 2 || g == 4) {
+				wpa_group_cipher = 0x000FAC00u | g;
+				wpa_rsn[7] = g;
+			}
+			return;
+		}
+	}
+	wpa_rsn[7] = 4;
+}
+
+static void
+wpa_prf_ptk(const uint8_t *aa, const uint8_t *spa)
+{
+	uint8_t data[76];
+	const uint8_t *lo = memcmp(aa, spa, 6) < 0 ? aa : spa, *hi = lo == aa ? spa : aa;
+	memcpy(data, lo, 6);
+	memcpy(data + 6, hi, 6);
+	const uint8_t *nlo = memcmp(wpa_anonce, wpa_snonce, 32) < 0 ? wpa_anonce : wpa_snonce;
+	const uint8_t *nhi = nlo == wpa_anonce ? wpa_snonce : wpa_anonce;
+	memcpy(data + 12, nlo, 32);
+	memcpy(data + 44, nhi, 32);
+	static const uint8_t label[23] = "Pairwise key expansion";     /* with its terminating 0 */
+	uint8_t out[60];
+	for (uint8_t i = 0; i < 3; i++) {
+		hmac_sha1(wpa_pmk, 32, label, sizeof(label), data, sizeof(data), &i, 1, out + 20 * i);
+	}
+	memcpy(wpa_ptk, out, 48);
+}
+
+/* an EAPOL-Key frame from us: info, replay counter, nonce (or zeros), key data (or none), MIC over it with the KCK */
+static void
+wpa_send_key(const uint8_t *ap, uint16_t info, const uint8_t replay[8], const uint8_t *nonce, const uint8_t *kd,
+    uint16_t kdlen)
+{
+	uint8_t fr[14 + 4 + 95 + 32];
+	uint16_t body = (uint16_t)(95 + kdlen);
+	bzero(fr, sizeof(fr));
+	memcpy(fr, ap, 6);
+	memcpy(fr + 6, vif_mac, 6);
+	fr[12] = 0x88;
+	fr[13] = 0x8e;
+	uint8_t *e = fr + 14;
+	e[0] = 1;                                       /* 802.1X-2001 */
+	e[1] = 3;                                       /* EAPOL-Key */
+	e[2] = (uint8_t)(body >> 8);
+	e[3] = (uint8_t)body;
+	uint8_t *k = e + 4;
+	k[0] = 2;                                       /* RSN key descriptor */
+	k[1] = (uint8_t)(info >> 8);
+	k[2] = (uint8_t)info;
+	memcpy(k + 5, replay, 8);
+	if (nonce != NULL) {
+		memcpy(k + 13, nonce, 32);
+	}
+	k[93] = (uint8_t)(kdlen >> 8);
+	k[94] = (uint8_t)kdlen;
+	if (kdlen) {
+		memcpy(k + 95, kd, kdlen);
+	}
+	uint8_t mic[20];
+	hmac_sha1(wpa_ptk, 16, e, 4u + body, NULL, 0, NULL, 0, mic);
+	memcpy(k + 77, mic, 16);
+	send_frame(fr, 14u + 4u + body);
+}
+
+static void
+wpa_setkey(uint16_t type, uint16_t id, const uint8_t *addr, const uint8_t *key, uint32_t klen, uint32_t cipher,
+    const uint8_t *rsc)
+{
+	uint8_t s[56] = { 0x18, 0x20 };
+	s[10] = 1;                                      /* vif */
+	*(uint16_t *)(s + 12) = (uint16_t)(klen * 8);
+	*(uint16_t *)(s + 14) = id;
+	*(uint16_t *)(s + 16) = type;
+	memcpy(s + 18, addr, 6);
+	if (rsc != NULL) {
+		for (int i = 0; i < 8; i += 2) {
+			*(uint16_t *)(s + 24 + i) = (uint16_t)(rsc[i] | rsc[i + 1] << 8);
+		}
+	}
+	*(uint32_t *)(s + 40) = cipher;
+	send_sig(s, sizeof(s), key, klen);
+	wpa_keys_sent++;
+}
+
+/* the GTK KDE in decrypted key data: dd len 00 0f ac 01 {keyid & 3, 0} gtk */
+static bool
+wpa_gtk_from(const uint8_t *kd, uint32_t n)
+{
+	for (uint32_t p = 0; p + 2 <= n && p + 2 + kd[p + 1] <= n; p += 2u + kd[p + 1]) {
+		if (kd[p] == 0xdd && kd[p + 1] >= 6 + 16 && kd[p + 2] == 0 && kd[p + 3] == 0x0f && kd[p + 4] == 0xac &&
+		    kd[p + 5] == 1) {
+			wpa_gtk_id = kd[p + 6] & 3;
+			wpa_gtk_len = MIN((uint32_t)kd[p + 1] - 6, 32u);
+			memcpy(wpa_gtk, kd + p + 8, wpa_gtk_len);
+			return true;
+		}
+	}
+	return false;
+}
+
+/* an EAPOL frame from the access point (in the Wi-Fi thread's poll); true if it was ours to take */
+static bool
+wpa_eapol_in(const uint8_t *fr, uint32_t n)
+{
+	if (!wpa_on || n < 14 + 4 + 95 || fr[12] != 0x88 || fr[13] != 0x8e || fr[15] != 3 || ap_sel < 0) {
+		return false;
+	}
+	const uint8_t *e = fr + 14, *k = e + 4, *ap = aps[ap_sel].bssid;
+	uint16_t body = (uint16_t)(e[2] << 8 | e[3]), info = (uint16_t)(k[1] << 8 | k[2]);
+	uint16_t kdlen = (uint16_t)(k[93] << 8 | k[94]);
+	if (4u + body > n - 14 || 95u + kdlen > body) {
+		return true;
+	}
+	bool pairwise = info & 0x0008, install = info & 0x0040, ack = info & 0x0080, mic = info & 0x0100;
+	if (pairwise && ack && !mic) {                  /* message 1 */
+		wpa_m1++;
+		memcpy(wpa_anonce, k + 13, 32);
+		read_random(wpa_snonce, sizeof(wpa_snonce));
+		wpa_prf_ptk(ap, vif_mac);
+		wpa_send_key(ap, 0x010A, k + 5, wpa_snonce, wpa_rsn, sizeof(wpa_rsn));
+		return true;
+	}
+	if (!mic) {
+		return true;
+	}
+	/* messages 3 and group 1: the MIC is checked first */
+	static uint8_t copy[512];
+	if (4u + body > sizeof(copy)) {
+		return true;
+	}
+	memcpy(copy, e, 4u + body);
+	bzero(copy + 4 + 77, 16);
+	uint8_t want[20];
+	hmac_sha1(wpa_ptk, 16, copy, 4u + body, NULL, 0, NULL, 0, want);
+	if (memcmp(want, k + 77, 16) != 0) {
+		wpa_mic_bad++;
+		return true;
+	}
+	static uint8_t kd[256];
+	bool have = false;
+	if ((info & 0x1000) && kdlen >= 24) {
+		have = aes_unwrap(wpa_ptk + 16, k + 95, kdlen, kd);
+		if (!have) {
+			wpa_unwrap_bad++;
+			return true;
+		}
+	}
+	if (pairwise && ack && install) {               /* message 3 */
+		wpa_m3++;
+		if (have) {
+			wpa_gtk_from(kd, kdlen - 8u);
+		}
+		memcpy(wpa_gtk_rsc, k + 61, 8);
+		wpa_send_key(ap, 0x030A, k + 5, NULL, NULL, 0);
+		uint64_t ns;
+		absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
+		wpa_install_at = ns + 100000000ull;     /* message 4 out first, then the keys */
+		wpa_install_group_only = false;
+		return true;
+	}
+	if (!pairwise && ack) {                         /* group key handshake message 1 */
+		wpa_g1++;
+		if (have && wpa_gtk_from(kd, kdlen - 8u)) {
+			memcpy(wpa_gtk_rsc, k + 61, 8);
+			wpa_send_key(ap, 0x0302, k + 5, NULL, NULL, 0);
+			uint64_t ns;
+			absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
+			wpa_install_at = ns + 100000000ull;
+			wpa_install_group_only = true;
+		}
+		return true;
+	}
+	return true;
+}
+
+/* in the Wi-Fi thread's poll */
+static void
+wpa_tick(uint64_t now_ns)
+{
+	if (wpa_install_at == 0 || now_ns < wpa_install_at || ap_sel < 0) {
+		return;
+	}
+	wpa_install_at = 0;
+	static const uint8_t bcast[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+	if (!wpa_install_group_only) {
+		wpa_setkey(1, 0, aps[ap_sel].bssid, wpa_ptk + 32, 16, 0x000FAC04, NULL);
+	}
+	if (wpa_gtk_len != 0) {
+		wpa_setkey(0, (uint16_t)wpa_gtk_id, bcast, wpa_gtk, wpa_gtk_len, wpa_group_cipher, wpa_gtk_rsc);
+	}
+	wpa_done = true;
+}
+
 static void
 send_connect(void)
 {
@@ -1083,11 +1597,17 @@ send_connect_to(int best)
 	uint16_t fw = (uint16_t)(2 * aps[best].mhz);
 	s[20] = (uint8_t)fw;
 	s[21] = (uint8_t)(fw >> 8);
-	uint8_t d[34];
+	uint8_t d[34 + sizeof(wpa_rsn)];
 	d[0] = 0;
 	d[1] = aps[best].ssid_len;
 	memcpy(d + 2, aps[best].raw_ssid, aps[best].ssid_len);
-	send_sig(s, sizeof(s), d, 2u + aps[best].ssid_len);
+	uint32_t dl = 2u + aps[best].ssid_len;
+	if (wpa_on) {
+		wpa_rsn_for(aps[best].elements, aps[best].elements_length);
+		memcpy(d + dl, wpa_rsn, sizeof(wpa_rsn));
+		dl += sizeof(wpa_rsn);
+	}
+	send_sig(s, sizeof(s), d, dl);
 	printf("XC5 WLBT: joining %s (%u MHz, %s)\n", aps[best].ssid, aps[best].mhz, aps[best].open ? "open" : "secured");
 }
 
@@ -1276,6 +1796,9 @@ static void
 on_frame(const uint8_t *fr, uint32_t n)
 {
 	data_rx++;
+	if (wpa_eapol_in(fr, n)) {
+		return;
+	}
 	if (wifi_ui) {
 		mac_in((uint8_t *)fr, n);
 	}
@@ -1340,7 +1863,7 @@ dhcp_tick(void)
 	if (wifi_ui && !(wifi_kdhcp && wifi_shadow && ap_sel >= 0)) {
 		return;
 	}
-	if (conn_ind != 0 || dhcp_state >= 3) {
+	if (conn_ind != 0 || dhcp_state >= 3 || (wpa_on && !wpa_done)) {
 		return;
 	}
 	uint64_t now = mach_absolute_time(), ns;
@@ -1425,6 +1948,9 @@ on_signal(uint32_t ref)
 		}
 		break;
 	}
+	case 0x2118:                            /* MLME_SETKEYS_CFM */
+		wpa_keys_res = *(uint16_t *)(sig + 12);
+		break;
 	case 0x2106:                            /* MLME_DEL_SCAN_CFM */
 		del_cfm = *(uint16_t *)(sig + 12);
 		del_done = true;
@@ -1704,6 +2230,7 @@ hip_poll_locked(void)
 		sig_quiet = false;
 		ka_sent++;
 	}
+	wpa_tick(now_ns);
 	if (del_next != 0 && (del_done || now_ns - del_sent_ns > 2000000000ull)) {
 		int next = del_next;
 		del_next = 0;
@@ -2365,9 +2892,14 @@ sta_join(const struct redwood_sta_join *what)
 		return join_err = EBUSY;
 	}
 	join_stage = 2;
-	if (what->security != REDWOOD_STA_OPEN) {
-		printf("XC5 WLBT: a WPA2 join is asked for: not built yet\n");
-		return join_err = EOPNOTSUPP;   /* (Apple80211's "unable to join", not "wrong password": EAUTH would say that) */
+	if (what->security == REDWOOD_STA_WPA2_PSK) {
+		if (what->passphrase_length >= 8) {
+			wpa_pbkdf2(what->passphrase, what->passphrase_length, what->ssid, what->ssid_length, wpa_pmk);
+		} else {
+			memcpy(wpa_pmk, what->pmk, sizeof(wpa_pmk));
+		}
+	} else if (what->security != REDWOOD_STA_OPEN) {
+		return join_err = EOPNOTSUPP;
 	}
 	lck_mtx_lock(&xc5w_mtx);
 	int k = find_ap(what);
@@ -2410,6 +2942,10 @@ sta_join(const struct redwood_sta_join *what)
 	}
 	join_stage = 4;
 	lck_mtx_lock(&xc5w_mtx);
+	wpa_on = what->security == REDWOOD_STA_WPA2_PSK;
+	wpa_done = false;
+	wpa_install_at = 0;
+	wpa_gtk_len = 0;
 	conn_cfm = 0xffff;
 	conn_ind = 0xffff;
 	sta_phase = REDWOOD_STA_JOINING;
@@ -2424,10 +2960,22 @@ sta_join(const struct redwood_sta_join *what)
 		    scan_done, mlme_sent, mlme_got);
 		return join_err = conn_ind == 0xffff ? ETIMEDOUT : ECONNREFUSED;
 	}
+	if (wpa_on) {
+		/* the 4-way handshake: messages 1 and 3 come within a second or two; none, or a bad MIC: a wrong passphrase */
+		wait_until((volatile uint32_t *)&wpa_done, 0, 10000);
+		if (!wpa_done) {
+			join_stage = 7;
+			printf("XC5 WLBT: WPA2 FAILED m1 %u m3 %u mic bad %u unwrap bad %u\n", wpa_m1, wpa_m3, wpa_mic_bad,
+			    wpa_unwrap_bad);
+			sta_leave_call();
+			wpa_on = false;
+			return join_err = EAUTH;
+		}
+	}
 	join_err = 0;
 	sta_phase = REDWOOD_STA_JOINED;
 	link_state(true);
-	printf("XC5 WLBT: joined (from Settings)\n");
+	printf("XC5 WLBT: joined (from Settings)%s\n", wpa_on ? " with WPA2" : "");
 	return 0;
 }
 
@@ -2435,7 +2983,7 @@ int
 sta_leave_call(void)
 {
 	ui_leaves++;
-	if (ap_sel >= 0 && conn_ind == 0 && !wifi_shadow) {
+	if (ap_sel >= 0 && conn_ind == 0 && (!wifi_shadow || wpa_on)) {
 		/* MLME-DISCONNECT.request 0x200e {vif 1; peer_sta_address; reason_code 3 (leaving)} */
 		uint8_t s[32] = { 0x0e, 0x20 };
 		s[10] = 1;
@@ -2823,7 +3371,8 @@ xc5_wlbt_heartbeat(void)
 	printf("XC5 w net %#x dns %u.%u.%u.%u | ui %d phase %d link %d scans %u joins %u leaves %u\n", xc5net_stat, dn[0],
 	    dn[1], dn[2], dn[3], wifi_ui, sta_phase, link_up, ui_scans, ui_joins, ui_leaves);
 	/* (both modes) the control slots, when the two poll loops began, and where the firmware stopped reading */
-	printf("XC5 w bpf %d in %u out %u\n", bpf_err, bpf_in, bpf_out);
+	printf("XC5 w bpf %d in %u out %u | wpa %d done %d m1 %u m3 %u g1 %u micbad %u unwrapbad %u keys %u res %x gc %x gtk %u\n", bpf_err, bpf_in, bpf_out,
+	    wpa_on, wpa_done, wpa_m1, wpa_m3, wpa_g1, wpa_mic_bad, wpa_unwrap_bad, wpa_keys_sent, wpa_keys_res, wpa_group_cipher, wpa_gtk_len);
 	printf("XC5 w txmac ios %02x:%02x:%02x:%02x:%02x:%02x foreign %u mapped %u | types %x %x %x %x n %u | cfm %x rx %u\n",
 	    ios_mac[0], ios_mac[1], ios_mac[2], ios_mac[3], ios_mac[4], ios_mac[5], tx_foreign, rx_mapped, tx_types[0],
 	    tx_types[1], tx_types[2], tx_types[3], tx_ntypes, data_cfm, data_rx);
