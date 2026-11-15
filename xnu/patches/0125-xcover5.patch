@@ -3304,10 +3304,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..7f9cdc6
+index 0000000..17cf221
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,2682 @@
+@@ -0,0 +1,2708 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -4344,6 +4344,7 @@ index 0000000..7f9cdc6
 +static uint64_t del_sent_ns;
 +static uint32_t del_cfm = 0xffff, chain_scans, join_on_running;
 +static uint32_t q_kicks, q_kick_ok, q_stall_ms;
++static uint32_t wdog_at_s, alive_at_s, wdog_n, alive_n;
 +static uint64_t q_stall_since, q_kick_at;
 +static uint8_t q_stall_r;
 +static volatile uint8_t *apmbox;
@@ -5058,6 +5059,29 @@ index 0000000..7f9cdc6
 +	 * (CONNECT: no confirm). We had never cleared its interrupts to us: Samsung's driver clears each one it handles
 +	 * (platform_mif_irq_bit_clear: INTCR0 = bit << 16). Cleared here, before the queues are read.
 +	 */
++	/*
++	 * wifi44: chained scans did not help (done 3, stall at 33 s, ~3 s after the firmware started at 30 s). Did the
++	 * core's own watchdog or reset request fire? WLBT's WDOG and ALIVE interrupts (never taken, only watched): the first
++	 * uptime each was seen pending.
++	 */
++	{
++		uint64_t ns;
++		absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
++		if (spi_pending(SPI_WDOG)) {
++			wdog_n++;
++			if (wdog_at_s == 0) {
++				wdog_at_s = (uint32_t)(ns / 1000000000ull);
++				printf("XC5 WLBT: WDOG interrupt pending at %u s\n", wdog_at_s);
++			}
++		}
++		if (spi_pending(SPI_ALIVE)) {
++			alive_n++;
++			if (alive_at_s == 0) {
++				alive_at_s = (uint32_t)(ns / 1000000000ull);
++				printf("XC5 WLBT: ALIVE interrupt pending at %u s\n", alive_at_s);
++			}
++		}
++	}
 +	uint32_t pend = rd(mbox, INTSR0) & 0xffff0000u;
 +	if (pend != 0) {
 +		wr(mbox, 0x00c, pend);          /* INTCR0 */
@@ -5921,6 +5945,8 @@ index 0000000..7f9cdc6
 +	printf("XC5 w net %#x dns %u.%u.%u.%u | ui %d phase %d link %d scans %u joins %u leaves %u\n", xc5net_stat, dn[0],
 +	    dn[1], dn[2], dn[3], wifi_ui, sta_phase, link_up, ui_scans, ui_joins, ui_leaves);
 +	/* (both modes) the control slots, when the two poll loops began, and where the firmware stopped reading */
++	printf("XC5 w wdog %u at %u s alive %u at %u s | pmu STATUS %x STATES %x CTRL_NS %x CTRL_S %x DEBUG %x\n", wdog_n, wdog_at_s,
++	    alive_n, alive_at_s, rd(pmu, WLBT_STATUS), rd(pmu, WLBT_STATES), rd(pmu, WLBT_CTRL_NS), rd(pmu, WLBT_CTRL_S), rd(pmu, WLBT_DEBUG));
 +	printf("XC5 w ctl back %u force %u busy %x | loop1 %u s loop2 %u s poll %u ms | q0 w%u r%u ka %u/%u stall at %llu s kick %u\n",
 +	    ctl_back, ctl_force, ctl_busy, t_loop1_s, t_loop2_s, poll_ms, *scb(0, 0), *scb(0, 1), ka_sent, ka_got, q_stall_at_s,
 +	    q_kicks);
