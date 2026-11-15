@@ -649,6 +649,7 @@ static const uint8_t q_layout[6][2] = {         /* [queue][write, read] */
 	{ 0, 64 }, { 1, 65 }, { 66, 2 }, { 67, 3 }, { 68, 4 }, { 5, 69 }
 };
 static uint32_t mlme_sent, mlme_got, fh_rfb, tx_slot;
+static uint32_t ctl_busy, ctl_back, ctl_force, t_loop1_s, t_loop2_s, poll_ms = 10;
 static uint16_t mlme_ids[8];
 static bool mlme_asked;
 /* what came back: MLME-GET values, ADD_VIF / ADD_SCAN results, scan results */
@@ -727,7 +728,27 @@ static void
 send_sig(const uint8_t *sigp, uint32_t siglen, const uint8_t *data, uint32_t dlen)
 {
 	struct hip_cfg_head *h = fw_cfg();
-	uint32_t moff = HIP_TX + 0x100000 + (tx_slot++ % 32) * 2048;
+	/*
+	 * wifi42n: the firmware stops unjoined in the auto mode too (not iOS's side). The counts of signals it had read
+	 * when it stopped were 37 twice and 69 (32 + 5, 64 + 5): the 32 control slots were taken in turn whether or not
+	 * the firmware had given them back on FH_RFB (the data slots are tracked, and the joined runs sent under 32
+	 * control signals). Now a control slot is used again only once it has come back (ctl_back); with none free the
+	 * next in turn is taken (ctl_force).
+	 */
+	uint32_t slot = 32;
+	for (uint32_t i = 0; i < 32; i++) {
+		uint32_t c = (tx_slot + i) % 32;
+		if (!(ctl_busy & (1u << c))) {
+			slot = c;
+			break;
+		}
+	}
+	if (slot == 32) {
+		slot = tx_slot % 32;
+		ctl_force++;
+	}
+	tx_slot = slot + 1;
+	uint32_t moff = HIP_TX + 0x100000 + slot * 2048;
 	uint8_t *m = hip + moff;
 	uint16_t sigbuf = (uint16_t)(((20 + siglen + 4 + 3) & ~3u) - 20);
 	uint16_t head = (uint16_t)(sigbuf + (dlen ? h->headroom : 0));
@@ -748,6 +769,7 @@ send_sig(const uint8_t *sigp, uint32_t siglen, const uint8_t *data, uint32_t dle
 	__asm__ volatile ("dsb sy" ::: "memory");
 	if (q_put(0, HIP_OFF + moff)) {
 		mlme_sent++;
+		ctl_busy |= 1u << slot;
 		absolutetime_to_nanoseconds(mach_absolute_time(), &sig_last_ns);
 		if (!sig_quiet)
 		printf("XC5 WLBT: signal %#x (%u + %u bytes) sent, mbulk %#x\n", *(const uint16_t *)sigp, siglen, dlen,
@@ -1465,6 +1487,9 @@ hip_poll_locked(void)
 			tx_busy &= ~(1ull << ((ref - HIP_OFF - HIP_TX) / 2048));
 			absolutetime_to_nanoseconds(mach_absolute_time(), &tx_freed_at);
 			tx_back++;
+		} else if (ref >= HIP_OFF + HIP_TX + 0x100000 && ref < HIP_OFF + HIP_TX + 0x100000 + 32 * 2048) {
+			ctl_busy &= ~(1u << ((ref - HIP_OFF - HIP_TX - 0x100000) / 2048));
+			ctl_back++;
 		}
 		*scb(2, 1) = (uint8_t)(r + 1);
 		fh_rfb++;
@@ -2449,6 +2474,11 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 	xcover5_wlbt_state[0] = 3;
 	printf("XC5 WLBT: configured (KA patch %lld bytes), CFG_ACK given: the core runs from %#x\n", kalen, entry);
 
+	{
+		uint64_t ns0;
+		absolutetime_to_nanoseconds(mach_absolute_time(), &ns0);
+		t_loop1_s = (uint32_t)(ns0 / 1000000000ull);
+	}
 	/* 20 s of what it does */
 	uint32_t last_states = 0xffffffff, last_sr0 = 0xffffffff, last_sr1 = 0xffffffff;
 	bool asked = false;
@@ -2478,6 +2508,12 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 	}
 	/* then the log and the management ring every 0.5 s for good; the outcome said again every 20 s for 3 minutes */
 	/* 10 ms ticks from here on: the network interface's receive path is this loop (step 4c) */
+	{
+		uint64_t ns0;
+		absolutetime_to_nanoseconds(mach_absolute_time(), &ns0);
+		t_loop2_s = (uint32_t)(ns0 / 1000000000ull);
+	}
+	/* xc5wpoll=100: this loop at the first one's pace (the firmware stopped a few seconds after the change, each boot) */
 	for (int i = 0, tick = 0;; tick++) {
 		if (tick % 50 == 0) {
 			read_mgmt();
@@ -2495,7 +2531,7 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 		}
 		ping_tick();
 		if (tick % 2000 != 0 || i >= 9) {
-			delay(10000);
+			delay(poll_ms * 1000);
 			continue;
 		}
 		i++;
@@ -2556,6 +2592,10 @@ xc5_wlbt_heartbeat(void)
 	const uint8_t *dn = (const uint8_t *)&ack_dns;
 	printf("XC5 w net %#x dns %u.%u.%u.%u | ui %d phase %d link %d scans %u joins %u leaves %u\n", xc5net_stat, dn[0],
 	    dn[1], dn[2], dn[3], wifi_ui, sta_phase, link_up, ui_scans, ui_joins, ui_leaves);
+	/* (both modes) the control slots, when the two poll loops began, and where the firmware stopped reading */
+	printf("XC5 w ctl back %u force %u busy %x | loop1 %u s loop2 %u s poll %u ms | q0 w%u r%u ka %u/%u stall at %llu s kick %u\n",
+	    ctl_back, ctl_force, ctl_busy, t_loop1_s, t_loop2_s, poll_ms, *scb(0, 0), *scb(0, 1), ka_sent, ka_got, q_stall_at_s,
+	    q_kicks);
 	if (wifi_ui) {
 		extern unsigned xc5_a80211_requests, xc5_a80211_refused, xc5_a80211_results, xc5_a80211_given, xc5_a80211_scandone;
 		extern int xc5_a80211_last_type, xc5_a80211_last_error;
@@ -2614,6 +2654,7 @@ xc5_wlbt_start(void)
 	PE_parse_boot_argn("xc5wifiui", &wifi_ui, sizeof(wifi_ui));
 	PE_parse_boot_argn("xc5wchain", &wifi_chain, sizeof(wifi_chain));
 	PE_parse_boot_argn("xc5wka", &ka_ms, sizeof(ka_ms));
+	PE_parse_boot_argn("xc5wpoll", &poll_ms, sizeof(poll_ms));
 	PE_parse_boot_argn("xc5widle", &wifi_idle, sizeof(wifi_idle));
 	PE_parse_boot_argn("xc5wpmu", &wifi_pmu, sizeof(wifi_pmu));
 	thread_t thread;
