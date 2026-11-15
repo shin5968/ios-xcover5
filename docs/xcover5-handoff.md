@@ -599,6 +599,12 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   **36a 이후 추가한 것 중 하나가 원인(회귀)**일 가능성. 빌드 없이 가르는 이미지 2개(같은 커널): `xc5-ios-wifi47a-console.tar` = 자동 모드
   (`xc5net=1`, 36a와 같은 인자; 여기서도 멈추면 커널 회귀 확정), `xc5-ios-wifi47m-console.tar` = 설정 앱 모드 + 36a 이후 추가분 끔(`xc5wka=0
   xc5widle=1 xc5wcountry=0 xc5wpmu=0 xc5wchain=0`, 선연결은 켬). 끌 수 없는 추가분: 제어 슬롯 추적·체인 버퍼 반환·15초 검색 중단·WDOG/APM 감시.
+- **wifi47 재시험(사진 19장): 첫 성공 단계** — `shadow tries 1 ok 1 used 1 | ap 1 ind 0`, `ui join ... stage 6 err 0 | cfm 0 ind 0`,
+  `phase 4 link 1`, 펌웨어 끝까지 살아 있음(`q0 w77 r77 ka 768/768 kick 0`, got 19000). 즉 선연결이 동작하고 설정 앱이 그 연결을 받음
+  (부팅마다 성공/실패가 갈림 — 실패 부팅은 시작 2초 만에 멎어 CONNECT 무응답). 남은 문제: `data tx 12 cfm ffff rx 0`, `tx back 12`, `en0 addr -1`
+  → iOS가 보낸 12개는 펌웨어가 모두 소비했지만 수신 0. 가설: iOS의 **비공개 Wi-Fi 주소**(네트워크별 임의 MAC)로 보내서 AP 응답이 vif가 받지
+  않는 주소로 감. 조치(커밋 feb67f0): 송신 출발지·DHCP chaddr를 vif 주소로, 수신 vif 주소 앞 프레임을 iOS 주소로 되돌림(`xc5wmacfix=0` 끔).
+  하트비트 `XC5 w txmac ios <iOS MAC> foreign <바꾼 수> mapped <되돌린 수> | types <첫 4개 ethertype> n | cfm rx`. 이미지 `xc5-ios-wifi48-console.tar`.
 - **순정 펌웨어 재확인(2026-11-15)**: `~/xc5/stock/vendor/wifi`(G525NKXSFEYL1) — 우리가 쓰는 mx140.bin·mx140_wlan.hcf·mx140_wlan_sw.hcf는
   md5까지 순정과 **동일**. mx140.bin 빌드 = `S612_E3830_R4-1_Y24W27A`(2024-07-03, `nacho_s612`), platform.txt `nacho_s612_xcover5_kor`.
   **불일치 발견**: `mx140/build_id.txt`와 그 debug 폴더(log-strings.bin, mib_out.xml 등)는 `Y22W51A`(2022-12-19) — 펌웨어보다 오래된 빌드라
