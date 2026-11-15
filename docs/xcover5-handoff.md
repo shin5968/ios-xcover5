@@ -614,6 +614,10 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   `data tx 88 rx 64 dhcp 3 offer/ip 172.24.72.211`, `if en0 addr 0 route 0 out 86 in 61 ping 56/56`, `dns 172.24.72.49`, 펌웨어 끝까지 생존
   (`q0 w163 r163 ka 605/605`, fault 0). types 800/806(IPv4·ARP) — 커널 DHCP가 동작. 남은 확인: 설정 앱 체크 표시·Safari 실제 동작(사용자 확인 필요),
   부팅마다 선연결 실패 확률(실패 부팅은 펌웨어가 시작 2초 만에 멈춤 — 근본 원인 미해결), locationd SIGTRAP(별건).
+- **wifi49 화면(사용자)**: 설정 앱 체크 표시 안 뜸, Safari(apple.com)는 검은/하얀 화면. 원인 후보: configd 주입(libxc5net, IP·DNS를
+  SCDynamicStore에 등록)은 `xc5net=1` 부팅 인자로만 켜짐(xc5_drop.c) — 설정 앱 모드 이미지엔 없어 `XC5 w net 0`(xc5netstat 0) → iOS가 주소·
+  DNS를 모름. 커널은 xc5net 인자를 읽지 않으므로 빌드 없이 `xc5-ios-wifi49n-console.tar` = wifi49 + `xc5net=1`. 볼 것: `XC5 w net <0이 아닌 값>`
+  (bit0 기록, bit1 우리 인터페이스가 기본, 0x10 HTTP 응답). Safari 화면 문제는 예전 w30r(EAGL) 수정이 실기기 미확인인 별건일 수 있음.
 - **순정 펌웨어 재확인(2026-11-15)**: `~/xc5/stock/vendor/wifi`(G525NKXSFEYL1) — 우리가 쓰는 mx140.bin·mx140_wlan.hcf·mx140_wlan_sw.hcf는
   md5까지 순정과 **동일**. mx140.bin 빌드 = `S612_E3830_R4-1_Y24W27A`(2024-07-03, `nacho_s612`), platform.txt `nacho_s612_xcover5_kor`.
   **불일치 발견**: `mx140/build_id.txt`와 그 debug 폴더(log-strings.bin, mib_out.xml 등)는 `Y22W51A`(2022-12-19) — 펌웨어보다 오래된 빌드라
