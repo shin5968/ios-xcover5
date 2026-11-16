@@ -729,3 +729,5 @@ iPhone X iOS 16.7.16(20H392) ì‚¬ìš©ì ì˜ì—­. 8ì½”ì–´, 1 GiB, eMMC PIO(DMAëŠ” `
 - `dsc.py SLIDE ì£¼ì†Œ...`: ì½˜ì†” `CRASH â€¦ slide â€¦ bt â€¦` ì£¼ì†Œë¥¼ ê³µìœ  ìºì‹œ í•¨ìˆ˜ë¡œ. `dsdis.sh ì£¼ì†Œ ê¸¸ì´`: ë””ìŠ¤ì–´ì…ˆë¸”.
   `dsstr.py ì£¼ì†Œ`: ë¬¸ìì—´/CFString. í¬ë˜ì‹œ ë©”ì‹œì§€ëŠ” ì»¤ë„ì´ `STR â€¦` ì¤„ë¡œ í™ ë¬¸ìì—´ì„ ì°ì–´ ì¤Œ(ì˜ˆì™¸ ì´ìœ ê°€ ê±°ê¸° ë‚˜ì˜´).
 - `frames.ps1`: ì˜ìƒ â†’ í”„ë ˆì„ ë¬¶ìŒ.
+
+- **viva2/viva3 °á°ú(2026-11-16)**: viva2 849 submit Áß ½ÇÆĞ 2(fragment type 9, status 0x5a = JOB_READ_FAULT, fault_ptr´Â Á¤»ó BO ¾È, ¿øÀÎ ¹Ì»ó). viva3(`xc5metalfor=*,-SpringBoard,-backboardd`) »ç¿ëÀÚ: ¾Û ´Ù Àß µÊ. ´ÙÀ½ viva4 = SpringBoardµµ Metal(`*,-backboardd`).
