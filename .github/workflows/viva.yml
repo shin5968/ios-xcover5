@@ -1,0 +1,83 @@
+name: viva
+
+# viva-gpu's Metal driver (VivaMTLDriver.bundle) for the XCover5: gpu/viva/build-viva.sh on a macOS runner.
+# Artifact "viva-ios": VivaMTLDriver.bundle + viva-gpu's NOTICE/LICENSE (GPL-3.0-or-later, attribution kept).
+on:
+  workflow_dispatch:
+  push:
+    branches: [xcover5]
+    paths:
+      - "gpu/viva/**"
+      - ".github/workflows/viva.yml"
+
+concurrency:
+  group: viva-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 150
+    env:
+      JOBS: 3
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 2G
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+      VIVA_CCACHE: ccache
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: |
+          brew install llvm spirv-llvm-translator spirv-tools zstd pkgconf ccache || true
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: viva-ccache-${{ github.run_id }}
+          restore-keys: viva-ccache-
+      - name: Restore Mesa source and builds
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            gpu/viva/work/viva-gpu/.venv
+            gpu/viva/work/viva-gpu/mesa/src
+            gpu/viva/work/viva-gpu/mesa/build-macos
+            gpu/viva/work/viva-gpu/mesa/out
+            gpu/viva/work/viva-gpu/mesa/build-ios
+            gpu/viva/work/viva-gpu/ios/out/lib
+            gpu/viva/work/viva-gpu/ios/out/ios-arm64.ini
+            gpu/viva/work/viva-gpu/libdrm-xnu/out
+          key: viva-mesa-${{ github.run_id }}
+          restore-keys: viva-mesa-
+
+      - name: Build VivaMTLDriver.bundle (XC5GPU back-end)
+        run: bash gpu/viva/build-viva.sh gpu/viva/work
+
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .ccache
+          key: viva-ccache-${{ github.run_id }}
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: |
+            gpu/viva/work/viva-gpu/.venv
+            gpu/viva/work/viva-gpu/mesa/src
+            gpu/viva/work/viva-gpu/mesa/build-macos
+            gpu/viva/work/viva-gpu/mesa/out
+            gpu/viva/work/viva-gpu/mesa/build-ios
+            gpu/viva/work/viva-gpu/ios/out/lib
+            gpu/viva/work/viva-gpu/ios/out/ios-arm64.ini
+            gpu/viva/work/viva-gpu/libdrm-xnu/out
+          key: viva-mesa-${{ github.run_id }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: viva-ios
+          path: gpu/viva/work/out/
