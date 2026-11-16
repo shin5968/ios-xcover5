@@ -166,8 +166,29 @@ static int xc5_submit(XConn *c, struct vgpu_submit *a)
     __asm__ volatile ("dsb sy" ::: "memory");
     kern_return_t kr = xcall(c, XSEL_SUBMIT, in, 2, out, 2);
     if ((kr || out[0]) && c->faults++ < 8)
+    {
         xlog(c, "viva: submit jc 0x%llx js %llu: kr 0x%x status 0x%llx", (unsigned long long)a->jc,
              (unsigned long long)in[1], kr, (unsigned long long)out[0]);
+        // the job header: status, first_incomplete, fault pointer (the address that was out of range)
+        for (uint32_t h = 1; h <= XC5_MAX_BOS; h++) {
+            XBO *b = &c->bos[h];
+            if (!b->used || a->jc < b->va || a->jc + 32 > b->va + b->size) continue;
+            if (!b->cpu) { uint64_t i2 = h, o2 = 0; if (xcall(c, XSEL_MAP, &i2, 1, &o2, 1) == 0) b->cpu = o2; }
+            if (b->cpu) {
+                const uint32_t *j = (const uint32_t *)(uintptr_t)(b->cpu + (a->jc - b->va));
+                uint64_t fault = (uint64_t)j[2] | (uint64_t)j[3] << 32;
+                const char *where = "no BO";
+                for (uint32_t k = 1; k <= XC5_MAX_BOS; k++)
+                    if (c->bos[k].used && fault >= c->bos[k].va && fault < c->bos[k].va + c->bos[k].size) {
+                        where = c->bos[k].imported ? "an imported surface" : (c->bos[k].flags & VGPU_BO_HEAP) ? "the heap" : "a BO";
+                        break;
+                    }
+                xlog(c, "viva:   job status 0x%x incomplete %u fault_ptr 0x%llx (in %s) type %u", j[0], j[1],
+                     (unsigned long long)fault, where, (j[4] >> 1) & 0x7f);
+            }
+            break;
+        }
+    }
     // A faulting chain is reported, not fatal (as herodrm): its fence still signals so nobody waits forever.
     a->seq = (uint32_t)++c->seq;
     if (c->completion) {
@@ -229,7 +250,15 @@ static int xc5_ioctl(void *conn, enum vgpu_selector sel, void *arg, size_t size)
     case VGPU_SEL_GET_PARAM: ret = get_param(c, arg); break;
     case VGPU_SEL_CREATE_BO: {
         struct vgpu_create_bo *a = arg;
-        uint64_t in = a->size, out[3] = { 0, 0, 0 };
+        // viva1: a fragment chain faulted with 0x5a (ADDR_RANGE_FAULT). XC5GPU's BOs never grow on a fault, so a HEAP
+        // BO (the tiler heap, Mesa asks for 128 MiB) is given whole, capped as herodrm did (VIVA_XC5_HEAP_MB, 32).
+        uint64_t sz = a->size;
+        if (a->flags & VGPU_BO_HEAP) {
+            const char *e = getenv("VIVA_XC5_HEAP_MB");
+            uint64_t cap = (uint64_t)(e ? atoi(e) : 32) << 20;
+            if (cap && sz > cap) sz = cap;
+        }
+        uint64_t in = sz, out[3] = { 0, 0, 0 };
         kern_return_t kr = xcall(c, XSEL_CREATE, &in, 1, out, 3);
         if (kr || !out[0] || out[0] > XC5_MAX_BOS) {
             xlog(c, "viva: CREATE_BO %u bytes (flags 0x%x) failed: 0x%x", a->size, a->flags, kr);
@@ -239,6 +268,9 @@ static int xc5_ioctl(void *conn, enum vgpu_selector sel, void *arg, size_t size)
         c->bos[out[0]] = (XBO){ .va = out[1], .size = out[2], .flags = a->flags, .madv = VGPU_MADV_WILLNEED, .used = true };
         a->handle = (uint32_t)out[0];
         a->offset = out[1];
+        if ((a->flags & VGPU_BO_HEAP) && c->faults < 4)
+            xlog(c, "viva: heap BO %u: %llu bytes at 0x%llx (asked %u)", a->handle, (unsigned long long)out[2],
+                 (unsigned long long)out[1], a->size);
         break;
     }
     case VGPU_SEL_MMAP_BO: {
