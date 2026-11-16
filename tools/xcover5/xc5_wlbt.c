@@ -1029,7 +1029,13 @@ static uint32_t dhcp_state, dhcp_xid = 0x58433501, offer_ip, offer_srv, ack_ip, 
 static uint64_t dhcp_next, rescan_at, tx_freed_at, tx_busy;
 static uint32_t tx_full, tx_force, tx_back, disc_count;
 static char want_ssid[33];
-static char want_psk[64];             /* xc5psk=: the passphrase of xc5ssid's network, for the kernel's own (shadow) join */
+static char want_psk[64];
+/*
+ * xc5nets=NAME1/PASS1,NAME2/PASS2,...: networks the kernel may join at its first SCAN_DONE (the firmware lives only if
+ * joined then); the strongest one heard is taken. A network with no "/PASS" is open. Names and passwords may not hold
+ * ',' '/' or spaces. xc5ssid/xc5psk still name one.
+ */
+static char nets_arg[512];             /* xc5psk=: the passphrase of xc5ssid's network, for the kernel's own (shadow) join */
 /* Step 4e (xc5wifiui=1): iOS's own Wi-Fi side asks for scans and joins (y2sios's redwood_sta/redwood_apple80211) */
 static int wifi_ui;
 static bool ui_ready, ui_lost, want_scan, scan_inflight;
@@ -1585,10 +1591,53 @@ wpa_tick(uint64_t now_ns)
 	wpa_done = true;
 }
 
+/* is aps[k] one of xc5nets? its password (or "") into psk */
+static bool
+net_listed(uint32_t k, char *psk, size_t psk_size)
+{
+	const char *p = nets_arg;
+	while (*p != 0) {
+		const char *end = p;
+		while (*end != 0 && *end != ',') {
+			end++;
+		}
+		const char *slash = p;
+		while (slash < end && *slash != '/') {
+			slash++;
+		}
+		size_t nl = (size_t)(slash - p);
+		if (nl == aps[k].ssid_len && nl > 0 && memcmp(p, aps[k].raw_ssid, nl) == 0) {
+			size_t pl = slash < end ? (size_t)(end - slash - 1) : 0;
+			pl = MIN(pl, psk_size - 1);
+			memcpy(psk, slash + 1, pl);
+			psk[pl] = 0;
+			return true;
+		}
+		p = *end ? end + 1 : end;
+	}
+	return false;
+}
+
 static void
 send_connect(void)
 {
 	int best = -1;
+	if (want_ssid[0] == 0 && nets_arg[0] != 0) {
+		char psk[64], best_psk[64] = "";
+		for (uint32_t k = 0; k < ap_count && k < APN; k++) {
+			if (net_listed(k, psk, sizeof(psk)) && (best < 0 || aps[k].rssi > aps[best].rssi) &&
+			    (aps[k].open || strlen(psk) >= 8)) {
+				best = (int)k;
+				strlcpy(best_psk, psk, sizeof(best_psk));
+			}
+		}
+		if (best < 0) {
+			printf("XC5 WLBT: none of xc5nets heard yet\n");
+			return;
+		}
+		strlcpy(want_psk, best_psk, sizeof(want_psk));
+		goto chosen;
+	}
 	for (uint32_t k = 0; k < ap_count && k < APN; k++) {
 		bool named = want_ssid[0] != 0 && aps[k].ssid_len == strlen(want_ssid) &&
 		    memcmp(aps[k].raw_ssid, want_ssid, aps[k].ssid_len) == 0;
@@ -1602,6 +1651,7 @@ send_connect(void)
 		printf("XC5 WLBT: no network to join (%s)\n", want_ssid[0] ? want_ssid : "no open one found");
 		return;
 	}
+chosen:
 	/*
 	 * wifi51: with S24 secured the shadow join (open networks only) never happened, the firmware stopped unjoined at 48 s
 	 * and the WPA2 join from Settings came too late. A secured network named by xc5ssid with xc5psk is joined by the
@@ -3494,6 +3544,7 @@ xc5_wlbt_start(void)
 	}
 	PE_parse_boot_argn("xc5wlan", &wlan_mode, sizeof(wlan_mode));
 	PE_parse_boot_arg_str("xc5ssid", want_ssid, sizeof(want_ssid));
+	PE_parse_boot_arg_str("xc5nets", nets_arg, sizeof(nets_arg));
 	/* (PE_parse_boot_argn takes an all-digit value as a number: "12345678" came out as binary, wifi52) */
 	PE_parse_boot_arg_str("xc5psk", want_psk, sizeof(want_psk));
 	PE_parse_boot_argn("xc5wretry", &rate_retry, sizeof(rate_retry));
