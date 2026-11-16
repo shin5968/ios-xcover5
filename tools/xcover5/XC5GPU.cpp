@@ -694,6 +694,24 @@ xc5_metal_caller_allowed(void)
 	proc_selfname(who, sizeof(who));
 	(void)PE_parse_boot_argn("xc5metalfor", list, sizeof(list));
 	size_t wl = strlen(who);
+	/* "*" lets every process see Metal; "-name" entries then keep those out (e.g. xc5metalfor=*,-SpringBoard) */
+	bool all = false;
+	for (const char *p = list; *p != '\0';) {
+		const char *e = strchr(p, ',');
+		size_t n = e ? (size_t)(e - p) : strlen(p);
+		if (n == 1 && p[0] == '*') {
+			all = true;
+		} else if (n > 1 && p[0] == '-' && n - 1 == wl && strncmp(p + 1, who, wl) == 0) {
+			return false;
+		}
+		if (e == NULL) {
+			break;
+		}
+		p = e + 1;
+	}
+	if (all) {
+		return true;
+	}
 	for (const char *p = list; *p != '\0';) {
 		const char *e = strchr(p, ',');
 		size_t n = e ? (size_t)(e - p) : strlen(p);
