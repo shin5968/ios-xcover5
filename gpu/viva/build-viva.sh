@@ -16,10 +16,12 @@ VIVA_REV=332d26a          # README rewritten for the driver as it runs on the ph
 mkdir -p "$W"
 W="$(cd "$W" && pwd)"
 V="$W/viva-gpu"
+# (the CI cache restores mesa/ and .venv inside it before the clone: init in place)
+mkdir -p "$V"
 if [ ! -d "$V/.git" ]; then
-  git clone -q "$VIVA_URL" "$V"
+  git -C "$V" init -q && git -C "$V" remote add origin "$VIVA_URL"
 fi
-git -C "$V" fetch -q origin || true
+git -C "$V" fetch -q origin
 git -C "$V" checkout -q -f "$VIVA_REV"
 git -C "$V" clean -q -fd -e mesa/src -e mesa/build-macos -e mesa/build-ios -e mesa/out -e .venv -e ios/out -e libdrm-xnu/out
 
