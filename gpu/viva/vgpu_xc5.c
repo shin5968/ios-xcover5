@@ -25,6 +25,9 @@
 #include <time.h>
 #include <unistd.h>
 #include "iokit_compat.h"
+#include <dlfcn.h>
+#include <signal.h>
+#include <sys/ucontext.h>
 
 kern_return_t IOConnectCallMethod(mach_port_t connection, uint32_t selector, const uint64_t *input, uint32_t inputCnt,
                                   const void *inputStruct, size_t inputStructCnt, uint64_t *output, uint32_t *outputCnt,
@@ -85,6 +88,70 @@ static void xlog(XConn *c, const char *fmt, ...)
     if (c && c->conn) IOConnectCallMethod(c->conn, XSEL_LOG, NULL, 0, line, (size_t)n, NULL, NULL, NULL, NULL);
 }
 
+
+// viva5: backboardd crashed (SIGSEGV, far 0xcca8) with the driver loaded and nothing said. Its stderr goes nowhere, so
+// the driver's own messages are sent to the kernel log, and a fault says the image, offset and symbol of pc and lr.
+static io_connect_t g_logconn;
+static void klog(const char *s, size_t n)
+{
+    if (g_logconn && n) IOConnectCallMethod(g_logconn, XSEL_LOG, NULL, 0, s, n, NULL, NULL, NULL, NULL);
+}
+static int err_write(void *cookie, const char *buf, int len)
+{
+    (void)cookie;
+    static char line[200];
+    static size_t used;
+    for (int i = 0; i < len; i++) {
+        if (buf[i] == '\n' || used == sizeof line - 1) { klog(line, used); used = 0; if (buf[i] == '\n') continue; }
+        line[used++] = buf[i];
+    }
+    return len;
+}
+static void where(const char *what, uint64_t a)
+{
+    Dl_info d;
+    char s[200];
+    int n;
+    if (dladdr((void *)(uintptr_t)a, &d) && d.dli_fname) {
+        const char *b = strrchr(d.dli_fname, '/');
+        n = snprintf(s, sizeof s, "viva: %s %s+0x%llx %s+0x%llx", what, b ? b + 1 : d.dli_fname,
+                     (unsigned long long)(a - (uint64_t)(uintptr_t)d.dli_fbase), d.dli_sname ? d.dli_sname : "?",
+                     (unsigned long long)(d.dli_saddr ? a - (uint64_t)(uintptr_t)d.dli_saddr : 0));
+    } else {
+        n = snprintf(s, sizeof s, "viva: %s 0x%llx (no image)", what, (unsigned long long)a);
+    }
+    klog(s, n > 0 ? (size_t)n : 0);
+}
+static void on_fault(int sig, siginfo_t *si, void *uc)
+{
+    ucontext_t *u = uc;
+    char s[96];
+    int n = snprintf(s, sizeof s, "viva: %s in %s, address %p", sig == SIGSEGV ? "SIGSEGV" : "SIGBUS", getprogname(), si->si_addr);
+    klog(s, (size_t)n);
+    where("pc", u->uc_mcontext->__ss.__pc);
+    where("lr", u->uc_mcontext->__ss.__lr);
+    uint64_t fp = u->uc_mcontext->__ss.__fp;
+    for (int i = 0; i < 6 && fp; i++) {
+        uint64_t *f = (uint64_t *)(uintptr_t)fp;
+        where("bt", f[1]);
+        fp = f[0];
+    }
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+static void install_diag(io_connect_t conn)
+{
+    if (g_logconn) return;
+    g_logconn = conn;
+    FILE *f = funopen(NULL, NULL, err_write, NULL, NULL);
+    if (f) { setvbuf(f, NULL, _IOLBF, 0); *stderr = *f; }
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = on_fault;
+    sa.sa_flags = SA_SIGINFO;
+    sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGBUS, &sa, NULL);
+}
 static int xc5_open(void **out)
 {
     io_service_t svc = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("XC5GPU"));
@@ -102,6 +169,7 @@ static int xc5_open(void **out)
     if (c->completion == MAP_FAILED) c->completion = NULL;
     pthread_mutex_init(&c->lock, NULL);
     pthread_cond_init(&c->cond, NULL);
+    install_diag(conn);
     static int said;
     if (!said++) xlog(c, "viva: XC5GPU back-end opened (pid %d)", getpid());
     *out = c;
