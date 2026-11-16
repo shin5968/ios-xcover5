@@ -35,7 +35,7 @@ def pack(items):
                 dirs.add(d)
                 entries.append((d, 0, b''))
         data = Path(src).read_bytes()
-        if dest.endswith('.dylib') or dest.endswith('.bundle/RedwoodMetal'):
+        if dest.endswith('.dylib') or dest.endswith('.bundle/RedwoodMetal') or dest.endswith('.bundle/VivaMTLDriver'):
             mode = 0o755
         elif dest.endswith('.plist') or '/_CodeSignature/' in dest or dest.endswith('.png'):
             mode = 0o644
@@ -72,6 +72,7 @@ def main():
     ap.add_argument('out')
     ap.add_argument('items', nargs='*', help='DEST=SRC')
     ap.add_argument('--mesa', help='mesa-ios artifact directory')
+    ap.add_argument('--viva', help='viva artifact directory (VivaMTLDriver.bundle, NOTICE, LICENSE) -> viva/')
     args = ap.parse_args()
     items = [i.split('=', 1) for i in args.items]
     if args.mesa:
@@ -83,6 +84,9 @@ def main():
         if (mesa / 'metal').is_dir():
             items += [(p.relative_to(mesa).as_posix(), str(p))
                       for p in sorted((mesa / 'metal').rglob('*')) if p.is_file()]
+    if args.viva:
+        viva = Path(args.viva)
+        items += [('viva/' + p.relative_to(viva).as_posix(), str(p)) for p in sorted(viva.rglob('*')) if p.is_file()]
     if not items:
         ap.error('nothing to pack')
     blob, entries, ident = pack(items)

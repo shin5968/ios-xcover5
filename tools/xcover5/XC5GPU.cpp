@@ -829,8 +829,16 @@ publish_accelerator(IOService *provider)
 	if (acc != NULL && acc->init() && acc->attach(provider)) {
 		acc->setName("sgx");
 		/* the drop zone's bundle (gpu/metal/build-metal.sh), seen only by xc5metalfor's processes */
-		acc->setProperty(kXC5MetalNameKey, "../../../private/var/xc5/metal/RedwoodMetal");
-		acc->setProperty(kXC5MetalClassKey, "RedwoodMetalDevice");
+		/* xc5mtldrv=viva: viva-gpu's VivaMTLDriver (gpu/viva, drop zone /private/var/xc5/viva) instead of RedwoodMetal */
+		char drv[16] = "";
+		(void)PE_parse_boot_arg_str("xc5mtldrv", drv, sizeof(drv));
+		if (strcmp(drv, "viva") == 0) {
+			acc->setProperty(kXC5MetalNameKey, "../../../private/var/xc5/viva/VivaMTLDriver");
+			acc->setProperty(kXC5MetalClassKey, "VMDevice");
+		} else {
+			acc->setProperty(kXC5MetalNameKey, "../../../private/var/xc5/metal/RedwoodMetal");
+			acc->setProperty(kXC5MetalClassKey, "RedwoodMetalDevice");
+		}
 		acc->registerService();
 		char list[128] = "chronod";
 		(void)PE_parse_boot_argn("xc5metalfor", list, sizeof(list));
