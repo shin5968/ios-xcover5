@@ -323,7 +323,9 @@ static int xc5_ioctl(void *conn, enum vgpu_selector sel, void *arg, size_t size)
         uint64_t sz = a->size;
         if (a->flags & VGPU_BO_HEAP) {
             const char *e = getenv("VIVA_XC5_HEAP_MB");
-            uint64_t cap = (uint64_t)(e ? atoi(e) : 32) << 20;
+            // viva7: backboardd (the full-screen compositor) faulted ~15% of its chains with 0x5a/0x5b on 32 MiB: 96.
+            int def = !strcmp(getprogname(), "backboardd") ? 96 : 32;
+            uint64_t cap = (uint64_t)(e ? atoi(e) : def) << 20;
             if (cap && sz > cap) sz = cap;
         }
         uint64_t in = sz, out[3] = { 0, 0, 0 };
