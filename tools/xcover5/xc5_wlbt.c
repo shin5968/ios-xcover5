@@ -3040,7 +3040,8 @@ int
 sta_leave_call(void)
 {
 	ui_leaves++;
-	if (ap_sel >= 0 && conn_ind == 0 && (!wifi_shadow || wpa_on)) {
+	/* wifi56: wifid leaves before it joins; with WPA2 that disconnected the kernel's join (disc 3): kept, as for open */
+	if (ap_sel >= 0 && conn_ind == 0 && !wifi_shadow) {
 		/* MLME-DISCONNECT.request 0x200e {vif 1; peer_sta_address; reason_code 3 (leaving)} */
 		uint8_t s[32] = { 0x0e, 0x20 };
 		s[10] = 1;
