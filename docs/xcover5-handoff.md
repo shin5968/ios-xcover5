@@ -634,6 +634,13 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   다 먹음 → 압축기 크기 계산이 RAM에 비례해 폭증(4K 페이지 커널 문제 추정). 1280/1152 MiB: AMFI 등록 직후 `write_pte_fast: PTE write is
   unaligned, ptep=..af8, pte=0x4200008a5e48ec3 @pmap.c:623` → 4K 페이지 A5XELTE pmap이 1 GiB를 넘는 물리 영역(0x8a5e48000 등)의 PTE
   쓰기에서 정렬 검사 실패. 둘 다 커널 수정 필요(압축기 VA 상한, pmap PTE 정렬/PAGE_RATIO). 기본값은 1 GiB 유지.
+- **viva-gpu Metal 드라이버 이식(2026-11-16)**: `github.com/Nik300/viva-gpu`(Mali-G57/iOS 16.7.16에서 UI 전체를 Metal로 그림, GPLv3+저작자
+  표시 조건)를 `gpu/viva/build-viva.sh`가 332d26a로 받아 `gpu/viva/vgpu_xc5.c`(viva의 vgpu 선택자 → 우리 XC5GPU 선택자; 동기 제출이라 syncobj·
+  완료 페이지는 프로세스 안에서 처리, IOSurface는 plane 0만)를 끼워 VivaMTLDriver.bundle(약 15 MB) 빌드. Valhall ISA 컴파일러는 끔(G52=Bifrost →
+  AIR→NIR→Panfrost Bifrost). CI `viva.yml`(macos-15, 산출물 viva-ios). 커널: `xc5mtldrv=viva`면 IOAcceleratorES의 MetalPluginName/Class를
+  `../../../private/var/xc5/viva/VivaMTLDriver`/`VMDevice`로(커밋 05e3790). `mkdrop.py --viva DIR`로 드롭(/private/var/xc5/viva, NOTICE/LICENSE
+  포함, 패키지 1794826926). 시험 이미지 `xc5-ios-viva1-console.tar`(콘솔 끔, chronod만 Metal, xc5mtldrv=viva). 로그 `XC5GPU client: viva: ...`.
+  `XC5_QUIET=1 mkimage.sh` = 화면 콘솔 끔(a5fb_noconsole=1). `xc5metalfor=*`(전부), `-이름`(제외) 지원(커밋 1c...).
 - **순정 펌웨어 재확인(2026-11-15)**: `~/xc5/stock/vendor/wifi`(G525NKXSFEYL1) — 우리가 쓰는 mx140.bin·mx140_wlan.hcf·mx140_wlan_sw.hcf는
   md5까지 순정과 **동일**. mx140.bin 빌드 = `S612_E3830_R4-1_Y24W27A`(2024-07-03, `nacho_s612`), platform.txt `nacho_s612_xcover5_kor`.
   **불일치 발견**: `mx140/build_id.txt`와 그 debug 폴더(log-strings.bin, mib_out.xml 등)는 `Y22W51A`(2022-12-19) — 펌웨어보다 오래된 빌드라
