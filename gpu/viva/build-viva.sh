@@ -14,6 +14,7 @@ W="${1:-$HERE/work}"
 VIVA_URL=https://github.com/Nik300/viva-gpu
 VIVA_REV=332d26a          # README rewritten for the driver as it runs on the phone (2026-11-16)
 mkdir -p "$W"
+W="$(cd "$W" && pwd)"
 V="$W/viva-gpu"
 if [ ! -d "$V/.git" ]; then
   git clone -q "$VIVA_URL" "$V"
