@@ -53,6 +53,23 @@ if 'vgpu_xc5.c' not in s:
     s = s.replace('"$GPU/vgpu/vgpu_iokit.c" \\\n      -framework IOKit', '"$GPU/vgpu/vgpu_iokit.c" "$GPU/vgpu/vgpu_xc5.c" \\\n      -framework IOKit', 1)
     assert s.count('vgpu_xc5.c') >= 1, 'ios/build.sh: vgpu sources not found'
     b.write_text(s)
+# Indexed draws: hand Panfrost the CPU copy of the index buffer (has_user_indices) instead of the resource.
+# backboardd (QuartzCore) crashed in panfrost_batch_read_rsrc <- panfrost_get_index_buffer_bounded on the
+# resource path (SIGSEGV at 0xcca8, viva6 log); the user-index path uploads the indices and never touches it.
+e = v / 'driver/vmg_exec.c'
+s = e.read_text()
+old = '        info.index.resource = d->index_buffer->res;\n'
+if 'xc5: user indices' not in s:
+    assert old in s, 'vmg_exec.c: index resource line not found'
+    s = s.replace(old,
+        '        {   // xc5: user indices (CPU copy) unless the GPU writes it or the draw is indirect\n'
+        '            vmg_resource *ib = d->index_buffer;\n'
+        '            const void *cpu = ib->user_ptr && !ib->cpu_access ? ib->user_ptr : ib->map;\n'
+        '            if (!ib->res) return;\n'
+        '            if (cpu && !ib->gpu_writes && !d->indirect) { info.has_user_indices = true; info.index.user = cpu; }\n'
+        '            else info.index.resource = ib->res;\n'
+        '        }\n', 1)
+    e.write_text(s)
 print('viva-gpu patched for XC5GPU')
 PY
 
