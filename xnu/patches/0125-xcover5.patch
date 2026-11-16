@@ -3304,10 +3304,10 @@ index 0000000..87ce406
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..8d0076f
+index 0000000..887b363
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,3511 @@
+@@ -0,0 +1,3513 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -4888,7 +4888,9 @@ index 0000000..8d0076f
 +		wpa_setkey(1, 0, aps[ap_sel].bssid, wpa_ptk + 32, 16, 0x000FAC04, NULL);
 +	}
 +	if (wpa_gtk_len != 0) {
-+		wpa_setkey(0, (uint16_t)wpa_gtk_id, bcast, wpa_gtk, wpa_gtk_len, wpa_group_cipher, wpa_gtk_rsc);
++		/* wifi55: FF.. gave SETKEYS 0x26 (invalid parameters); Samsung's station group key uses the AP's address */
++		(void)bcast;
++		wpa_setkey(0, (uint16_t)wpa_gtk_id, aps[ap_sel].bssid, wpa_gtk, wpa_gtk_len, wpa_group_cipher, wpa_gtk_rsc);
 +	}
 +	wpa_done = true;
 +}

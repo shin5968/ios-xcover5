@@ -1578,7 +1578,9 @@ wpa_tick(uint64_t now_ns)
 		wpa_setkey(1, 0, aps[ap_sel].bssid, wpa_ptk + 32, 16, 0x000FAC04, NULL);
 	}
 	if (wpa_gtk_len != 0) {
-		wpa_setkey(0, (uint16_t)wpa_gtk_id, bcast, wpa_gtk, wpa_gtk_len, wpa_group_cipher, wpa_gtk_rsc);
+		/* wifi55: FF.. gave SETKEYS 0x26 (invalid parameters); Samsung's station group key uses the AP's address */
+		(void)bcast;
+		wpa_setkey(0, (uint16_t)wpa_gtk_id, aps[ap_sel].bssid, wpa_gtk, wpa_gtk_len, wpa_group_cipher, wpa_gtk_rsc);
 	}
 	wpa_done = true;
 }
