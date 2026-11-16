@@ -629,6 +629,11 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   콘솔 `XC5 WLBT: WPA2 FAILED ...` / `joined (from Settings) with WPA2`. 이미지 `xc5-ios-wifi51-console.tar`(설정 앱 모드 + xc5net=1).
   미확인: SETKEYS 형식(FAPI 레이아웃 오프셋 vif10 len12 id14 type16 addr18 seq24 cipher40), M4 전 키 설치 순서, 펌웨어가 EAPOL을 데이터
   경로(MA_UNITDATA_IND)로 올리는지.
+- **RAM 확대 시험(2026-11-16, 커널 그대로, `XC5_DRAM` 환경변수로 mkimage)**: 셋 다 패닉. 1408 MiB(`0x8a2800000:0x58000000`):
+  `kmem_range_init: claim 10/17 gIOKitPageableFixed1 kr 3 size 0x6000000`, 앞선 **compressor claim이 0x58023c000(약 22 GB)** 로 커널 VA를
+  다 먹음 → 압축기 크기 계산이 RAM에 비례해 폭증(4K 페이지 커널 문제 추정). 1280/1152 MiB: AMFI 등록 직후 `write_pte_fast: PTE write is
+  unaligned, ptep=..af8, pte=0x4200008a5e48ec3 @pmap.c:623` → 4K 페이지 A5XELTE pmap이 1 GiB를 넘는 물리 영역(0x8a5e48000 등)의 PTE
+  쓰기에서 정렬 검사 실패. 둘 다 커널 수정 필요(압축기 VA 상한, pmap PTE 정렬/PAGE_RATIO). 기본값은 1 GiB 유지.
 - **순정 펌웨어 재확인(2026-11-15)**: `~/xc5/stock/vendor/wifi`(G525NKXSFEYL1) — 우리가 쓰는 mx140.bin·mx140_wlan.hcf·mx140_wlan_sw.hcf는
   md5까지 순정과 **동일**. mx140.bin 빌드 = `S612_E3830_R4-1_Y24W27A`(2024-07-03, `nacho_s612`), platform.txt `nacho_s612_xcover5_kor`.
   **불일치 발견**: `mx140/build_id.txt`와 그 debug 폴더(log-strings.bin, mib_out.xml 등)는 `Y22W51A`(2022-12-19) — 펌웨어보다 오래된 빌드라
