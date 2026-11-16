@@ -731,3 +731,4 @@ iPhone X iOS 16.7.16(20H392) ì‚¬ìš©ì ì˜ì—­. 8ì½”ì–´, 1 GiB, eMMC PIO(DMAëŠ” `
 - `frames.ps1`: ì˜ìƒ â†’ í”„ë ˆì„ ë¬¶ìŒ.
 
 - **viva2/viva3 °á°ú(2026-11-16)**: viva2 849 submit Áß ½ÇÆĞ 2(fragment type 9, status 0x5a = JOB_READ_FAULT, fault_ptr´Â Á¤»ó BO ¾È, ¿øÀÎ ¹Ì»ó). viva3(`xc5metalfor=*,-SpringBoard,-backboardd`) »ç¿ëÀÚ: ¾Û ´Ù Àß µÊ. ´ÙÀ½ viva4 = SpringBoardµµ Metal(`*,-backboardd`).
+- viva4(SpringBoardµµ Metal) »ç¿ëÀÚ: Àß µÊ. ´ÙÀ½ viva5 = ÀüºÎ(`xc5metalfor=*`, backboardd Æ÷ÇÔ).
