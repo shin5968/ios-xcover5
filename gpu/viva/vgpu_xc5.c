@@ -26,6 +26,7 @@
 #include <unistd.h>
 #include "iokit_compat.h"
 #include <dlfcn.h>
+#include <libkern/OSCacheControl.h>
 #include <signal.h>
 #include <sys/ucontext.h>
 
@@ -231,6 +232,15 @@ static int xc5_submit(XConn *c, struct vgpu_submit *a)
     if (!a->jc) return -EINVAL;
     if (a->out_sync && (a->out_sync >= XC5_MAX_SYNC || !c->syncobj[a->out_sync])) return -ENOENT;
     uint64_t in[2] = { a->jc, (a->requirements & VGPU_JD_REQ_FS) ? 0 : 1 }, out[2] = { 0, 0 };
+    // viva8: fragment jobs failed 0x5a with fault_ptr inside the job's own descriptor BO (mmu 0), ~12% of chains:
+    // the GPU read descriptors the CPU had not yet written back (the "write-combine" mapping can come back
+    // cacheable here). Clean every CPU-mapped BO to the point of coherency before the GPU reads it.
+    if (!getenv("VIVA_XC5_NOCLEAN"))
+        for (uint32_t h = 1; h <= XC5_MAX_BOS; h++) {
+            XBO *b = &c->bos[h];
+            if (b->used && b->cpu && !b->imported && !(b->flags & VGPU_BO_HEAP))
+                sys_dcache_flush((void *)(uintptr_t)b->cpu, (size_t)b->size);
+        }
     __asm__ volatile ("dsb sy" ::: "memory");
     kern_return_t kr = xcall(c, XSEL_SUBMIT, in, 2, out, 2);
     if ((kr || out[0]) && c->faults++ < 8)
