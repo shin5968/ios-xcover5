@@ -70,6 +70,14 @@ if 'xc5: user indices' not in s:
         '            else info.index.resource = ib->res;\n'
         '        }\n', 1)
     e.write_text(s)
+# viva10: backboardd's fragment jobs fault 0x5a (ADDR_RANGE) with fault_ptr at the sampler table (two valid
+# Bifrost sampler descriptors, the rest of the table absent): the shader reads a sampler slot past the count bound.
+# Bind all 32 slots (unused ones = the default sampler) so no index is out of range.
+old = '    for (unsigned i = 0; i < scount; i++) if (!samplers[i]) samplers[i] = dev->sampler_default;\n'
+if 'xc5: sampler pad' not in s:
+    assert old in s, 'vmg_exec.c: sampler fill line not found'
+    s = s.replace(old, '    if (!getenv("VMG_NO_SAMPLER_PAD")) scount = 32;   // xc5: sampler pad\n' + old, 1)
+    e.write_text(s)
 print('viva-gpu patched for XC5GPU')
 PY
 
