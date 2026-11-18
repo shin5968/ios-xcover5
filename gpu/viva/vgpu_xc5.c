@@ -227,6 +227,39 @@ static int wait_syncobjs(XConn *c, struct vgpu_syncobj_wait *w)
     }
 }
 
+// viva10 fault dump helpers: GPU VA -> owning BO (mapped for the CPU on demand).
+static XBO *xfind(XConn *c, uint64_t va, uint32_t *handle)
+{
+    for (uint32_t h = 1; h <= XC5_MAX_BOS; h++) {
+        XBO *b = &c->bos[h];
+        if (b->used && va >= b->va && va < b->va + b->size) { if (handle) *handle = h; return b; }
+    }
+    return NULL;
+}
+static const uint32_t *xcpu(XConn *c, uint64_t va, uint64_t len)
+{
+    uint32_t h = 0;
+    XBO *b = xfind(c, va, &h);
+    if (!b || va + len > b->va + b->size) return NULL;
+    if (!b->cpu) { uint64_t i2 = h, o2 = 0; if (xcall(c, XSEL_MAP, &i2, 1, &o2, 1) == 0) b->cpu = o2; }
+    return b->cpu ? (const uint32_t *)(uintptr_t)(b->cpu + (va - b->va)) : NULL;
+}
+static void xdesc(XConn *c, const char *what, uint64_t va)
+{
+    uint32_t h = 0;
+    XBO *b = xfind(c, va, &h);
+    if (!b) { xlog(c, "viva: %s 0x%llx: no BO", what, (unsigned long long)va); return; }
+    xlog(c, "viva: %s 0x%llx = BO %u +0x%llx of 0x%llx%s%s", what, (unsigned long long)va, h,
+         (unsigned long long)(va - b->va), (unsigned long long)b->size,
+         b->imported ? " surface" : "", (b->flags & VGPU_BO_HEAP) ? " heap" : "");
+}
+static void xdump(XConn *c, const char *what, const uint32_t *w, unsigned n)
+{
+    for (unsigned i = 0; i < n; i += 8)
+        xlog(c, "viva: %s[%u] %08x %08x %08x %08x %08x %08x %08x %08x", what, i,
+             w[i], w[i+1], w[i+2], w[i+3], w[i+4], w[i+5], w[i+6], w[i+7]);
+}
+
 static int xc5_submit(XConn *c, struct vgpu_submit *a)
 {
     if (!a->jc) return -EINVAL;
@@ -235,7 +268,7 @@ static int xc5_submit(XConn *c, struct vgpu_submit *a)
     // viva8: fragment jobs failed 0x5a with fault_ptr inside the job's own descriptor BO (mmu 0), ~12% of chains:
     // the GPU read descriptors the CPU had not yet written back (the "write-combine" mapping can come back
     // cacheable here). Clean every CPU-mapped BO to the point of coherency before the GPU reads it.
-    if (!getenv("VIVA_XC5_NOCLEAN"))
+    if (getenv("VIVA_XC5_CLEAN"))   // viva9: no effect on the faults, so off by default
         for (uint32_t h = 1; h <= XC5_MAX_BOS; h++) {
             XBO *b = &c->bos[h];
             if (b->used && b->cpu && !b->imported && !(b->flags & VGPU_BO_HEAP))
@@ -243,28 +276,32 @@ static int xc5_submit(XConn *c, struct vgpu_submit *a)
         }
     __asm__ volatile ("dsb sy" ::: "memory");
     kern_return_t kr = xcall(c, XSEL_SUBMIT, in, 2, out, 2);
-    if ((kr || out[0]) && c->faults++ < 8)
+    if ((kr || out[0]) && c->faults++ < 3)
     {
         xlog(c, "viva: submit jc 0x%llx js %llu: kr 0x%x status 0x%llx", (unsigned long long)a->jc,
              (unsigned long long)in[1], kr, (unsigned long long)out[0]);
-        // the job header: status, first_incomplete, fault pointer (the address that was out of range)
-        for (uint32_t h = 1; h <= XC5_MAX_BOS; h++) {
-            XBO *b = &c->bos[h];
-            if (!b->used || a->jc < b->va || a->jc + 32 > b->va + b->size) continue;
-            if (!b->cpu) { uint64_t i2 = h, o2 = 0; if (xcall(c, XSEL_MAP, &i2, 1, &o2, 1) == 0) b->cpu = o2; }
-            if (b->cpu) {
-                const uint32_t *j = (const uint32_t *)(uintptr_t)(b->cpu + (a->jc - b->va));
-                uint64_t fault = (uint64_t)j[2] | (uint64_t)j[3] << 32;
-                const char *where = "no BO";
-                for (uint32_t k = 1; k <= XC5_MAX_BOS; k++)
-                    if (c->bos[k].used && fault >= c->bos[k].va && fault < c->bos[k].va + c->bos[k].size) {
-                        where = c->bos[k].imported ? "an imported surface" : (c->bos[k].flags & VGPU_BO_HEAP) ? "the heap" : "a BO";
-                        break;
-                    }
-                xlog(c, "viva:   job status 0x%x incomplete %u fault_ptr 0x%llx (in %s) type %u", j[0], j[1],
-                     (unsigned long long)fault, where, (j[4] >> 1) & 0x7f);
+        // viva10: the whole chain, job by job: header, payload, the framebuffer descriptor of a fragment job and the
+        // words at the fault pointer, each address as BO handle+offset (flags, size), so the bad descriptor shows.
+        xlog(c, "viva: fault in %s (fault %llu)", getprogname(), (unsigned long long)c->faults);
+        uint64_t jc = a->jc;
+        for (int n = 0; jc && n < 4; n++) {
+            const uint32_t *j = xcpu(c, jc, 64);
+            if (!j) { xdesc(c, "job", jc); break; }
+            uint64_t fault = (uint64_t)j[2] | (uint64_t)j[3] << 32, next = (uint64_t)j[6] | (uint64_t)j[7] << 32;
+            unsigned type = (j[4] >> 1) & 0x7f;
+            xlog(c, "viva:   job %d type %u status 0x%x incomplete %u", n, type, j[0], j[1]);
+            xdesc(c, "    at", jc);
+            xdesc(c, "    fault_ptr", fault);
+            xdump(c, "    hdr", j, 16);
+            if (type == 9) {   // fragment: payload +32 = bounds (2 words), FBD pointer (low 6 bits are flags)
+                uint64_t fbd = ((uint64_t)j[10] | (uint64_t)j[11] << 32) & ~0x3full;
+                xdesc(c, "    fbd", fbd);
+                const uint32_t *f = xcpu(c, fbd, 128);
+                if (f) { xdump(c, "    fbd", f, 16); xdump(c, "    fbd+64", f + 16, 16); }
             }
-            break;
+            const uint32_t *fp = fault ? xcpu(c, fault & ~0x3full, 64) : NULL;
+            if (fp) xdump(c, "    @fault", fp, 16);
+            jc = next;
         }
     }
     // A faulting chain is reported, not fatal (as herodrm): its fence still signals so nobody waits forever.
