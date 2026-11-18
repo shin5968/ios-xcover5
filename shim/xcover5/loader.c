@@ -228,8 +228,101 @@ static char *udec(char *p, uint32_t v)
 	return p;
 }
 
+/* ---- filtered view: only the lines that matter for GPU/crash work (VOL+ on the newest page toggles it) ---- */
+#define FMAX 8192
+static uint32_t fidx[FMAX], fn;
+static int filtered;
+/* a char table, not pointers: the loader has no relocations */
+static const char fkeys[][12] = { "viva", "XC5GPU", "CRASH", "gpusvc", "heartbeat", "panic", "" };
+
+static int line_has(volatile struct prz *z, uint32_t i, const char *k)
+{
+	for (; i < z->size && prz_at(z, i) != '\n'; i++) {
+		uint32_t j = 0;
+		while (k[j] && i + j < z->size && prz_at(z, i + j) == (uint8_t)k[j])
+			j++;
+		if (!k[j])
+			return 1;
+	}
+	return 0;
+}
+
+static void filter_build(volatile struct prz *z)
+{
+	fn = 0;
+	for (uint32_t i = 0; i < z->size && fn < FMAX;) {
+		for (int k = 0; fkeys[k][0]; k++)
+			if (line_has(z, i, fkeys[k])) {
+				fidx[fn++] = i;
+				break;
+			}
+		while (i < z->size && prz_at(z, i) != '\n')
+			i++;
+		i++;
+	}
+}
+
+static uint32_t line_rows(volatile struct prz *z, uint32_t i)
+{
+	uint32_t n = 0;
+	for (; i < z->size && prz_at(z, i) != '\n'; i++)
+		if (prz_at(z, i) != '\r')
+			n++;
+	return n / COLS + 1;
+}
+
+static void view_filtered(volatile struct prz *z, uint32_t back)
+{
+	fill(0, 0, FB_W, FB_H, 0xff000000U);
+	char pos[64], *p = pos;
+	const char *k = "FILTER (viva/GPU/CRASH) ";
+	while (*k)
+		*p++ = *k++;
+	p = udec(p, fn > back ? fn - back : 0);
+	*p++ = '/';
+	udec(p, fn);
+	fg = 0xff40c0ffU;
+	glyphs(0, -2, pos);
+	/* the last line shown is fn-1-back; walk up while the rows fit */
+	int last = (int)fn - 1 - (int)back, first = last;
+	uint32_t used = 0;
+	while (first >= 0) {
+		uint32_t h = line_rows(z, fidx[first]);
+		if (used + h > (uint32_t)ROWS - 1)
+			break;
+		used += h;
+		first--;
+	}
+	int r = 0;
+	fg = 0xffffffffU;
+	for (int l = first + 1; l <= last && r < ROWS - 1; l++) {
+		int c = 0;
+		for (uint32_t i = fidx[l]; i < z->size && r < ROWS - 1; i++) {
+			char ch = (char)prz_at(z, i);
+			if (ch == '\n')
+				break;
+			if (ch == '\r')
+				continue;
+			if (c >= COLS) {
+				r++;
+				c = 0;
+			}
+			if (r < ROWS - 1)
+				glyph(c++, r, ch);
+		}
+		r++;
+	}
+	fg = 0xffffff00U;
+	glyphs(0, ROWS - 1, back ? "VOL- older  VOL+ newer  XCOVER: boot"
+				  : "NEWEST  VOL+ all lines  XCOVER: boot");
+}
+
 static void view_page(volatile struct prz *z, uint32_t back, uint32_t lines)
 {
+	if (filtered) {
+		view_filtered(z, back);
+		return;
+	}
 	fill(0, 0, FB_W, FB_H, 0xff000000U);
 	/* Position: last line on screen / total lines (total = newest). */
 	char pos[48], *p = pos;
@@ -260,7 +353,7 @@ static void view_page(volatile struct prz *z, uint32_t back, uint32_t lines)
 	}
 	fg = 0xffffff00U;
 	glyphs(0, ROWS - 1, back ? "VOL- older  VOL+ newer  XCOVER: boot"
-				  : "NEWEST  VOL- older  XCOVER: boot");
+				  : "NEWEST  VOL- older  VOL+ filter  XCOVER: boot");
 }
 
 /* Raw ALIVE data (active low) above the page: VOL+ was not seen on GPA0-7
@@ -295,9 +388,12 @@ static void log_viewer(void)
 		delay_ms(3000);
 		return;
 	}
-	uint32_t back = 0, lines = 0;
+	uint32_t back = 0, all = 0, lines;
 	for (uint32_t i = 0; i < z->size; i++)
-		lines += prz_at(z, i) == '\n';
+		all += prz_at(z, i) == '\n';
+	filter_build(z);
+	filtered = fn > 0;	/* opens on the filtered view when it has lines */
+	lines = filtered ? fn : all;
 	view_page(z, back, lines);
 	draw_keys();
 	/* Boot 10: the XCover key's GPA0-5 reads 0 when released, so waiting for
@@ -315,7 +411,10 @@ static void log_viewer(void)
 			break;
 		if (hit & KEY_VOLDOWN)
 			back = back + ROWS < lines + 1 ? back + ROWS / 2 : 0;
-		else if ((hit & KEY_VOLUP) && back)
+		else if ((hit & KEY_VOLUP) && !back) {	/* newest page: switch filtered <-> all lines */
+			filtered = !filtered && fn > 0;
+			lines = filtered ? fn : all;
+		} else if ((hit & KEY_VOLUP) && back)
 			back = back > ROWS / 2 ? back - ROWS / 2 : 0;
 		else {
 			delay_ms(20);
