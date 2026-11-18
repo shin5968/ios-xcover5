@@ -739,3 +739,4 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
 - viva9: flush 효과 없음(jobs 2493 failed 256). 0x5a = ADDR_RANGE_FAULT. viva10: 실패 체인 덤프(프로세스, job 헤더 16워드, FBD 32워드, fault_ptr 위치 16워드, 각 주소의 BO+오프셋), 클라이언트당 3회. flush는 VIVA_XC5_CLEAN일 때만. CI 44283158817. 시험 대기.
 - PREV BOOT LOG 필터(loader.c): 기본으로 viva/XC5GPU/CRASH/gpusvc/heartbeat/panic 줄만 표시(FILTER 제목, 파란색). 최신 페이지에서 VOL+ = 전체/필터 전환. viva10 이미지에 포함.
 - viva10 덤프: backboardd fragment job(type 9) 0xa005a, fault_ptr = 같은 BO 안 샘플러 테이블(5e888801 1fff0000 = Bifrost sampler 2개). 추정: 셰이더가 바인딩 개수 밖 샘플러 슬롯을 읽음. viva11: 샘플러 32슬롯 전부 바인딩(VMG_NO_SAMPLER_PAD로 끔), CI 44286912215. 시험 대기.
+- viva11: 샘플러 32칸 효과 없음(jobs 2524 failed 240). 같은 위치 값 5e888801 1fff0000 0 0 = 크기 0 버퍼 추정(viva12 후보: 빈 버퍼 칸에 더미). 사용자: backboardd Metal 보류, viva4 기준. 다음: 사파리 웹화면 검정/흰색(viva 이전부터). safari1 = viva4 설정 + 필터에 WebKit/Safari/WebContent/sandbox/jetsam.

@@ -233,7 +233,8 @@ static char *udec(char *p, uint32_t v)
 static uint32_t fidx[FMAX], fn;
 static int filtered;
 /* a char table, not pointers: the loader has no relocations */
-static const char fkeys[][12] = { "viva", "XC5GPU", "CRASH", "gpusvc", "heartbeat", "panic", "" };
+static const char fkeys[][12] = { "viva", "XC5GPU", "CRASH", "gpusvc", "heartbeat", "panic",
+				  "WebKit", "Safari", "WebContent", "sandbox", "jetsam", "" };
 
 static int line_has(volatile struct prz *z, uint32_t i, const char *k)
 {
