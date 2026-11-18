@@ -78,6 +78,21 @@ if 'xc5: sampler pad' not in s:
     assert old in s, 'vmg_exec.c: sampler fill line not found'
     s = s.replace(old, '    if (!getenv("VMG_NO_SAMPLER_PAD")) scount = 32;   // xc5: sampler pad\n' + old, 1)
     e.write_text(s)
+# Safari: a 'w30r' surface (4 bytes a pixel, bpr 4544) is copied into an rgba16f texture (8 bytes a pixel); the copy
+# used the texture's row (9000 bytes) over the surface's pitch and read/wrote past its end: SIGSEGV in
+# WebKit.GPU (util_copy_box <- vmg_texture_sync) and a kernel panic (vm_page_insert past object bounds, size =
+# the surface). Skip a copy whose rows do not fit the surface's pitch.
+x = v / 'driver/vmg_exec.c'
+s = x.read_text()
+old = '    uint64_t bytes = (uint64_t)util_format_get_stride(t->res->format, w) * util_format_get_nblocksy(t->res->format, h);\n'
+if 'xc5: row fits' not in s:
+    assert old in s, 'vmg_exec.c: copy size line not found'
+    s = s.replace(old,
+        '    if (util_format_get_stride(t->res->format, w) > bpr) {   // xc5: row fits the pitch, or no copy\n'
+        '        if (s) { uint32_t u = 0; IOSurfaceUnlock(s, to_texture ? kIOSurfaceLockReadOnly : 0, &u); CFRelease(s); }\n'
+        '        return;\n'
+        '    }\n' + old, 1)
+    x.write_text(s)
 print('viva-gpu patched for XC5GPU')
 PY
 
