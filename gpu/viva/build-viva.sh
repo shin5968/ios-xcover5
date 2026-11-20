@@ -88,10 +88,12 @@ old = '    uint64_t bytes = (uint64_t)util_format_get_stride(t->res->format, w) 
 if 'xc5: row fits' not in s:
     assert old in s, 'vmg_exec.c: copy size line not found'
     s = s.replace(old,
-        '    if (xc5_is_xr(t) && s) { xc5_xr_copy(dev, t, base, bpr, to_texture);   // xc5: w30r/BGR10_XR converted\n'
+        '    if (s && (xc5_is_xr(t) || IOSurfaceGetPixelFormat(s) == 0x77333072)) {   // w30r by the surface too\n'
+        '      { xc5_xr_copy(dev, t, base, bpr, to_texture);   // xc5: w30r/BGR10_XR converted\n'
         '        uint32_t u = 0; IOSurfaceUnlock(s, to_texture ? kIOSurfaceLockReadOnly : 0, &u);\n'
         '        if (!to_texture) {} t->surface_seed = to_texture ? lock_seed : u; t->surface_seed_valid = true;\n'
         '        CFRelease(s); return;\n'
+        '      }\n'
         '    }\n'
         '    if (util_format_get_stride(t->res->format, w) > bpr) {   // xc5: row fits the pitch, or no copy\n'
         '        if (s) { uint32_t u = 0; IOSurfaceUnlock(s, to_texture ? kIOSurfaceLockReadOnly : 0, &u); CFRelease(s); }\n'
