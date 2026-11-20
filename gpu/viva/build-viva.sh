@@ -88,10 +88,72 @@ old = '    uint64_t bytes = (uint64_t)util_format_get_stride(t->res->format, w) 
 if 'xc5: row fits' not in s:
     assert old in s, 'vmg_exec.c: copy size line not found'
     s = s.replace(old,
+        '    if (xc5_is_xr(t) && s) { xc5_xr_copy(dev, t, base, bpr, to_texture);   // xc5: w30r/BGR10_XR converted\n'
+        '        uint32_t u = 0; IOSurfaceUnlock(s, to_texture ? kIOSurfaceLockReadOnly : 0, &u);\n'
+        '        if (!to_texture) {} t->surface_seed = to_texture ? lock_seed : u; t->surface_seed_valid = true;\n'
+        '        CFRelease(s); return;\n'
+        '    }\n'
         '    if (util_format_get_stride(t->res->format, w) > bpr) {   // xc5: row fits the pitch, or no copy\n'
         '        if (s) { uint32_t u = 0; IOSurfaceUnlock(s, to_texture ? kIOSurfaceLockReadOnly : 0, &u); CFRelease(s); }\n'
         '        return;\n'
         '    }\n' + old, 1)
+    # BGR10_XR(_sRGB) <-> half floats, after mapple_gpu_mali 85954b3 (GPL-3.0+, viva-gpu attribution): blue bits 0-9,
+    # green 10-19, red 20-29, each (code - 384) / 510; the sRGB one is extended-sRGB encoded.
+    helpers = r'''
+#include <math.h>
+#include "util/half_float.h"
+static bool xc5_is_xr(const vmg_texture *t) { return t->mtl_format == 554 || t->mtl_format == 555; }
+static float xc5_srgb(float v, bool decode)
+{
+    float a = fabsf(v), r = decode ? (a <= 0.04045f ? a / 12.92f : powf((a + 0.055f) / 1.055f, 2.4f))
+                                   : (a <= 0.0031308f ? a * 12.92f : 1.055f * powf(a, 1 / 2.4f) - 0.055f);
+    return v < 0 ? -r : r;
+}
+static void xc5_xr_copy(vmg_device *dev, vmg_texture *t, uint8_t *base, size_t bpr, bool to_texture)
+{
+    uint32_t w = t->res->width0, h = t->res->height0;
+    bool srgb = t->mtl_format == 555;
+    struct pipe_box box;
+    u_box_2d(0, 0, (int)w, (int)h, &box);
+    if ((size_t)w * 4 > bpr || util_format_get_blocksize(t->res->format) != 8) return;
+    if (to_texture) {
+        uint16_t *tmp = malloc((size_t)w * h * 8);
+        if (!tmp) return;
+        for (uint32_t y = 0; y < h; y++)
+            for (uint32_t x = 0; x < w; x++) {
+                uint32_t p; memcpy(&p, base + y * bpr + x * 4, 4);
+                uint16_t *o = tmp + 4 * ((size_t)y * w + x);
+                for (int c = 0; c < 3; c++) {
+                    float v = ((float)((p >> (20 - 10 * c)) & 1023) - 384) / 510;
+                    o[c] = _mesa_float_to_half(srgb ? xc5_srgb(v, true) : v);
+                }
+                o[3] = _mesa_float_to_half(1);
+            }
+        dev->pipe->texture_subdata(dev->pipe, t->res, 0, PIPE_MAP_WRITE, &box, tmp, w * 8, 0);
+        free(tmp);
+        return;
+    }
+    struct pipe_transfer *x = NULL;
+    uint8_t *m = dev->pipe->texture_map(dev->pipe, t->res, 0, PIPE_MAP_READ, &box, &x);
+    if (!m) return;
+    for (uint32_t y = 0; y < h; y++)
+        for (uint32_t i = 0; i < w; i++) {
+            uint16_t px[4]; memcpy(px, m + y * x->stride + i * 8, 8);
+            uint32_t p = 3u << 30;
+            for (int c = 0; c < 3; c++) {
+                float v = _mesa_half_to_float(px[c]);
+                if (srgb) v = xc5_srgb(v, false);
+                p |= (uint32_t)CLAMP(lroundf(v * 510 + 384), 0, 1023) << (20 - 10 * c);
+            }
+            memcpy(base + y * bpr + i * 4, &p, 4);
+        }
+    dev->pipe->texture_unmap(dev->pipe, x);
+}
+
+'''
+    s = s.replace('void vmg_texture_sync(vmg_device *dev, vmg_texture *t, bool to_texture)\n{',
+                  helpers + 'void vmg_texture_sync(vmg_device *dev, vmg_texture *t, bool to_texture)\n{', 1)
+    assert 'xc5_xr_copy(vmg_device' in s
     x.write_text(s)
 print('viva-gpu patched for XC5GPU')
 PY
