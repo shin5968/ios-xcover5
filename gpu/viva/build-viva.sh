@@ -117,6 +117,13 @@ static void xc5_xr_copy(vmg_device *dev, vmg_texture *t, uint8_t *base, size_t b
     bool srgb = t->mtl_format == 555;
     struct pipe_box box;
     u_box_2d(0, 0, (int)w, (int)h, &box);
+    static int said;
+    if (said < 12) {   // safari5: page black, text light: what goes each way (first pixel, middle pixel)
+        said++;
+        uint32_t p0, pm; memcpy(&p0, base, 4); memcpy(&pm, base + (h / 2) * bpr + (w / 2) * 4, 4);
+        fprintf(stderr, "vmg: xr %s %ux%u fmt %u %s surface %08x mid %08x\n", to_texture ? "in" : "out", w, h,
+                t->mtl_format, util_format_short_name(t->res->format), p0, pm);
+    }
     if ((size_t)w * 4 > bpr || util_format_get_blocksize(t->res->format) != 8) return;
     if (to_texture) {
         uint16_t *tmp = malloc((size_t)w * h * 8);
@@ -149,6 +156,12 @@ static void xc5_xr_copy(vmg_device *dev, vmg_texture *t, uint8_t *base, size_t b
             }
             memcpy(base + y * bpr + i * 4, &p, 4);
         }
+    if (said < 24) {
+        said++;
+        uint16_t hm[4]; memcpy(hm, m + (h / 2) * x->stride + (w / 2) * 8, 8);
+        uint32_t pm; memcpy(&pm, base + (h / 2) * bpr + (w / 2) * 4, 4);
+        fprintf(stderr, "vmg: xr out mid half %04x %04x %04x %04x -> %08x\n", hm[0], hm[1], hm[2], hm[3], pm);
+    }
     dev->pipe->texture_unmap(dev->pipe, x);
 }
 
