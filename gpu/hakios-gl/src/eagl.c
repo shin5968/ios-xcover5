@@ -4299,7 +4299,7 @@ my_attachImage(id self, SEL selector, unsigned long target, IOSurfaceRef surface
 	 */
 	if (pixels == 'BGRA' && IOSurfaceGetPlaneCount(surface) == 0 &&
 	    IOSurfaceGetAllocSize(surface) == ((IOSurfaceGetBytesPerRow(surface) * IOSurfaceGetHeight(surface) + 0xfff) & ~(size_t)0xfff) + 0x3000) {
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_A, GL_ONE);
+		glTexParameteri(GL_TEXTURE_2D, 0x8E45 /* GL_TEXTURE_SWIZZLE_A, GLES 3 */, GL_ONE);
 		if (attached < 24) {
 			say("hakios-gl: -attachImage: IOSurface %u was 'w30r': opaque\n", IOSurfaceGetID(surface));
 		}
