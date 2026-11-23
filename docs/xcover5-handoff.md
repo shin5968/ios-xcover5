@@ -746,3 +746,4 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
 - safari5: fast.com 페이지 레이아웃·글씨 그려짐, 배경 검정·글씨 밝은 회색(색 반전처럼 보임). backboardd(hakios-gl)는 w30r을 deep_to_bgra로 이미 변환. safari6 = viva xr 변환 값 로그('vmg: xr in/out ...'), CI 44696933710.
 - safari7: 커널 IOSurface가 'w30r'(4B/px) 요청을 'BGRA'로 만듦(hakios 방식, 0046 patch, xnu CI 45148639038). viva/hakios-gl 변환 경로 우회. 시험 대기. (로컬 xnu/patches 130개 삭제 상태 — git엔 있음, CI 영향 없음)
 - safari7: w30r 사라짐, 하지만 배경 검정·숫자 가운데 몰림·찢어짐. 원인: WebKit이 여전히 BGR10_XR(554) 텍스처를 요청 → viva가 BGRA 바이트를 10비트로 '변환'. safari8: viva에서 표면 위 550-555 형식을 BGRA8(80/81)로(hakios 방식), CI 45152067085. 시험 대기.
+- safari8: 배경 검정 유지, 숫자 겹침(이전 프레임 안 지워짐), 줄 찢어짐. 추정: WebKit.GPU의 clear(배경 흰색 채우기)가 표면 텍스처에 반영 안 됨. safari9 = WebKit.GPU만 viva 제외(비교 시험).
