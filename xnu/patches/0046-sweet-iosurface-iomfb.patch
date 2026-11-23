@@ -116,7 +116,7 @@
 +#endif /* _SWEET_SURFACE_H */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetSurface.cpp
-@@ -0,0 +1,876 @@
+@@ -0,0 +1,881 @@
 +/*
 + * Built-in IOSurface for SWEET.
 + *
@@ -409,7 +409,8 @@
 +	s->pixelFormat = sweet_dict_u32(props, "IOSurfacePixelFormat", 0);
 +	/* XCover5: 'w30r' (10-bit packed, 4 bytes a pixel) is made 'BGRA' of the same geometry, as hakios does: the
 +	 * panel is 8-bit, and Metal (viva) and GL then use it in place instead of converting it each frame. */
-+	if (s->pixelFormat == 0x77333072u && s->bytesPerElement == 4)
++	bool xc5sub = s->pixelFormat == 0x77333072u && s->bytesPerElement == 4;
++	if (xc5sub)
 +		s->pixelFormat = 0x42475241u;
 +	s->cacheMode = sweet_dict_u32(props, "IOSurfaceCacheMode", 0);
 +	s->offset = sweet_dict_u32(props, "IOSurfaceOffset", 0);
@@ -464,6 +465,10 @@
 +		alloc = end;
 +	}
 +	alloc = round_page(alloc);
++	/* XCover5: a 'w30r' made 'BGRA' is marked by exactly 3 spare pages: its writers think it has no opacity
++	 * and leave alpha 0, so backboardd (hakios-gl) takes such a surface as opaque. */
++	if (xc5sub)
++		alloc += 3 * PAGE_SIZE;
 +	if (alloc == 0 || alloc > SWEET_SURFACE_MAX_ALLOC) {
 +		return kIOReturnNoMemory;
 +	}

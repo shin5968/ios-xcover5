@@ -4292,6 +4292,18 @@ my_attachImage(id self, SEL selector, unsigned long target, IOSurfaceRef surface
 		surface_to_texture(e, image);
 	}
 	e->attaching += now_us() - began;
+	/*
+	 * XCover5: a 'w30r' the kernel made 'BGRA' (marked by exactly three spare pages) is WebKit's page tile,
+	 * which its writers take to have no opacity: they leave alpha 0, and the page's white was not seen
+	 * (black behind Google's search box). Sampled with alpha one, as the 'w30r' it was.
+	 */
+	if (pixels == 'BGRA' && IOSurfaceGetPlaneCount(surface) == 0 &&
+	    IOSurfaceGetAllocSize(surface) == ((IOSurfaceGetBytesPerRow(surface) * IOSurfaceGetHeight(surface) + 0xfff) & ~(size_t)0xfff) + 0x3000) {
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_A, GL_ONE);
+		if (attached < 24) {
+			say("hakios-gl: -attachImage: IOSurface %u was 'w30r': opaque\n", IOSurfaceGetID(surface));
+		}
+	}
 	if (attached++ < 24) {
 		say("hakios-gl: -attachImage: texture %d is IOSurface %u ('%.4s' %d x %d, %zu bytes a row)%s%s\n", texture,
 		    IOSurfaceGetID(surface), (const char *)&(uint32_t){ __builtin_bswap32(pixels) }, image->width, image->height,
