@@ -116,7 +116,7 @@
 +#endif /* _SWEET_SURFACE_H */
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetSurface.cpp
-@@ -0,0 +1,872 @@
+@@ -0,0 +1,876 @@
 +/*
 + * Built-in IOSurface for SWEET.
 + *
@@ -407,6 +407,10 @@
 +	s->elementWidth = (uint8_t)sweet_dict_u32(props, "IOSurfaceElementWidth", 1);
 +	s->elementHeight = (uint8_t)sweet_dict_u32(props, "IOSurfaceElementHeight", 1);
 +	s->pixelFormat = sweet_dict_u32(props, "IOSurfacePixelFormat", 0);
++	/* XCover5: 'w30r' (10-bit packed, 4 bytes a pixel) is made 'BGRA' of the same geometry, as hakios does: the
++	 * panel is 8-bit, and Metal (viva) and GL then use it in place instead of converting it each frame. */
++	if (s->pixelFormat == 0x77333072u && s->bytesPerElement == 4)
++		s->pixelFormat = 0x42475241u;
 +	s->cacheMode = sweet_dict_u32(props, "IOSurfaceCacheMode", 0);
 +	s->offset = sweet_dict_u32(props, "IOSurfaceOffset", 0);
 +	if (s->width > SWEET_SURFACE_MAX_DIM || s->height > SWEET_SURFACE_MAX_DIM ||
