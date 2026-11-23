@@ -744,3 +744,4 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
 - safari4: w30r(BGR10_XR, mtl 554/555) 표면을 half float로 변환 복사(mapple 85954b3 이식, build-viva.sh), CI 44693189208. 시험 대기.
 - safari4: 패닉 없음, fast.com 글씨 보임(DNS 됨), 배경 검정·글씨 뭉개짐. 변환이 mtl_format 554/555 조건에 안 걸린 것으로 판단. safari5: IOSurface 픽셀포맷 'w30r'이면 변환, CI 44695266801. 시험 대기.
 - safari5: fast.com 페이지 레이아웃·글씨 그려짐, 배경 검정·글씨 밝은 회색(색 반전처럼 보임). backboardd(hakios-gl)는 w30r을 deep_to_bgra로 이미 변환. safari6 = viva xr 변환 값 로그('vmg: xr in/out ...'), CI 44696933710.
+- safari7: 커널 IOSurface가 'w30r'(4B/px) 요청을 'BGRA'로 만듦(hakios 방식, 0046 patch, xnu CI 45148639038). viva/hakios-gl 변환 경로 우회. 시험 대기. (로컬 xnu/patches 130개 삭제 상태 — git엔 있음, CI 영향 없음)
