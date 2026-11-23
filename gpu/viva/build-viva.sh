@@ -170,6 +170,21 @@ static void xc5_xr_copy(vmg_device *dev, vmg_texture *t, uint8_t *base, size_t b
                   helpers + 'void vmg_texture_sync(vmg_device *dev, vmg_texture *t, bool to_texture)\n{', 1)
     assert 'xc5_xr_copy(vmg_device' in s
     x.write_text(s)
+# safari7: the kernel makes 'w30r' surfaces 'BGRA', but WebKit still asks for a BGR10_XR (554/555) texture over them:
+# it was copied and "converted" from bytes that are BGRA8 (black page, torn text). Over a surface, the XR formats
+# (550-555) are BGRA8Unorm (80), or its sRGB twin (81), as hakios's redwoodmetal does.
+sc = v / 'driver/vmg_screen.c'
+s = sc.read_text()
+old = ('vmg_texture *vmg_texture_create_iosurface(vmg_device *dev, const vmg_texture_desc *d, uint32_t surface_id, unsigned plane)\n'
+       '{\n')
+if 'xc5: XR over a surface' not in s:
+    assert old in s, 'vmg_screen.c: vmg_texture_create_iosurface not found'
+    s = s.replace(old, old +
+        '    vmg_texture_desc xc5d;   // xc5: XR over a surface is BGRA8\n'
+        '    if (d->mtl_format >= 550 && d->mtl_format <= 555) {\n'
+        '        xc5d = *d; xc5d.mtl_format = (d->mtl_format & 1) ? 81 : 80; d = &xc5d;\n'
+        '    }\n', 1)
+    sc.write_text(s)
 print('viva-gpu patched for XC5GPU')
 PY
 
