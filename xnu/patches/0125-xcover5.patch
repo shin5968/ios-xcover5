@@ -3367,10 +3367,10 @@ index 0000000..a8f4786
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..0d1fa3a
+index 0000000..fe33b7b
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,3688 @@
+@@ -0,0 +1,3726 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -4420,17 +4420,12 @@ index 0000000..0d1fa3a
 +	memcpy(aps[k].raw_ssid, raw, rawl);
 +	aps[k].ssid_len = (uint8_t)rawl;
 +	/*
-+	 * capability: privacy bit, or an RSN/WPA element. wifi59: S24 (WPA2, joined with the 4-way handshake) was later
-+	 * taken for open from one of its frames; the kernel then sent it an open CONNECT, the firmware reported fault
-+	 * 0x2c76 on it (arg 0x200b, as in wifi53) and stopped reading our queue for good. Once a network has been seen
-+	 * secured it stays secured (for the kernel's join and for what Settings is told).
++	 * capability: privacy bit, or an RSN/WPA element. A network can change (wifi59: the hotspot was switched from WPA2
++	 * to open during the boot), so the newest frame says what it is; a change is counted (flips).
 +	 */
 +	bool secured = (f[34] & 0x10) != 0 || rsn;
-+	if (!fresh && !aps[k].open && !secured) {
-+		if (privacy_flips++ == 0) {
-+			printf("XC5 WLBT: %s said open in one frame but was secured before: kept secured\n", ssid);
-+		}
-+		secured = true;
++	if (!fresh && aps[k].open == secured) {
++		privacy_flips++;
 +	}
 +	aps[k].open = !secured;
 +	aps[k].capability = (uint16_t)((f[34] | f[35] << 8) | (secured ? 0x10 : 0));
@@ -5116,9 +5111,40 @@ index 0000000..0d1fa3a
 +	send_connect_to(best);
 +}
 +
++/*
++ * wifi59: S24 was joined with WPA2 (keys installed), the hotspot then restarted as open (disconnected, reason 3), and
++ * the next CONNECT on the same VIF made the firmware report fault 0x2c76 (arg 0x200b) and stop for good (wifi53: the
++ * same fault on a CONNECT). Samsung's driver and the A50 port take the VIF down and up before each join
++ * (slsi_connect: add_vif; hakios.scsc.c: DEL_VIF 0x2008 -> ADD_VIF 0x2007 -> CONNECT), so a join after the first one
++ * goes DEL_VIF -> DEL_VIF_CFM 0x2108 -> ADD_VIF -> ADD_VIF_CFM 0x2107 -> CONNECT. xc5wvifreset=0: CONNECT at once.
++ */
++static int wifi_vifreset = 1, vif_reconnect = -1;
++static bool vif_used, vif_resetting;
++static uint32_t vif_resets;
++
++static void send_connect_now(int best);
++
 +static void
 +send_connect_to(int best)
 +{
++	if (wifi_vifreset && vif_used && !vif_resetting) {
++		uint8_t d[12] = { 0x08, 0x20 };         /* MLME_DEL_VIF_REQ {vif 1} */
++		d[10] = 1;
++		vif_reconnect = best;
++		vif_resetting = true;
++		vif_resets++;
++		ap_sel = best;
++		printf("XC5 WLBT: fresh VIF before joining %s\n", aps[best].ssid);
++		send_sig(d, sizeof(d), NULL, 0);
++		return;
++	}
++	send_connect_now(best);
++}
++
++static void
++send_connect_now(int best)
++{
++	vif_used = true;
 +	ap_sel = best;
 +	uint8_t s[34] = { 0x0b, 0x20 };
 +	s[10] = 1;
@@ -5463,9 +5489,20 @@ index 0000000..0d1fa3a
 +			send_add_vif();
 +		}
 +		break;
++	case 0x2108:                            /* MLME_DEL_VIF_CFM: the VIF again, then the join (send_connect_to) */
++		if (vif_resetting) {
++			send_add_vif();
++		}
++		break;
 +	case 0x2107:                            /* MLME_ADD_VIF_CFM */
 +		vif_res = *(uint16_t *)(sig + 12);
-+		if (vif_res == 0 && wifi_ui) {
++		if (vif_resetting) {
++			vif_resetting = false;
++			if (vif_res == 0 && vif_reconnect >= 0) {
++				send_connect_now(vif_reconnect);
++			}
++			vif_reconnect = -1;
++		} else if (vif_res == 0 && wifi_ui) {
 +			ui_ready = true;                /* the Wi-Fi thread makes en0 and hands the station to wifid's side */
 +			scan_inflight = true;
 +			send_add_scan();                /* (and a first scan at once, as the working runs did: kept for wifid) */
@@ -6965,8 +7002,8 @@ index 0000000..0d1fa3a
 +	printf("XC5 w txmac ios %02x:%02x:%02x:%02x:%02x:%02x foreign %u mapped %u | types %x %x %x %x n %u | cfm %x rx %u\n",
 +	    ios_mac[0], ios_mac[1], ios_mac[2], ios_mac[3], ios_mac[4], ios_mac[5], tx_foreign, rx_mapped, tx_types[0],
 +	    tx_types[1], tx_types[2], tx_types[3], tx_ntypes, data_cfm, data_rx);
-+	printf("XC5 w shadow tries %u ok %u used %u | ap %d ind %x | flips %u openrefused %u\n", shadow_tries, shadow_ok,
-+	    shadow_used, ap_sel, conn_ind, privacy_flips, open_refused);
++	printf("XC5 w shadow tries %u ok %u used %u | ap %d ind %x | flips %u openrefused %u vifreset %u%s\n", shadow_tries,
++	    shadow_ok, shadow_used, ap_sel, conn_ind, privacy_flips, open_refused, vif_resets, vif_resetting ? " (now)" : "");
 +	printf("XC5 w country %x | wdog %u at %u s alive %u at %u s | pmu STATUS %x STATES %x CTRL_NS %x CTRL_S %x DEBUG %x\n", country_res, wdog_n, wdog_at_s,
 +	    alive_n, alive_at_s, rd(pmu, WLBT_STATUS), rd(pmu, WLBT_STATES), rd(pmu, WLBT_CTRL_NS), rd(pmu, WLBT_CTRL_S), rd(pmu, WLBT_DEBUG));
 +	/* now, and at the first kick of a stall (0 0 0 if none yet) */
@@ -7045,6 +7082,7 @@ index 0000000..0d1fa3a
 +	PE_parse_boot_argn("xc5wdhcp", &wifi_kdhcp, sizeof(wifi_kdhcp));
 +	PE_parse_boot_argn("xc5wbar", &wifi_bar, sizeof(wifi_bar));
 +	PE_parse_boot_argn("xc5wforce", &wifi_force, sizeof(wifi_force));
++	PE_parse_boot_argn("xc5wvifreset", &wifi_vifreset, sizeof(wifi_vifreset));
 +	/*
 +	 * The firmware's 12 MiB at SHMEM_PA must lie outside XNU's RAM: the ADT's old default window (512 MiB at
 +	 * 0x880000000, make-boot.sh without XC5_DRAM) starts right there, and the core would write into kernel memory.
