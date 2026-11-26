@@ -3367,10 +3367,10 @@ index 0000000..a8f4786
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..30a84ae
+index 0000000..0d1fa3a
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,3661 @@
+@@ -0,0 +1,3688 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -3519,7 +3519,7 @@ index 0000000..30a84ae
 + * every index access the same way). xc5wbar=0 leaves these out (the behaviour up to wifi51, for comparison).
 + */
 +static uint32_t wifi_bar = 1, wifi_force;
-+static uint32_t stall_in, stall_out, stall_stat;
++static uint32_t stall_in, stall_out, stall_stat, privacy_flips, open_refused;
 +
 +static inline void
 +shm_bar(void)
@@ -4372,7 +4372,12 @@ index 0000000..30a84ae
 +	uint8_t raw[32];
 +	uint32_t rawl = 0;
 +	uint8_t rates[16], nr = 0, caps = 0;
++	bool rsn = false;
 +	for (uint32_t p = 36; p + 2 <= n && p + 2u + f[p + 1] <= n; p += 2u + f[p + 1]) {
++		if (f[p] == 48 || (f[p] == 221 && f[p + 1] >= 4 && f[p + 2] == 0x00 && f[p + 3] == 0x50 && f[p + 4] == 0xf2 &&
++		    f[p + 5] == 0x01)) {
++			rsn = true;             /* RSN, or WPA's vendor element */
++		}
 +		if (f[p] == 1 || f[p] == 50) {
 +			for (uint32_t i = 0; i < f[p + 1] && nr < sizeof(rates); i++) {
 +				rates[nr++] = f[p + 2 + i];
@@ -4404,7 +4409,8 @@ index 0000000..30a84ae
 +			break;
 +		}
 +	}
-+	if (k == ap_count) {
++	bool fresh = k == ap_count;
++	if (fresh) {
 +		if (ap_count >= APN) {
 +			return;
 +		}
@@ -4413,8 +4419,21 @@ index 0000000..30a84ae
 +	snprintf(aps[k].ssid, sizeof(aps[k].ssid), "%s", ssid[0] ? ssid : "(hidden)");
 +	memcpy(aps[k].raw_ssid, raw, rawl);
 +	aps[k].ssid_len = (uint8_t)rawl;
-+	aps[k].open = !(f[34] & 0x10);          /* capability: privacy bit */
-+	aps[k].capability = (uint16_t)(f[34] | f[35] << 8);
++	/*
++	 * capability: privacy bit, or an RSN/WPA element. wifi59: S24 (WPA2, joined with the 4-way handshake) was later
++	 * taken for open from one of its frames; the kernel then sent it an open CONNECT, the firmware reported fault
++	 * 0x2c76 on it (arg 0x200b, as in wifi53) and stopped reading our queue for good. Once a network has been seen
++	 * secured it stays secured (for the kernel's join and for what Settings is told).
++	 */
++	bool secured = (f[34] & 0x10) != 0 || rsn;
++	if (!fresh && !aps[k].open && !secured) {
++		if (privacy_flips++ == 0) {
++			printf("XC5 WLBT: %s said open in one frame but was secured before: kept secured\n", ssid);
++		}
++		secured = true;
++	}
++	aps[k].open = !secured;
++	aps[k].capability = (uint16_t)((f[34] | f[35] << 8) | (secured ? 0x10 : 0));
 +	aps[k].beacon_interval = (uint16_t)(f[32] | f[33] << 8);
 +	aps[k].elements_length = (uint16_t)MIN(n - 36, (uint32_t)REDWOOD_STA_ELEMENTS_MOST);
 +	memcpy(aps[k].elements, f + 36, aps[k].elements_length);
@@ -6463,6 +6482,13 @@ index 0000000..30a84ae
 +		join_stage = 3;
 +		return join_err = ENOENT;
 +	}
++	if (what->security == REDWOOD_STA_OPEN && !aps[k].open) {
++		/* an open join of a secured network: the firmware faults on that CONNECT (0x2c76) and stops (wifi59) */
++		open_refused++;
++		printf("XC5 WLBT: %s is secured: open join refused\n", aps[k].ssid);
++		join_stage = 3;
++		return join_err = EAUTH;
++	}
 +	/* ap_sel is the thread's (it sets -1 when a join fails): read once, under the lock */
 +	lck_mtx_lock(&xc5w_mtx);
 +	int sel = ap_sel;
@@ -6939,7 +6965,8 @@ index 0000000..30a84ae
 +	printf("XC5 w txmac ios %02x:%02x:%02x:%02x:%02x:%02x foreign %u mapped %u | types %x %x %x %x n %u | cfm %x rx %u\n",
 +	    ios_mac[0], ios_mac[1], ios_mac[2], ios_mac[3], ios_mac[4], ios_mac[5], tx_foreign, rx_mapped, tx_types[0],
 +	    tx_types[1], tx_types[2], tx_types[3], tx_ntypes, data_cfm, data_rx);
-+	printf("XC5 w shadow tries %u ok %u used %u | ap %d ind %x\n", shadow_tries, shadow_ok, shadow_used, ap_sel, conn_ind);
++	printf("XC5 w shadow tries %u ok %u used %u | ap %d ind %x | flips %u openrefused %u\n", shadow_tries, shadow_ok,
++	    shadow_used, ap_sel, conn_ind, privacy_flips, open_refused);
 +	printf("XC5 w country %x | wdog %u at %u s alive %u at %u s | pmu STATUS %x STATES %x CTRL_NS %x CTRL_S %x DEBUG %x\n", country_res, wdog_n, wdog_at_s,
 +	    alive_n, alive_at_s, rd(pmu, WLBT_STATUS), rd(pmu, WLBT_STATES), rd(pmu, WLBT_CTRL_NS), rd(pmu, WLBT_CTRL_S), rd(pmu, WLBT_DEBUG));
 +	/* now, and at the first kick of a stall (0 0 0 if none yet) */
