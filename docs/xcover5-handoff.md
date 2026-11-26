@@ -748,7 +748,7 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
 - safari7: w30r 사라짐, 하지만 배경 검정·숫자 가운데 몰림·찢어짐. 원인: WebKit이 여전히 BGR10_XR(554) 텍스처를 요청 → viva가 BGRA 바이트를 10비트로 '변환'. safari8: viva에서 표면 위 550-555 형식을 BGRA8(80/81)로(hakios 방식), CI 45152067085. 시험 대기.
 - safari8: 배경 검정 유지, 숫자 겹침(이전 프레임 안 지워짐), 줄 찢어짐. 추정: WebKit.GPU의 clear(배경 흰색 채우기)가 표면 텍스처에 반영 안 됨. safari9 = WebKit.GPU만 viva 제외(비교 시험).
 - safari9: 숫자 겹침 사라짐(viva 원인 확정), 라이트 모드인데 Google 페이지 흰 바탕 검정. 추정: WebKit이 w30r로 알고 alpha 0. safari10: 커널이 w30r→BGRA 표면에 여분 3페이지 표시, hakios-gl이 그 표면 alpha=1 swizzle(xnu 45156001220, mesa-ios 45157549287, drop 1795430472). WebKit.GPU viva 제외 유지. 시험 대기.
-- **코드 점검·수정(2026-11-26, Claude, 폰 시험 전)**: 전체 점검에서 찾은 것을 고침. 시험 이미지 아직 없음(커밋 뒤 CI·`mkimage.sh` 필요).
+- **코드 점검·수정(2026-11-26, Claude, 폰 시험 전)**: 전체 점검에서 찾은 것을 고침. 커밋 70c9ca5, **xnu CI 45819049154 성공**(빌드 통과). 시험 이미지는 아직 안 만듦(`gh run download 45819049154 -n xnu-kernel -D xnu/out` 뒤 `mkimage.sh`).
   - Wi-Fi(`xc5_wlbt.c`): 쓰기 결합 공유 메모리에서 소비 쪽 배리어가 없었음 — 펌웨어 쓰기 인덱스를 읽은 뒤 항목·mbulk를 읽기 전, 그리고
     읽기 인덱스를 돌려주기 전에 `dsb sy`(`shm_bar`, TH ctrl/data·FH_RFB·mgmt 링·mxlog). A50(Exynos 9610, 같은 SCSC mx140,
     `nespaces/ios-a50-exynos9610` `core/drivers/wifi/hakios.scsc.c`)도 인덱스 접근 앞뒤에 dsb. `xc5wbar=0`이면 예전처럼.
