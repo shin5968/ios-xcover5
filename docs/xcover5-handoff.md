@@ -765,3 +765,4 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
     안 되면 다음 후보(A50 대조): 850 PMU의 MASK_PWR_REQ 대응 비트, 연결 순서 DEL_VIF→ADD_VIF→SET rates/HT→CONNECT.
   - 남은 점검 결과(안 고침): XC5GPU 사용자 클라이언트 접근 제어·GPU VA 재사용 없음, `IOAcceleratorES::setProperties` 누구나, `xc5_drop.c` 허용 pid 미정리,
     WPA2 replay counter·ANonce 검사 없음, 비밀번호가 부팅 인자(`kern.bootargs`), `regen.sh`·`wlbtfw.sh` 견고성.
+- **wifi57 이미지(2026-11-26)**: `xc5-ios-wifi57-console.tar`(91,985,920 B, SHA256 `390eb42d...388f54`) = xnu CI 45819049154(70c9ca5: 배리어·슬롯 강제 재사용 끔) + safari10과 같은 인자(`xc5wifiui=1 xc5net=1 xc5nets=...`, viva, `a5fb_noconsole=1`), 드롭 그대로 1795430472. 화면 콘솔이 꺼져 있으니 **PREV BOOT LOG**(필터에 heartbeat)로 볼 것: `XC5 w ctl back force busy | ... q0 w r ... stall at`(force 0, r가 w를 따라가고 stall at 0이면 멈춤 해결), 설정 앱 Wi-Fi 연결·체크, 부팅마다 연결되는지. 새 경고 줄 `XC5 WLBT: XNU RAM ... covers`가 나오면 RAM 창 문제. 비교: 같은 이미지에 `xc5wbar=0`이면 예전 동작.
