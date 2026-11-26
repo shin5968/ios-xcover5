@@ -990,10 +990,10 @@ index ba647a8..979c83f 100644
  	int log_contacts = 0;
 diff --git a/bsd/dev/redwood_apple80211.c b/bsd/dev/redwood_apple80211.c
 new file mode 100644
-index 0000000..06646be
+index 0000000..97d43cb
 --- /dev/null
 +++ b/bsd/dev/redwood_apple80211.c
-@@ -0,0 +1,793 @@
+@@ -0,0 +1,812 @@
 +/*
 + * From y2sios (https://github.com/stormtroopxyz/y2sios, kernel/xnu/files/), MIT License,
 + * Copyright (c) 2026 the y2sios contributors; itself after HackiOS by OOSEX GANG (MIT). Taken for the XCover5 port's
@@ -1775,8 +1775,27 @@ index 0000000..06646be
 +		xc5_a80211_last_type = (is_set ? 1000 : 0) + request->req_type;
 +		xc5_a80211_last_error = error;
 +	}
-+	/* (a request that is repeated for ever is said a few hundred times) */
-+	if (said < 800) {
++	/*
++	 * (a request that is repeated for ever is said a few hundred times)
++	 * XCover5 (wifi58): wifid asks CURRENT_NETWORK every second and that filled the RAM log; a request is now said
++	 * the first two times it gets an answer it did not get before. A scan or a join (set 10, 20) is always said.
++	 */
++	static uint16_t told[2][512];
++	static int told_error[2][512];
++	uint32_t kind = (uint32_t)request->req_type, side = is_set ? 1 : 0;
++	bool tell = said < 800;
++	if (kind < 512) {
++		if (told[side][kind] != 0 && told_error[side][kind] != error) {
++			told[side][kind] = 0;
++		}
++		told_error[side][kind] = error;
++		if (told[side][kind] < 2) {
++			told[side][kind]++;
++		} else if (!(is_set && (kind == 10 || kind == 20))) {
++			tell = false;
++		}
++	}
++	if (tell) {
 +		said++;
 +		printf("apple80211: %s %s %d (%s), value %d, %u bytes%s: %s", who, is_set ? "sets" : "gets", request->req_type,
 +		    type_name(request->req_type), request->req_val, request->req_len, what, error == 0 ? "answered\n" : error ==
@@ -2182,10 +2201,10 @@ index 0000000..960e5c8
 +}
 diff --git a/bsd/dev/xc5_drop.c b/bsd/dev/xc5_drop.c
 new file mode 100644
-index 0000000..73c2bf9
+index 0000000..d075a86
 --- /dev/null
 +++ b/bsd/dev/xc5_drop.c
-@@ -0,0 +1,596 @@
+@@ -0,0 +1,633 @@
 +/*
 + * XCover5 drop zone: files for the iOS root from the CACHE partition, so the
 + * Mesa libraries reach the phone without reflashing the 12 GB root image.
@@ -2780,6 +2799,43 @@ index 0000000..73c2bf9
 +	}
 +	printf("XC5 GLLOG end (pid %d)\n", pid);
 +	IOSleep(5000);
++}
++
++/*
++ * How many times (1, 2, ...) a log line of this kind for this name has been asked for. Callers say a line only the
++ * first few times, so a process that is started or crashes every few seconds (locationd) does not fill the RAM log
++ * that PREV BOOT LOG shows (wifi58: ~6000 lines, mostly the same few). xc5logall=1: always 1 (everything said).
++ */
++int xc5_log_count(const char *kind, const char *name);
++int
++xc5_log_count(const char *kind, const char *name)
++{
++	static struct {
++		char key[48];
++		int n;
++	} seen[96];
++	static int used, all = -1;
++	char key[48];
++	if (all < 0) {
++		int v = 0;
++		(void)PE_parse_boot_argn("xc5logall", &v, sizeof(v));
++		all = v != 0;
++	}
++	if (all) {
++		return 1;
++	}
++	snprintf(key, sizeof(key), "%s %s", kind, name);
++	for (int i = 0; i < used; i++) {
++		if (strncmp(seen[i].key, key, sizeof(key)) == 0) {
++			return ++seen[i].n;
++		}
++	}
++	if (used < (int)(sizeof(seen) / sizeof(seen[0]))) {
++		strlcpy(seen[used].key, key, sizeof(seen[used].key));
++		seen[used].n = 1;
++		used++;
++	}
++	return 1;
 +}
 +#endif /* XCOVER5 */
 diff --git a/bsd/dev/xc5_pmic.c b/bsd/dev/xc5_pmic.c
@@ -7005,7 +7061,7 @@ index d26e1ee..366fc10 100644
  	lock_trace = 1;
  }
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
-index deccec2..d99902b 100644
+index deccec2..e04173f 100644
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
 @@ -5741,6 +5741,29 @@ exec_extract_strings(struct image_params *imgp)
@@ -7038,10 +7094,22 @@ index deccec2..d99902b 100644
  	/* Save space for envv[] NULL terminator */
  	if (imgp->ip_argspace < new_ptr_size) {
  		error = E2BIG;
-@@ -7414,6 +7437,25 @@ process_signature(proc_t p, struct image_params *imgp)
+@@ -7413,7 +7436,37 @@ process_signature(proc_t p, struct image_params *imgp)
+ 			}
  #if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_A5XELTE)
  			/* A short line keeps the persistent console ring useful. */
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++			{
++				extern int xc5_log_count(const char *kind, const char *name) __attribute__((weak));
++				/* xc5: xpcproxy (before every launch) is not said, a name 3 times at most */
++				if (xc5_log_count == NULL || (strncmp(p->p_name, "xpcproxy", sizeof(p->p_name)) != 0 &&
++				    xc5_log_count("exec", p->p_name) <= 3)) {
++					printf("exec %s\n", p->p_name);
++				}
++			}
++#else
  			printf("exec %s\n", p->p_name);
++#endif
 +#if defined(ARM64_BOARD_CONFIG_A5XELTE)
 +			{
 +				static const char *const xc5_noexec[] = {
@@ -7065,7 +7133,7 @@ index deccec2..d99902b 100644
  			printf("Allowing spawn of iOS binary %s since it has "
  			    "com.apple.private.security.no-sandbox entitlement or unentitled_ios_sim_launch "
 diff --git a/bsd/kern/kern_exit.c b/bsd/kern/kern_exit.c
-index a29409d..641d7b2 100644
+index a29409d..4dfdae9 100644
 --- a/bsd/kern/kern_exit.c
 +++ b/bsd/kern/kern_exit.c
 @@ -1848,6 +1848,17 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
@@ -7086,6 +7154,33 @@ index a29409d..641d7b2 100644
  
  	/*
  	 * Generate a corefile/crashlog if:
+@@ -1887,6 +1898,18 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
+ #if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_A5XELTE)
+ 		if (p == current_proc()) {
+ 			extern void sweet_crash_log(const char *, int, int, uint64_t, uint64_t);
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++			extern int xc5_log_count(const char *kind, const char *name) __attribute__((weak));
++			/* xc5: a process that crashed twice already (locationd: every few seconds) gets one short line */
++			int xc5_crashes = xc5_log_count != NULL ? xc5_log_count("crash", p->p_comm) : 1;
++			if (xc5_crashes > 2) {
++				if (xc5_crashes <= 10 || xc5_crashes % 20 == 0) {
++					printf("CRASH %s[%d] sig %d again (%d times)\n", p->p_comm, proc_getpid(p), WTERMSIG(rv),
++					    xc5_crashes);
++				}
++			} else
++#endif
++			{
+ 			sweet_crash_log(p->p_comm, proc_getpid(p), WTERMSIG(rv),
+ 			    ((uint64_t)ut->uu_exception << 32) | (uint32_t)ut->uu_code, ut->uu_subcode);
+ 			/* abort_with_payload messages (_objc_fatal, os_crash_fmt, ...) */
+@@ -1896,6 +1919,7 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
+ 				    p->p_exit_reason->osr_namespace, p->p_exit_reason->osr_code,
+ 				    desc != NULL ? desc : "(none)");
+ 			}
++			}
+ 		}
+ #endif
+ 		/* Defualt to EXC_CRASH if the exception is not an EXC_RESOURCE or EXC_GUARD */
 diff --git a/bsd/kern/sweet_amfi.c b/bsd/kern/sweet_amfi.c
 index 4fd8729..8a687cc 100644
 --- a/bsd/kern/sweet_amfi.c

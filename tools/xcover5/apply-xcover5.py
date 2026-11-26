@@ -2330,3 +2330,59 @@ edit('bsd/kern/kern_exec.c', [
      '\t\t\t}\n'
      '#endif\n', 1),
 ])
+
+# wifi58: the RAM log (PREV BOOT LOG) kept ~6000 lines and most of them were the same few over and over:
+# "apple80211: wifid gets 103 (CURRENT_NETWORK) ... error 6" every second, "exec xpcproxy" before every launch,
+# and locationd's four CRASH lines every few seconds. A line for the same process (exec, crash) is now said the
+# first few times only (xc5_log_count in xc5_drop.c), xpcproxy's exec not at all, and the apple80211 requests
+# in redwood_apple80211.c only when their answer changes. xc5logall=1 says everything as before.
+edit('bsd/kern/kern_exec.c', [
+    ('\t\t\t/* A short line keeps the persistent console ring useful. */\n'
+     '\t\t\tprintf("exec %s\\n", p->p_name);\n',
+     '\t\t\t/* A short line keeps the persistent console ring useful. */\n'
+     '#if defined(ARM64_BOARD_CONFIG_A5XELTE)\n'
+     '\t\t\t{\n'
+     '\t\t\t\textern int xc5_log_count(const char *kind, const char *name) __attribute__((weak));\n'
+     '\t\t\t\t/* xc5: xpcproxy (before every launch) is not said, a name 3 times at most */\n'
+     '\t\t\t\tif (xc5_log_count == NULL || (strncmp(p->p_name, "xpcproxy", sizeof(p->p_name)) != 0 &&\n'
+     '\t\t\t\t    xc5_log_count("exec", p->p_name) <= 3)) {\n'
+     '\t\t\t\t\tprintf("exec %s\\n", p->p_name);\n'
+     '\t\t\t\t}\n'
+     '\t\t\t}\n'
+     '#else\n'
+     '\t\t\tprintf("exec %s\\n", p->p_name);\n'
+     '#endif\n', 1),
+])
+edit('bsd/kern/kern_exit.c', [
+    ('\t\t\textern void sweet_crash_log(const char *, int, int, uint64_t, uint64_t);\n'
+     '\t\t\tsweet_crash_log(p->p_comm, proc_getpid(p), WTERMSIG(rv),\n'
+     '\t\t\t    ((uint64_t)ut->uu_exception << 32) | (uint32_t)ut->uu_code, ut->uu_subcode);\n'
+     '\t\t\t/* abort_with_payload messages (_objc_fatal, os_crash_fmt, ...) */\n'
+     '\t\t\tif (PROC_HAS_EXITREASON(p)) {\n',
+     '\t\t\textern void sweet_crash_log(const char *, int, int, uint64_t, uint64_t);\n'
+     '#if defined(ARM64_BOARD_CONFIG_A5XELTE)\n'
+     '\t\t\textern int xc5_log_count(const char *kind, const char *name) __attribute__((weak));\n'
+     '\t\t\t/* xc5: a process that crashed twice already (locationd: every few seconds) gets one short line */\n'
+     '\t\t\tint xc5_crashes = xc5_log_count != NULL ? xc5_log_count("crash", p->p_comm) : 1;\n'
+     '\t\t\tif (xc5_crashes > 2) {\n'
+     '\t\t\t\tif (xc5_crashes <= 10 || xc5_crashes % 20 == 0) {\n'
+     '\t\t\t\t\tprintf("CRASH %s[%d] sig %d again (%d times)\\n", p->p_comm, proc_getpid(p), WTERMSIG(rv),\n'
+     '\t\t\t\t\t    xc5_crashes);\n'
+     '\t\t\t\t}\n'
+     '\t\t\t} else\n'
+     '#endif\n'
+     '\t\t\t{\n'
+     '\t\t\tsweet_crash_log(p->p_comm, proc_getpid(p), WTERMSIG(rv),\n'
+     '\t\t\t    ((uint64_t)ut->uu_exception << 32) | (uint32_t)ut->uu_code, ut->uu_subcode);\n'
+     '\t\t\t/* abort_with_payload messages (_objc_fatal, os_crash_fmt, ...) */\n'
+     '\t\t\tif (PROC_HAS_EXITREASON(p)) {\n', 1),
+    ('\t\t\t\t    desc != NULL ? desc : "(none)");\n'
+     '\t\t\t}\n'
+     '\t\t}\n'
+     '#endif\n',
+     '\t\t\t\t    desc != NULL ? desc : "(none)");\n'
+     '\t\t\t}\n'
+     '\t\t\t}\n'
+     '\t\t}\n'
+     '#endif\n', 1),
+])

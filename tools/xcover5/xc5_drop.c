@@ -593,4 +593,41 @@ xc5_gl_exit(int pid, int rv, uint32_t ns, uint64_t code)
 	printf("XC5 GLLOG end (pid %d)\n", pid);
 	IOSleep(5000);
 }
+
+/*
+ * How many times (1, 2, ...) a log line of this kind for this name has been asked for. Callers say a line only the
+ * first few times, so a process that is started or crashes every few seconds (locationd) does not fill the RAM log
+ * that PREV BOOT LOG shows (wifi58: ~6000 lines, mostly the same few). xc5logall=1: always 1 (everything said).
+ */
+int xc5_log_count(const char *kind, const char *name);
+int
+xc5_log_count(const char *kind, const char *name)
+{
+	static struct {
+		char key[48];
+		int n;
+	} seen[96];
+	static int used, all = -1;
+	char key[48];
+	if (all < 0) {
+		int v = 0;
+		(void)PE_parse_boot_argn("xc5logall", &v, sizeof(v));
+		all = v != 0;
+	}
+	if (all) {
+		return 1;
+	}
+	snprintf(key, sizeof(key), "%s %s", kind, name);
+	for (int i = 0; i < used; i++) {
+		if (strncmp(seen[i].key, key, sizeof(key)) == 0) {
+			return ++seen[i].n;
+		}
+	}
+	if (used < (int)(sizeof(seen) / sizeof(seen[0]))) {
+		strlcpy(seen[used].key, key, sizeof(seen[used].key));
+		seen[used].n = 1;
+		used++;
+	}
+	return 1;
+}
 #endif /* XCOVER5 */

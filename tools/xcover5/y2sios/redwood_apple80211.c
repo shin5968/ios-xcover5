@@ -779,8 +779,27 @@ redwood_apple80211_ioctl(u_long command, void *data)
 		xc5_a80211_last_type = (is_set ? 1000 : 0) + request->req_type;
 		xc5_a80211_last_error = error;
 	}
-	/* (a request that is repeated for ever is said a few hundred times) */
-	if (said < 800) {
+	/*
+	 * (a request that is repeated for ever is said a few hundred times)
+	 * XCover5 (wifi58): wifid asks CURRENT_NETWORK every second and that filled the RAM log; a request is now said
+	 * the first two times it gets an answer it did not get before. A scan or a join (set 10, 20) is always said.
+	 */
+	static uint16_t told[2][512];
+	static int told_error[2][512];
+	uint32_t kind = (uint32_t)request->req_type, side = is_set ? 1 : 0;
+	bool tell = said < 800;
+	if (kind < 512) {
+		if (told[side][kind] != 0 && told_error[side][kind] != error) {
+			told[side][kind] = 0;
+		}
+		told_error[side][kind] = error;
+		if (told[side][kind] < 2) {
+			told[side][kind]++;
+		} else if (!(is_set && (kind == 10 || kind == 20))) {
+			tell = false;
+		}
+	}
+	if (tell) {
 		said++;
 		printf("apple80211: %s %s %d (%s), value %d, %u bytes%s: %s", who, is_set ? "sets" : "gets", request->req_type,
 		    type_name(request->req_type), request->req_val, request->req_len, what, error == 0 ? "answered\n" : error ==

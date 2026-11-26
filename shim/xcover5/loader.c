@@ -228,13 +228,14 @@ static char *udec(char *p, uint32_t v)
 	return p;
 }
 
-/* ---- filtered view: only the lines that matter for GPU/crash work (VOL+ on the newest page toggles it) ---- */
+/* ---- filtered view: only the lines that matter for Wi-Fi/crash work (VOL+ on the newest page toggles it) ---- */
 #define FMAX 8192
 static uint32_t fidx[FMAX], fn;
 static int filtered;
 /* a char table, not pointers: the loader has no relocations */
-static const char fkeys[][12] = { "viva", "XC5GPU", "CRASH", "gpusvc", "heartbeat", "panic",
-				  "WebKit", "Safari", "WebContent", "sandbox", "jetsam", "" };
+/* Wi-Fi work (wifi58): the kernel's Wi-Fi lines ("XC5 w ...", "XC5 WLBT", firmware log, configd), crashes, panics */
+static const char fkeys[][12] = { "XC5 w ", "XC5 WLBT", "XC5 wlbt", "XC5 hip", "XC5 FW", "xc5net", "CRASH",
+				  "panic", "heartbeat", "gpusvc", "viva", "" };
 
 static int line_has(volatile struct prz *z, uint32_t i, const char *k)
 {
@@ -276,7 +277,7 @@ static void view_filtered(volatile struct prz *z, uint32_t back)
 {
 	fill(0, 0, FB_W, FB_H, 0xff000000U);
 	char pos[64], *p = pos;
-	const char *k = "FILTER (viva/GPU/CRASH) ";
+	const char *k = "FILTER (Wi-Fi/CRASH) ";
 	while (*k)
 		*p++ = *k++;
 	p = udec(p, fn > back ? fn - back : 0);
