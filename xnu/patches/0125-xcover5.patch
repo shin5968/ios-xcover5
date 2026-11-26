@@ -3311,10 +3311,10 @@ index 0000000..a8f4786
 +}
 diff --git a/bsd/dev/xc5_wlbt.c b/bsd/dev/xc5_wlbt.c
 new file mode 100644
-index 0000000..5720555
+index 0000000..30a84ae
 --- /dev/null
 +++ b/bsd/dev/xc5_wlbt.c
-@@ -0,0 +1,3641 @@
+@@ -0,0 +1,3661 @@
 +/*
 + * XCover5 Wi-Fi, step 1: start the Exynos 850's own Wi-Fi/Bluetooth core (Samsung SCSC "WLBT", Maxwell S612)
 + * with Samsung's firmware, and see whether it runs. Boot-arg xc5wifi=1.
@@ -3413,6 +3413,16 @@ index 0000000..5720555
 +#define WLBT_CTRL_S     0x3114
 +#define TOP_OUT         0x3920
 +#define WLBT_DEBUG      0x005C
++/*
++ * wifi57: the stall comes later (151 s) but the same way. Samsung's 3830 driver has no MASK_PWR_REQ (the A50/9610
++ * port holds the power request with it) and powers WLBT up as we do, so these say what the core is doing when it
++ * stops (mif_reg_S5E3830.h, facts only): WLBT_IN [2] PWRDOWN_IND (in power down) [0] SWEEPER_PND_CLR_ACK,
++ * WLBT_OUT [7] SWEEPER_PND_CLR_REQ (clean a hung bus transaction) [13] SWEEPER_BYPASS, WLBT_STAT [0] PWRDN_DONE
++ * [4] ACCESS_MIF (WLBT is using the DRAM side).
++ */
++#define WLBT_OUT        0x3120
++#define WLBT_IN         0x3124
++#define WLBT_STAT       0x0058
 +#define VGPIO_TX_MONITOR 0x1700
 +
 +#define INTSR0          0x014
@@ -3453,6 +3463,7 @@ index 0000000..5720555
 + * every index access the same way). xc5wbar=0 leaves these out (the behaviour up to wifi51, for comparison).
 + */
 +static uint32_t wifi_bar = 1, wifi_force;
++static uint32_t stall_in, stall_out, stall_stat;
 +
 +static inline void
 +shm_bar(void)
@@ -5670,8 +5681,14 @@ index 0000000..5720555
 +				q_kick_at = now_ns;
 +				q_kicks++;
 +				if (q_kicks <= 6) {
-+					printf("XC5 WLBT: FW STALL q0 w%u r%u %u ms | st %x sr1 %x msr1 %x | got %u done %u\n", qw, qr,
-+					    q_stall_ms, rd(pmu, WLBT_STATES), rd(mbox, INTSR1), rd(mbox, INTMSR1), mlme_got, scan_done);
++					printf("XC5 WLBT: FW STALL q0 w%u r%u %u ms | st %x sr1 %x msr1 %x | in %x out %x stat %x | got %u done %u\n",
++					    qw, qr, q_stall_ms, rd(pmu, WLBT_STATES), rd(mbox, INTSR1), rd(mbox, INTMSR1), rd(pmu, WLBT_IN),
++					    rd(pmu, WLBT_OUT), rd(pmu, WLBT_STAT), mlme_got, scan_done);
++				}
++				if (q_kicks == 1) {
++					stall_in = rd(pmu, WLBT_IN);
++					stall_out = rd(pmu, WLBT_OUT);
++					stall_stat = rd(pmu, WLBT_STAT);
 +				}
 +				wr(mbox, 0x01c, 1u << HIP_FH_BIT);      /* INTGR1 */
 +				if (!q_stall_told && q_stall_ms > 5000) {
@@ -6869,6 +6886,9 @@ index 0000000..5720555
 +	printf("XC5 w shadow tries %u ok %u used %u | ap %d ind %x\n", shadow_tries, shadow_ok, shadow_used, ap_sel, conn_ind);
 +	printf("XC5 w country %x | wdog %u at %u s alive %u at %u s | pmu STATUS %x STATES %x CTRL_NS %x CTRL_S %x DEBUG %x\n", country_res, wdog_n, wdog_at_s,
 +	    alive_n, alive_at_s, rd(pmu, WLBT_STATUS), rd(pmu, WLBT_STATES), rd(pmu, WLBT_CTRL_NS), rd(pmu, WLBT_CTRL_S), rd(pmu, WLBT_DEBUG));
++	/* now, and at the first kick of a stall (0 0 0 if none yet) */
++	printf("XC5 w pmu2 in %x out %x stat %x | at stall in %x out %x stat %x\n", rd(pmu, WLBT_IN), rd(pmu, WLBT_OUT),
++	    rd(pmu, WLBT_STAT), stall_in, stall_out, stall_stat);
 +	printf("XC5 w ctl back %u force %u busy %x | loop1 %u s loop2 %u s poll %u ms | q0 w%u r%u ka %u/%u stall at %llu s kick %u\n",
 +	    ctl_back, ctl_force, ctl_busy, t_loop1_s, t_loop2_s, poll_ms, *scb(0, 0), *scb(0, 1), ka_sent, ka_got, q_stall_at_s,
 +	    q_kicks);
