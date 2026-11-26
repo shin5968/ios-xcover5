@@ -24,7 +24,8 @@ args=${*:-debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress 
 # scales to the panel (0125), or the panel itself with sweetfb_native=1.
 canvas=1125x2436
 [[ " $args " == *" sweetfb_native=1 "* ]] && canvas=720x1480
-# XC5_DRAM=BASE:SIZE overrides the XNU RAM window (default 512 MiB at 0x880000000).
+# XC5_DRAM=BASE:SIZE overrides the XNU RAM window (default 1 GiB at 0x8a2800000, as mkimage.sh; not over the
+# Wi-Fi memory 0x880000000-0x880c00000).
 python3 "$repo/tools/mkadt_xcover5.py" "$work/xcover5.adt" --canvas "$canvas" ${XC5_DRAM:+--dram "$XC5_DRAM"}
 python3 "$repo/tools/mkpayload.py" "$kernel" "$work/xcover5.adt" "$work/payload.bin" --cmdline "$args"
 bash "$repo/shim/xcover5/build.sh"

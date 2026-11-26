@@ -56,7 +56,7 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
 | `xc5photos=1` | 사진 앱·checkpointd·assetsd에 샘플러(`libxc5poster.dylib`) |
 | `xc5metalfor=a,b` | Metal 속성을 볼 프로세스 이름(쉼표, 기본 `chronod`). 다른 프로세스는 Metal 장치가 없다고 봄(78에서 SpringBoard가 잡고 죽음) |
 | `xc5mtl=1` | chronod에 `libxc5mtl.dylib`(`gpu/metal/xc5_mtl.c`): 6초 뒤 Metal 장치·버퍼·명령 버퍼 시험, 단계마다 `gl: mtl[pid] step N ...`. 속성을 못 읽을 때만 직접 넣음(옛 커널용). `xc5metal=1` 필요 |
-## 지금 상태 (2026-11-07)
+## 지금 상태 (기록은 2026-11-07부터 시간순, 최신은 이 파일 맨 끝)
 
 - **RTC2 진단 이미지 완료**: 커밋 d90f1584, xnu CI 42355742720 성공. `shim/xcover5/out/xc5-ios-rtc2-console.tar` (74,506,240 bytes), SHA256 `c42d042a9bd844c933ac623d4fd593b96c8f9387f33f0bd9ac2d9566a2595cf4`. boot.img + 기존 cache.img만 포함(USERDATA 없음). 명시적 `xc5rtc=1`, 기존 wall2/metal/ckpt/pmic 설정 유지. `XC5 RTC2`가 진입/ACPM/원시 레지스터/설정 전·요청·readback 시간을 출력. PMIC 쓰기와 날짜 변환 변경 없음. 호스트 정상·읽기 실패·잘못된 날짜 및 별도 복사본 롤백 시험 통과; 실기기 RTC 교정 성공은 아직 미확인. 165706 영상의 launchd 날짜는 1969-12-31이며 이전 RTC 시작 로그는 확인되지 않음.
 
@@ -730,9 +730,9 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
   `dsstr.py 주소`: 문자열/CFString. 크래시 메시지는 커널이 `STR …` 줄로 힙 문자열을 찍어 줌(예외 이유가 거기 나옴).
 - `frames.ps1`: 영상 → 프레임 묶음.
 
-- **viva2/viva3 ���(2026-11-16)**: viva2 849 submit �� ���� 2(fragment type 9, status 0x5a = JOB_READ_FAULT, fault_ptr�� ���� BO ��, ���� �̻�). viva3(`xc5metalfor=*,-SpringBoard,-backboardd`) �����: �� �� �� ��. ���� viva4 = SpringBoard�� Metal(`*,-backboardd`).
-- viva4(SpringBoard�� Metal) �����: �� ��. ���� viva5 = ����(`xc5metalfor=*`, backboardd ����).
-- viva5(`xc5metalfor=*`, backboardd�� Metal): backboardd SIGSEGV(pc 0x104712e44, far 0xcca8 = NULL ��ó) �ݺ�, fb swap=0 present=0 �� ȭ�� ���� ����. ���� �̻�(viva�� ȭ�� ����� AppleCLCD ���� ��ĵ�ƿ� ����, �츮�� SweetFB). **������ viva4**(`xc5metalfor=*,-backboardd`).
+- **viva2/viva3 결과(2026-11-16)**: viva2 849 submit 중 실패 2(fragment type 9, status 0x5a = JOB_READ_FAULT, fault_ptr는 정상 BO 안, 원인 미상). viva3(`xc5metalfor=*,-SpringBoard,-backboardd`) 사용자: 앱 다 잘 됨. 다음 viva4 = SpringBoard도 Metal(`*,-backboardd`).
+- viva4(SpringBoard도 Metal) 사용자: 잘 됨. 다음 viva5 = 전부(`xc5metalfor=*`, backboardd 포함).
+- viva5(`xc5metalfor=*`, backboardd도 Metal): backboardd SIGSEGV(pc 0x104712e44, far 0xcca8 = NULL 근처) 반복, fb swap=0 present=0 → 화면 갱신 없음. 원인 미상(viva가 화면 출력을 AppleCLCD 직접 스캔아웃 전제, 우리는 SweetFB). **기준은 viva4**(`xc5metalfor=*,-backboardd`).
 - viva6 PREV BOOT LOG: backboardd SIGSEGV(addr 0xcca8) = VivaMTLDriver panfrost_batch_read_rsrc <- panfrost_get_index_buffer_bounded <- [VMRenderEncoder draw:index:indirect:] block <- VMCommandBuffer execute. 인덱스 버퍼 리소스 경로에서 죽음. 수정(커밋 d8ecc46, CI 43874407595): build-viva.sh가 vmg_exec.c를 패치해 GPU가 쓰지 않는 비-indirect 인덱스 버퍼는 CPU 복사본을 user indices로 넘김. viva7 = 같은 boot-args(xc5metalfor=*), drop 1794835314. 시험 대기.
 - viva7 결과: backboardd 크래시 없음, fb swap/present=97, 터치 됨. 하지만 GPU 체인 15% 실패(js_status 0x5a/0x5b, mmu 0) → 잠금화면 검정, 앱 화면 이상. viva8: backboardd 타일러 힙 96 MiB(vgpu_xc5.c, CI 43876945769, drop 1794836174). 시험 대기.
 - viva8: 힙 96 MiB 효과 없음. 실패 줄: job status 0xa005a fault_ptr = 작업 자신의 디스크립터 BO 안(mmu 0), type 9(fragment). 추정: CPU 캐시 미반영. viva9: submit 전 CPU 매핑 BO 전부 sys_dcache_flush(VIVA_XC5_NOCLEAN로 끔), CI 44062249222. 시험 대기.
@@ -748,3 +748,20 @@ iPhone X iOS 16.7.16(20H392) 사용자 영역. 8코어, 1 GiB, eMMC PIO(DMA는 `
 - safari7: w30r 사라짐, 하지만 배경 검정·숫자 가운데 몰림·찢어짐. 원인: WebKit이 여전히 BGR10_XR(554) 텍스처를 요청 → viva가 BGRA 바이트를 10비트로 '변환'. safari8: viva에서 표면 위 550-555 형식을 BGRA8(80/81)로(hakios 방식), CI 45152067085. 시험 대기.
 - safari8: 배경 검정 유지, 숫자 겹침(이전 프레임 안 지워짐), 줄 찢어짐. 추정: WebKit.GPU의 clear(배경 흰색 채우기)가 표면 텍스처에 반영 안 됨. safari9 = WebKit.GPU만 viva 제외(비교 시험).
 - safari9: 숫자 겹침 사라짐(viva 원인 확정), 라이트 모드인데 Google 페이지 흰 바탕 검정. 추정: WebKit이 w30r로 알고 alpha 0. safari10: 커널이 w30r→BGRA 표면에 여분 3페이지 표시, hakios-gl이 그 표면 alpha=1 swizzle(xnu 45156001220, mesa-ios 45157549287, drop 1795430472). WebKit.GPU viva 제외 유지. 시험 대기.
+- **코드 점검·수정(2026-11-26, Claude, 폰 시험 전)**: 전체 점검에서 찾은 것을 고침. 시험 이미지 아직 없음(커밋 뒤 CI·`mkimage.sh` 필요).
+  - Wi-Fi(`xc5_wlbt.c`): 쓰기 결합 공유 메모리에서 소비 쪽 배리어가 없었음 — 펌웨어 쓰기 인덱스를 읽은 뒤 항목·mbulk를 읽기 전, 그리고
+    읽기 인덱스를 돌려주기 전에 `dsb sy`(`shm_bar`, TH ctrl/data·FH_RFB·mgmt 링·mxlog). A50(Exynos 9610, 같은 SCSC mx140,
+    `nespaces/ios-a50-exynos9610` `core/drivers/wifi/hakios.scsc.c`)도 인덱스 접근 앞뒤에 dsb. `xc5wbar=0`이면 예전처럼.
+    "미연결이면 R4가 1~20초 뒤 FH ctrl 큐를 안 읽음" 멈춤의 후보 원인.
+  - 제어 슬롯 32칸이 다 바쁘면 펌웨어가 아직 안 읽은 칸을 덮어쓰던 `ctl_force`, 데이터 64칸 0.5초 뒤 강제 회수(`tx_force`)를 끔:
+    빈 칸 없으면 안 보냄(셈은 그대로 `force`/`full`). `xc5wforce=1`이면 예전처럼.
+  - `read_mgmt`를 Wi-Fi 스레드와 heartbeat가 동시에 돌던 것(START_CFM 유실 가능) → 한쪽만. `ap_sel`을 락 안에서 한 번 읽음(`aps[-1]` 방지),
+    PMK는 락 안에서 `wpa_on`과 함께 설치, 커널이 개방형 망에 붙을 때 `wpa_on` 해제. 펌웨어 오프셋 검사를 `ref < SHMEM_MAP - N`(오버플로 없음).
+  - 기본 RAM 창(`mkadt_xcover5.py`)이 Wi-Fi 공유 메모리 0x880000000에서 시작하던 것 → 기본 `0x8a2800000:0x40000000`(mkimage와 같음).
+    커널도 겹치면 Wi-Fi를 시작하지 않음(`XC5 WLBT: XNU RAM ... covers the firmware's memory`).
+  - `xc5_pmic.c`: ACPM 큐 인덱스·크기 범위 검사. `mkimage.sh`: `make-boot.sh` 실패를 숨기던 grep 고침, `XC5_STOCK_BOOT=`. `xnu.yml`: keep_going 식.
+  - 이 문서 733-735줄이 CP949였음 → UTF-8로.
+  - 시험: 설정 앱 모드(`xc5wifiui=1`)에서 2분 넘게 `q0 r`가 `w`를 따라가고 `stall at 0`, `ctl force 0`인지. 자동 모드(`xc5net=1`) 회귀 없음(ping).
+    안 되면 다음 후보(A50 대조): 850 PMU의 MASK_PWR_REQ 대응 비트, 연결 순서 DEL_VIF→ADD_VIF→SET rates/HT→CONNECT.
+  - 남은 점검 결과(안 고침): XC5GPU 사용자 클라이언트 접근 제어·GPU VA 재사용 없음, `IOAcceleratorES::setProperties` 누구나, `xc5_drop.c` 허용 pid 미정리,
+    WPA2 replay counter·ANonce 검사 없음, 비밀번호가 부팅 인자(`kern.bootargs`), `regen.sh`·`wlbtfw.sh` 견고성.

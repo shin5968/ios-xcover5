@@ -127,7 +127,8 @@ jobs:
         working-directory: dxb
         env:
           # keep going after errors so one run reports every compile failure
-          MAKEFLAGS: ${{ inputs.keep_going == 'false' && '' || '-k' }} CC=/Users/runner/ccbin/cc CXX=/Users/runner/ccbin/c++
+          # (' ', not '': an empty string is false in an expression, so 'false' gave -k too)
+          MAKEFLAGS: ${{ inputs.keep_going == 'false' && ' ' || '-k' }} CC=/Users/runner/ccbin/cc CXX=/Users/runner/ccbin/c++
         run: |
           ccache -z
           bash build.sh

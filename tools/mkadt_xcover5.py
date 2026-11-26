@@ -24,8 +24,8 @@ from pathlib import Path
 import adt
 import mkadt
 
-DRAM_BASE = 0x880000000
-DRAM_SIZE = 0x20000000
+DRAM_BASE = 0x8a2800000      # 1 GiB above mfc_fw_rmem; 0x880000000-0x880c00000 is the Wi-Fi core's memory (xc5_wlbt.c)
+DRAM_SIZE = 0x40000000
 FB_PHYS, FB_W, FB_H = 0xfa000000, 720, 1480
 EMMC_PHYS = 0x12100000
 TIMEBASE = 26000000

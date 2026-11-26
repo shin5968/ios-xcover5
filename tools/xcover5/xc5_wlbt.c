@@ -45,6 +45,7 @@
 #include <mach/mach_time.h>
 #include <pexpert/pexpert.h>
 #include <kern/locks.h>
+#include <os/atomic_private.h>
 #include <sys/socket.h>
 #include <sys/sockio.h>
 #include <sys/kpi_mbuf.h>
@@ -67,6 +68,7 @@
 
 extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern vm_offset_t ml_io_map_wcomb(vm_offset_t phys_addr, vm_size_t size);
+extern unsigned long gPhysBase, gPhysSize;       /* XNU's RAM (mach/arm/vm_param.h) */
 
 #define PMU_PA          0x11860000UL
 #define APM_PMIC_PA     0x11A50000UL
@@ -125,6 +127,22 @@ wr(volatile uint8_t *b, uint32_t off, uint32_t v)
 {
 	*(volatile uint32_t *)(b + off) = v;
 	__asm__ volatile ("dsb sy" ::: "memory");
+}
+
+/*
+ * Shared memory with the R4 is mapped write-combined (Normal non-cacheable), so loads and stores to it may be
+ * reordered. A consumer must see the producer's write index before the entry and the buffer it names, and must be
+ * done with the buffer before it gives the slot back by moving its read index (the A50 SCSC port puts a dsb around
+ * every index access the same way). xc5wbar=0 leaves these out (the behaviour up to wifi51, for comparison).
+ */
+static uint32_t wifi_bar = 1, wifi_force;
+
+static inline void
+shm_bar(void)
+{
+	if (wifi_bar) {
+		__asm__ volatile ("dsb sy" ::: "memory");
+	}
 }
 
 static inline void
@@ -277,14 +295,25 @@ make_conf(uint32_t runtime)
 	    conf->mgmt.to_ap.buf.buffer_loc, conf->mgmt.from_ap.buf.buffer_loc, conf->mxlog.buf.buffer_loc, heap);
 }
 
-/* Messages the firmware put in the management stream (mxmgmt_transport_format.h: channel byte + 127 of payload). */
+/*
+ * Messages the firmware put in the management stream (mxmgmt_transport_format.h: channel byte + 127 of payload).
+ * Called by the Wi-Fi thread and by the heartbeat: both moved the read index, so one message could be taken twice or
+ * lost (START_CFM gates the whole HIP4). Whoever comes second now leaves it to the one already reading.
+ */
+static int mgmt_busy;
+
 static void
 read_mgmt(void)
 {
+	if (os_atomic_xchg(&mgmt_busy, 1, acquire) != 0) {
+		return;
+	}
 	struct mx_cbuf *b = &conf->mgmt.to_ap.buf;
 	volatile uint32_t *ri = (volatile uint32_t *)(shm + b->read_index_loc);
 	volatile uint32_t *wi = (volatile uint32_t *)(shm + b->write_index_loc);
-	while (*ri != *wi) {
+	uint32_t w = *wi;
+	shm_bar();                              /* the write index before the packets it covers */
+	while (*ri != w) {
 		uint8_t *p = shm + b->buffer_loc + (*ri % b->num_packets) * b->packet_size;
 		if (hb_msgs == 0) {
 			memcpy(hb_first, p, sizeof(hb_first));
@@ -299,9 +328,11 @@ read_mgmt(void)
 		}
 		printf("XC5 WLBT: mgmt message: channel %u, %02x %02x %02x %02x %02x %02x %02x %02x%s\n", p[0], p[1], p[2],
 		    p[3], p[4], p[5], p[6], p[7], p[8], p[0] == 0 && p[1] == 0 ? " = MM_START_IND" : "");
+		shm_bar();                      /* done with the packet before it is given back */
 		*ri = (*ri + 1) % b->num_packets;
 		wr(mbox, 0x01c, 1u << conf->mgmt.to_ap.read_bit);      /* INTGR1: told the core it was read */
 	}
+	os_atomic_store(&mgmt_busy, 0, release);
 }
 
 /*
@@ -594,6 +625,7 @@ read_log(void)
 		if (avail == 0) {
 			break;
 		}
+		shm_bar();                      /* the write index before the words it covers */
 		uint32_t hdr = ring[r], bytes;
 		if ((hdr >> 16) == 0x9669) {
 			bytes = (hdr & 0xff) * 4;
@@ -611,6 +643,7 @@ read_log(void)
 		for (uint32_t i = 0; i < pk; i++) {
 			words[i] = ring[(r + 1 + i) % n];
 		}
+		shm_bar();
 		*ri = (r + 1 + pk) % n;
 		log_recs++;
 		if ((hdr >> 16) == 0xA55A) {
@@ -734,8 +767,9 @@ send_sig(const uint8_t *sigp, uint32_t siglen, const uint8_t *data, uint32_t dle
 	 * wifi42n: the firmware stops unjoined in the auto mode too (not iOS's side). The counts of signals it had read
 	 * when it stopped were 37 twice and 69 (32 + 5, 64 + 5): the 32 control slots were taken in turn whether or not
 	 * the firmware had given them back on FH_RFB (the data slots are tracked, and the joined runs sent under 32
-	 * control signals). Now a control slot is used again only once it has come back (ctl_back); with none free the
-	 * next in turn is taken (ctl_force).
+	 * control signals). Now a control slot is used again only once it has come back (ctl_back). With none free the
+	 * signal is not sent (ctl_force counts those): taking the next slot in turn (wifi43: force 25) overwrote signals
+	 * the firmware had queued but not read yet. xc5wforce=1 takes it anyway, as before.
 	 */
 	uint32_t slot = 32;
 	for (uint32_t i = 0; i < 32; i++) {
@@ -746,8 +780,11 @@ send_sig(const uint8_t *sigp, uint32_t siglen, const uint8_t *data, uint32_t dle
 		}
 	}
 	if (slot == 32) {
-		slot = tx_slot % 32;
 		ctl_force++;
+		if (!wifi_force) {
+			return;
+		}
+		slot = tx_slot % 32;
 	}
 	tx_slot = slot + 1;
 	uint32_t moff = HIP_TX + 0x100000 + slot * 2048;
@@ -882,7 +919,7 @@ static uint32_t
 gather(uint32_t ref, uint8_t *out, uint32_t max)
 {
 	uint32_t n = 0;
-	for (int seg = 0; seg < 8 && ref >= HIP_OFF && ref + 20 < SHMEM_MAP && n < max; seg++) {
+	for (int seg = 0; seg < 8 && ref >= HIP_OFF && ref < SHMEM_MAP - 20 && n < max; seg++) {
 		uint8_t *m = shm + ref;
 		uint16_t len = *(uint16_t *)(m + 12), head = *(uint16_t *)(m + 14);
 		if (ref + 20u + head + len > SHMEM_MAP) {
@@ -1668,6 +1705,10 @@ chosen:
 		wpa_done = 0;
 		wpa_install_at = 0;
 		wpa_gtk_len = 0;
+	} else {
+		/* an open network: a WPA2 state left from an earlier join would add our RSN element and hold DHCP back */
+		wpa_on = false;
+		wpa_done = 0;
 	}
 	send_connect_to(best);
 }
@@ -1798,7 +1839,8 @@ send_frame(const uint8_t *fr, uint32_t len)
 	/*
 	 * A slot is the firmware's from the moment it is queued until it comes back on the FH RFB queue (hip_poll_locked).
 	 * Before (wifi20: 2117 frames out), the 64 slots were simply taken in turn, so a slot could be written again while
-	 * the firmware still read it. With every slot out for half a second, they are taken back as a last resort.
+	 * the firmware still read it. With every slot out the frame is dropped (tx_full); xc5wforce=1 takes them all back
+	 * after half a second as before (tx_force), which could overwrite frames the firmware had not read.
 	 */
 	static uint32_t slot;
 	uint32_t n;
@@ -1807,7 +1849,7 @@ send_frame(const uint8_t *fr, uint32_t len)
 	if (n == 64) {
 		uint64_t ns;
 		absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
-		if (ns - tx_freed_at < 500000000ull) {
+		if (!wifi_force || ns - tx_freed_at < 500000000ull) {
 			tx_full++;
 			return;
 		}
@@ -2254,7 +2296,9 @@ hip_poll_locked(void)
 		mlme_asked = true;
 		send_mlme_get();
 	}
-	while (*scb(2, 1) != *scb(2, 0)) {
+	uint8_t rfb_w = *scb(2, 0);
+	shm_bar();                              /* the firmware's write index before the entries it covers */
+	while (*scb(2, 1) != rfb_w) {
 		uint8_t r = *scb(2, 1);
 		uint32_t ref = qarr(2)[r];
 		if (ref >= HIP_OFF + HIP_TX && ref < HIP_OFF + HIP_TX + 64 * 2048) {
@@ -2265,9 +2309,11 @@ hip_poll_locked(void)
 			ctl_busy &= ~(1u << ((ref - HIP_OFF - HIP_TX - 0x100000) / 2048));
 			ctl_back++;
 		}
+		shm_bar();
 		*scb(2, 1) = (uint8_t)(r + 1);
 		fh_rfb++;
 	}
+	shm_bar();
 	dhcp_tick();
 	/*
 	 * wifi28: the first scan (right after ADD_VIF) ended -- 2 networks heard, SCAN_DONE -- but wifid's scans that came
@@ -2416,14 +2462,17 @@ hip_poll_locked(void)
 		}
 	}
 	for (int q = 3; q <= 4; q++) {
-		for (int guard = 0; guard < 64 && *scb(q, 1) != *scb(q, 0); guard++) {
+		uint8_t th_w = *scb(q, 0);
+		shm_bar();                      /* the firmware's write index before the entries and buffers it covers */
+		for (int guard = 0; guard < 64 && *scb(q, 1) != th_w; guard++) {
 			uint8_t r = *scb(q, 1);
 			uint32_t ref = qarr(q)[r];
-			if (ref >= HIP_OFF && ref + 64 < SHMEM_MAP) {
+			if (ref >= HIP_OFF && ref < SHMEM_MAP - 64) {
 				on_signal(ref);
 			} else {
 				printf("XC5 WLBT: TH entry %#x outside the map\n", ref);
 			}
+			shm_bar();              /* done with the signal before its slot is given back */
 			*scb(q, 1) = (uint8_t)(r + 1);
 			__asm__ volatile ("dsb sy" ::: "memory");
 			/*
@@ -2444,7 +2493,7 @@ hip_poll_locked(void)
 					break;
 				}
 				back = *(uint32_t *)(mb + 16); /* chain_next_offset */
-				if (back < HIP_OFF || back + 64 >= SHMEM_MAP) {
+				if (back < HIP_OFF || back >= SHMEM_MAP - 64) {
 					break;
 				}
 				rfb_chained++;
@@ -2999,11 +3048,13 @@ sta_join(const struct redwood_sta_join *what)
 		return join_err = EBUSY;
 	}
 	join_stage = 2;
+	/* the PMK is made aside and put in place under the lock with wpa_on (the thread reads it for EAPOL) */
+	static uint8_t pmk[sizeof(wpa_pmk)];
 	if (what->security == REDWOOD_STA_WPA2_PSK) {
 		if (what->passphrase_length >= 8) {
-			wpa_pbkdf2(what->passphrase, what->passphrase_length, what->ssid, what->ssid_length, wpa_pmk);
+			wpa_pbkdf2(what->passphrase, what->passphrase_length, what->ssid, what->ssid_length, pmk);
 		} else {
-			memcpy(wpa_pmk, what->pmk, sizeof(wpa_pmk));
+			memcpy(pmk, what->pmk, sizeof(pmk));
 		}
 	} else if (what->security != REDWOOD_STA_OPEN) {
 		return join_err = EOPNOTSUPP;
@@ -3022,8 +3073,13 @@ sta_join(const struct redwood_sta_join *what)
 		join_stage = 3;
 		return join_err = ENOENT;
 	}
-	if (wifi_shadow && ap_sel >= 0 && conn_ind == 0 && (!wpa_on || wpa_done) && aps[ap_sel].ssid_len == what->ssid_length &&
-	    memcmp(aps[ap_sel].raw_ssid, what->ssid, what->ssid_length) == 0) {
+	/* ap_sel is the thread's (it sets -1 when a join fails): read once, under the lock */
+	lck_mtx_lock(&xc5w_mtx);
+	int sel = ap_sel;
+	bool same = wifi_shadow && sel >= 0 && sel < APN && conn_ind == 0 && (!wpa_on || wpa_done) &&
+	    aps[sel].ssid_len == what->ssid_length && memcmp(aps[sel].raw_ssid, what->ssid, what->ssid_length) == 0;
+	lck_mtx_unlock(&xc5w_mtx);
+	if (same) {
 		/* already joined by the kernel (shadow): nothing to send, the link comes up for iOS now */
 		shadow_used++;
 		join_stage = 6;
@@ -3038,18 +3094,23 @@ sta_join(const struct redwood_sta_join *what)
 		uint8_t s[32] = { 0x0e, 0x20 };
 		s[10] = 1;
 		lck_mtx_lock(&xc5w_mtx);
-		memcpy(s + 12, aps[ap_sel].bssid, 6);
-		s[18] = 3;
-		memcpy(leave_sig, s, sizeof(s));
-		want_leave = true;
-		conn_ind = 0xffff;
-		ap_sel = -1;
+		if (ap_sel >= 0 && ap_sel < APN) {
+			memcpy(s + 12, aps[ap_sel].bssid, 6);
+			s[18] = 3;
+			memcpy(leave_sig, s, sizeof(s));
+			want_leave = true;
+			conn_ind = 0xffff;
+			ap_sel = -1;
+		}
 		lck_mtx_unlock(&xc5w_mtx);
 		delay(300000);
 	}
 	join_stage = 4;
 	lck_mtx_lock(&xc5w_mtx);
 	wpa_on = what->security == REDWOOD_STA_WPA2_PSK;
+	if (wpa_on) {
+		memcpy(wpa_pmk, pmk, sizeof(wpa_pmk));
+	}
 	wpa_done = false;
 	wpa_install_at = 0;
 	wpa_gtk_len = 0;
@@ -3091,16 +3152,18 @@ sta_leave_call(void)
 {
 	ui_leaves++;
 	/* wifi56: wifid leaves before it joins; with WPA2 that disconnected the kernel's join (disc 3): kept, as for open */
-	if (ap_sel >= 0 && conn_ind == 0 && !wifi_shadow) {
+	if (!wifi_shadow) {
 		/* MLME-DISCONNECT.request 0x200e {vif 1; peer_sta_address; reason_code 3 (leaving)} */
 		uint8_t s[32] = { 0x0e, 0x20 };
 		s[10] = 1;
 		lck_mtx_lock(&xc5w_mtx);
-		memcpy(s + 12, aps[ap_sel].bssid, 6);
-		s[18] = 3;
-		memcpy(leave_sig, s, sizeof(s));
-		want_leave = true;
-		conn_ind = 0xffff;
+		if (ap_sel >= 0 && ap_sel < APN && conn_ind == 0) {
+			memcpy(s + 12, aps[ap_sel].bssid, 6);
+			s[18] = 3;
+			memcpy(leave_sig, s, sizeof(s));
+			want_leave = true;
+			conn_ind = 0xffff;
+		}
 		lck_mtx_unlock(&xc5w_mtx);
 	}
 	link_state(false);
@@ -3118,8 +3181,9 @@ static void
 sta_state(struct redwood_sta_state *state)
 {
 	state->phase = (enum redwood_sta_phase)sta_phase;
-	if (ap_sel >= 0 && ap_sel < APN) {
-		bss_of((uint32_t)ap_sel, &state->bss);
+	int sel = ap_sel;
+	if (sel >= 0 && sel < APN) {
+		bss_of((uint32_t)sel, &state->bss);
 	}
 }
 
@@ -3236,7 +3300,7 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 	xcover5_wlbt_state[3] = (uint64_t)fwlen;
 	uint32_t entry = *(uint32_t *)(shm + 40), hdr_len = *(uint32_t *)(shm + 16);
 	uint32_t runtime = *(uint32_t *)(shm + 36), panic_off = *(uint32_t *)(shm + 176);
-	hb_panic_off = (panic_off != 0 && panic_off + 64 < SHMEM_MAP) ? panic_off : 0;
+	hb_panic_off = (panic_off != 0 && panic_off < SHMEM_MAP - 64) ? panic_off : 0;
 	xcover5_wlbt_state[2] = entry;
 	printf("XC5 WLBT: firmware %lld bytes, header v%u.%u, api %u.%u, entry %#x, runtime %#x, panic record at %#x, "
 	    "build %.40s\n", fwlen, *(uint16_t *)(shm + 14), *(uint16_t *)(shm + 12), *(uint16_t *)(shm + 22),
@@ -3421,7 +3485,7 @@ wlbt_thread(__unused void *arg, __unused wait_result_t w)
 			continue;
 		}
 		i++;
-		uint32_t *p = (uint32_t *)(shm + ((panic_off != 0 && panic_off + 64 < SHMEM_MAP) ? panic_off : 0));
+		uint32_t *p = (uint32_t *)(shm + ((panic_off != 0 && panic_off < SHMEM_MAP - 64) ? panic_off : 0));
 		printf("XC5 WLBT summary: fw %lld B entry %#x | power %d CFG_REQ %d SMC %#llx | STATUS %#x STATES %#x | ISSR0-3 "
 		    "%#x %#x %#x %#x | INTSR0 %#x INTMSR0 %#x INTSR1 %#x | mgmt to-AP r%u w%u, mxlog w%u | panic %08x %08x %08x\n",
 		    fwlen, entry, (int)(v & 1), (int)cfg, smc, rd(pmu, WLBT_STATUS), rd(pmu, WLBT_STATES), rd(mbox, ISSR(0)),
@@ -3458,8 +3522,9 @@ xc5_wlbt_heartbeat(void)
 	}
 	printf("XC5 w cfm %x vif %x scan %x ind %u done %u aps %u got %u\n", hb_cfm, vif_res, scan_res, scan_inds, scan_done,
 	    ap_count, mlme_got);
-	if (ap_sel >= 0) {
-		printf("XC5 w ap %.20s %u %d %c\n", aps[ap_sel].ssid, aps[ap_sel].mhz, aps[ap_sel].rssi, aps[ap_sel].open ? 'o' : 's');
+	int hb_sel = ap_sel;                    /* (the thread can set it to -1 meanwhile) */
+	if (hb_sel >= 0 && hb_sel < APN) {
+		printf("XC5 w ap %.20s %u %d %c\n", aps[hb_sel].ssid, aps[hb_sel].mhz, aps[hb_sel].rssi, aps[hb_sel].open ? 'o' : 's');
 	} else {
 		for (uint32_t k = 0; k < ap_count && k < 3; k++) {
 			printf("XC5 w ap? %.20s %u %d %c\n", aps[k].ssid, aps[k].mhz, aps[k].rssi, aps[k].open ? 'o' : 's');
@@ -3558,6 +3623,17 @@ xc5_wlbt_start(void)
 	PE_parse_boot_argn("xc5wshadow", &wifi_shadow, sizeof(wifi_shadow));
 	PE_parse_boot_argn("xc5wmacfix", &wifi_macfix, sizeof(wifi_macfix));
 	PE_parse_boot_argn("xc5wdhcp", &wifi_kdhcp, sizeof(wifi_kdhcp));
+	PE_parse_boot_argn("xc5wbar", &wifi_bar, sizeof(wifi_bar));
+	PE_parse_boot_argn("xc5wforce", &wifi_force, sizeof(wifi_force));
+	/*
+	 * The firmware's 12 MiB at SHMEM_PA must lie outside XNU's RAM: the ADT's old default window (512 MiB at
+	 * 0x880000000, make-boot.sh without XC5_DRAM) starts right there, and the core would write into kernel memory.
+	 */
+	if (gPhysBase < SHMEM_PA + 0xC00000UL && SHMEM_PA < gPhysBase + gPhysSize) {
+		printf("XC5 WLBT: XNU RAM %#lx-%#lx covers the firmware's memory at %#lx: Wi-Fi not started (use XC5_DRAM)\n",
+		    gPhysBase, gPhysBase + gPhysSize, (unsigned long)SHMEM_PA);
+		return;
+	}
 	thread_t thread;
 	if (kernel_thread_start(wlbt_thread, NULL, &thread) == KERN_SUCCESS) {
 		thread_deallocate(thread);

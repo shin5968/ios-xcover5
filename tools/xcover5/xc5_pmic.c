@@ -99,8 +99,11 @@ find_channel(void)
 	printf("XC5 PMIC: channel %u: id %u type %u queue %u x %u, req %#x/%#x/%#x ans %#x/%#x/%#x, polled %u\n",
 	    CH_PMIC, ch.id, ch.type, ch.len, ch.elem, rq_rear, rq_front, rq_base, an_rear, an_front, an_base, rd(d + 68));
 	if (ch.elem < 16 || ch.elem > 64 || ch.len > 64 || !in_sram(rq_rear) || !in_sram(rq_front) ||
-	    !in_sram(rq_base) || !in_sram(an_rear) || !in_sram(an_front) || !in_sram(an_base)) {
-		return -1;
+	    !in_sram(rq_base) || !in_sram(an_rear) || !in_sram(an_front) || !in_sram(an_base) ||
+	    rq_rear > ACPM_SRAM_SIZE - 4 || rq_front > ACPM_SRAM_SIZE - 4 || an_rear > ACPM_SRAM_SIZE - 4 ||
+	    an_front > ACPM_SRAM_SIZE - 4 ||
+	    rq_base > ACPM_SRAM_SIZE - ch.elem * (ch.len ? ch.len : 1u) || an_base > ACPM_SRAM_SIZE - ch.elem * (ch.len ? ch.len : 1u)) {
+		return -1;                      /* (both queues have to fit in the mapped SRAM) */
 	}
 	ch.req_rear = sram + rq_rear;
 	ch.req_front = sram + rq_front;
@@ -117,6 +120,10 @@ ipc(uint32_t cmd[4])
 {
 	bool buffer = ch.type == TYPE_BUFFER || ch.len < 2;
 	uint32_t front = buffer ? 0 : rd(ch.req_front), next = buffer ? 0 : (front + 1 == ch.len ? 0 : front + 1);
+	if (!buffer && (front >= ch.len || rd(ch.req_rear) >= ch.len || rd(ch.ans_rear) >= ch.len ||
+	    rd(ch.ans_front) >= ch.len)) {
+		return -1;                      /* indices the APM gave that are not in the queue */
+	}
 	if (!buffer) {
 		/* stale answers first: a full answer queue stops the APM */
 		if (rd(ch.ans_rear) != rd(ch.ans_front)) {

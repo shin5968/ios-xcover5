@@ -20,7 +20,18 @@ if [ -n "$XC5_QUIET" ]; then A="${A/-enable_kprintf_spam /} a5fb_noconsole=1"; f
 K=xnu/out/kernel.development.a5xelte; O=shim/xcover5/out
 rm -f "$O/xc5-ios-$NAME-console.tar"
 # xc5epoch: this machine's time, for the kernel's calendar when the PMIC's RTC is not set (xc5_pmic.c rtc_sync)
-bash tools/xcover5/make-boot.sh $K ../boot_phone.img "$O/xc5-ios-$NAME-console.img" $A "$@" xc5conrows=40 xc5epoch=$(date -u +%s) 2>&1 | grep -iE "error|traceback" || true
+# XC5_STOCK_BOOT: the phone's stock boot.img the image is built over (default ../boot_phone.img)
+STOCK=${XC5_STOCK_BOOT:-../boot_phone.img}
+[ -f "$STOCK" ] || { echo "mkimage: no stock boot image $STOCK (XC5_STOCK_BOOT=)"; exit 1; }
+# make-boot.sh's output is kept and shown only when it fails (before, a failure was hidden by the grep and a tar
+# holding only cache.img was made)
+LOG=$(mktemp)
+if ! bash tools/xcover5/make-boot.sh $K "$STOCK" "$O/xc5-ios-$NAME-console.img" $A "$@" xc5conrows=40 xc5epoch=$(date -u +%s) >"$LOG" 2>&1; then
+    cat "$LOG"; rm -f "$LOG"; echo "mkimage: make-boot.sh failed"; exit 1
+fi
+grep -iE "error|traceback" "$LOG" || true
+rm -f "$LOG"
+[ -s "$O/xc5-ios-$NAME-console.tar" ] || { echo "mkimage: make-boot.sh made no $O/xc5-ios-$NAME-console.tar"; exit 1; }
 python3 - "$O/xc5-ios-$NAME-console.tar" "$O/xc5-drop-mesa.tar" <<'PY'
 import sys, tarfile, io, struct
 boot, drop = sys.argv[1], sys.argv[2]
