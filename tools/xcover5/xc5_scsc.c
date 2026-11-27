@@ -38,6 +38,7 @@
 #include <sys/random.h>
 #include <kern/clock.h>              /* XCover5: the 30 s retry of the standing network */
 #include <mach/mach_time.h>
+#include <net/kpi_interface.h>         /* XCover5: lo0, before en0 */
 #ifdef HAKIOS_BCM4361_BT
 #include <kern/clock.h>
 #include <sys/kern_control.h>
@@ -746,7 +747,7 @@ static LCK_MTX_DECLARE(hip_lock, &hip_lock_group);
 enum { HIP_REQ_ON = 1, HIP_REQ_OFF = 2, HIP_REQ_SCAN = 3, HIP_REQ_JOIN = 4, HIP_REQ_TX = 5, HIP_REQ_LEAVE = 6 };
 static bool hip_rx_other(uint16_t id, const uint8_t *s, unsigned siglen, const uint8_t *data, unsigned len);
 static int hip_req, hip_job, hip_status;
-static bool hip_alive;
+static bool hip_alive, hip_dead;        /* (hip_dead, XCover5: the radio will not come: calls do not wait) */
 
 /* Filled on the station thread before HIP_REQ_JOIN. The HIP thread only reads it. */
 static struct {
@@ -1194,6 +1195,19 @@ hip_call(int req)
 {
 	int status;
 
+	/*
+	 * XCover5: en0 and the station are there from the start (wifid has to find them when it starts), the radio
+	 * some 30 s later: a call before then waits for it, up to 90 s, as the XCover5's own driver did (sta_wait_ready).
+	 */
+	for (int i = 0; i < 900; i++) {
+		lck_mtx_lock(&hip_lock);
+		bool up = hip_alive;
+		lck_mtx_unlock(&hip_lock);
+		if (up || hip_dead) {
+			break;
+		}
+		delay(100000);
+	}
 	lck_mtx_lock(&hip_lock);
 	if (!hip_alive) {
 		lck_mtx_unlock(&hip_lock);
@@ -2665,9 +2679,12 @@ scsc_mac_load(void)
 	say("scsc: no factory address (wifi_mac, fw/mac.info, EFS /wifi/.mac.info): diagnostic 02:50:00:00:00:01\n");
 }
 
+static bool scsc_registered;
+
 static void
 scsc_register(void)
 {
+	scsc_registered = true;
 	memcpy(scsc_link.address, scsc_mac, 6);
 	memcpy(scsc_ops.address, scsc_mac, 6);
 	{
@@ -2751,8 +2768,10 @@ hip_station(vm_offset_t mem, vm_offset_t mbox, uint32_t panic_off)
 	hip_slots_init();
 	say("scsc: HIP4 station: negotiated v%u\n", version);
 	hip_panic_off = panic_off;
-	scsc_mac_load();
-	scsc_register();                                /* en0 + IOKit before the first scan: configd can make Wi-Fi */
+	if (!scsc_registered) {                         /* (XCover5: normally done at the start, scsc_thread) */
+		scsc_mac_load();
+		scsc_register();                        /* en0 + IOKit before the first scan: configd can make Wi-Fi */
+	}
 	hip_regulatory(mem, mbox, h);
 	err = hip_vif_cmd(mem, mbox, h, true);
 	if (err != 0) {
@@ -3725,8 +3744,33 @@ scsc_thread(void *arg, __unused wait_result_t result)
 		delay(20 * 1000 * 1000);        /* late: the boot well on its way, its log out, before anything risky */
 		scsc_wlbt_power();
 	} else if (steps >= 3) {
-		delay(20 * 1000 * 1000);
+		/*
+		 * XCover5 (a50wifi2): joined, DHCP and 1400 frames, but Settings' Wi-Fi page would not open: en0 and its
+		 * registry entries came with the station, after the firmware (~40 s), and wifid had started (and looked
+		 * for its device) before -- as wifi23/24 of the XCover5's own driver. So, as there: as soon as lo0 exists.
+		 */
+		if (steps >= 6) {
+			ifnet_t lo = NULL;
+
+			for (int i = 0; i < 300 && ifnet_find_by_name("lo0", &lo) != 0; i++) {
+				delay(100000);
+			}
+			if (lo != NULL) {
+				ifnet_release(lo);
+			}
+			scsc_mac_load();
+			scsc_register();
+			say("scsc: en0 and the station registered early, the radio next\n");
+			delay(10 * 1000 * 1000);
+		} else {
+			delay(20 * 1000 * 1000);
+		}
 		scsc_start(steps);
+		if (!hip_alive) {
+			lck_mtx_lock(&hip_lock);
+			hip_dead = true;
+			lck_mtx_unlock(&hip_lock);
+		}
 	}
 	thread_terminate(current_thread());
 }
