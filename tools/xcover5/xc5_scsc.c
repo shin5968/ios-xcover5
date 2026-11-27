@@ -36,6 +36,8 @@
 #include <sys/hakios.sta.h>
 #include <sys/hakios.macaddr.h>
 #include <sys/random.h>
+#include <kern/clock.h>              /* XCover5: the 30 s retry of the standing network */
+#include <mach/mach_time.h>
 #ifdef HAKIOS_BCM4361_BT
 #include <kern/clock.h>
 #include <sys/kern_control.h>
@@ -2763,9 +2765,22 @@ hip_station(vm_offset_t mem, vm_offset_t mbox, uint32_t panic_off)
 		lck_mtx_lock(&hip_lock);
 		hip_alive = true;
 		lck_mtx_unlock(&hip_lock);
+		hakios_sta_radio_ready();       /* XCover5: the standing network, now that calls are taken (a50wifi1) */
 	}
+	uint64_t kick_at = mach_absolute_time();
 	for (;;) {
 		int req = 0;
+
+		/* XCover5: while not joined, the standing network is looked for again every 30 s (a hotspot turned on late) */
+		if (hip_alive && !hip_joined_v && hip_req == 0 && hip_job == 0) {
+			uint64_t now = mach_absolute_time(), ns = 0;
+
+			absolutetime_to_nanoseconds(now - kick_at, &ns);
+			if (ns > 30000000000ull) {
+				kick_at = now;
+				hakios_sta_radio_ready();
+			}
+		}
 
 		hip_drain(mem, mbox, h);
 		if (hip_joined_v) {

@@ -97,6 +97,7 @@ enum hakios_sta_event {
 /* ---- the station side ---- */
 void     hakios_sta_attach(const struct hakios_sta_ops *ops);         /* NULL: it is going away (waits for a call under way) */
 void     hakios_sta_lost(int error);                                   /* the network joined is gone by itself */
+void     hakios_sta_radio_ready(void);     /* XCover5: the radio takes calls now (and is not joined): the standing network */
 
 /* ---- who wants a network: each asks and returns; the outcome is an event. 0, or an errno ---- */
 bool     hakios_sta_present(void);

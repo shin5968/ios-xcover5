@@ -340,6 +340,30 @@ hakios_sta_attach(const struct hakios_sta_ops *ops)
 	hakios_apple80211_event(HAKIOS_STA_POWER, 1);
 }
 
+/*
+ * XCover5 (a50wifi1): the station is attached (en0, so configd sees Wi-Fi) before the radio can scan; the standing
+ * network's scan then failed (ENXIO), its join found nothing ("not in the last scan") and was not tried again, though
+ * the radio's own first scan heard it a second later. The radio says here when it can take calls, and again now and
+ * then while it is not joined: the standing network is scanned for and joined, as after power-on.
+ */
+void
+hakios_sta_radio_ready(void)
+{
+	lck_mtx_lock(&sta_lock);
+	if (sta_ops != NULL && sta_on && !asked_join && !asked_scan && !asked_leave && !asked_power) {
+		if (standing.ssid_length == 0 && fallback.ssid_length != 0) {
+			standing = fallback;
+		}
+		if (standing.ssid_length != 0) {
+			auto_join_pending = true;
+			bzero(&asked_scan_what, sizeof(asked_scan_what));
+			asked_scan = true;
+		}
+	}
+	lck_mtx_unlock(&sta_lock);
+	thread_wakeup((event_t)&sta_ops);
+}
+
 void
 hakios_sta_lost(int error)
 {

@@ -3885,10 +3885,10 @@ index 0000000..58d4e08
 +}
 diff --git a/bsd/dev/hakios.sta.c b/bsd/dev/hakios.sta.c
 new file mode 100644
-index 0000000..9529dc0
+index 0000000..3bbe9b2
 --- /dev/null
 +++ b/bsd/dev/hakios.sta.c
-@@ -0,0 +1,601 @@
+@@ -0,0 +1,625 @@
 +/*
 + * Darwin-on-hakios: what stands between the two sides of the station boundary
 + * (sys/hakios.sta.h).
@@ -4229,6 +4229,30 @@ index 0000000..9529dc0
 +	}
 +	thread_wakeup((event_t)&sta_ops);
 +	hakios_apple80211_event(HAKIOS_STA_POWER, 1);
++}
++
++/*
++ * XCover5 (a50wifi1): the station is attached (en0, so configd sees Wi-Fi) before the radio can scan; the standing
++ * network's scan then failed (ENXIO), its join found nothing ("not in the last scan") and was not tried again, though
++ * the radio's own first scan heard it a second later. The radio says here when it can take calls, and again now and
++ * then while it is not joined: the standing network is scanned for and joined, as after power-on.
++ */
++void
++hakios_sta_radio_ready(void)
++{
++	lck_mtx_lock(&sta_lock);
++	if (sta_ops != NULL && sta_on && !asked_join && !asked_scan && !asked_leave && !asked_power) {
++		if (standing.ssid_length == 0 && fallback.ssid_length != 0) {
++			standing = fallback;
++		}
++		if (standing.ssid_length != 0) {
++			auto_join_pending = true;
++			bzero(&asked_scan_what, sizeof(asked_scan_what));
++			asked_scan = true;
++		}
++	}
++	lck_mtx_unlock(&sta_lock);
++	thread_wakeup((event_t)&sta_ops);
 +}
 +
 +void
@@ -5864,10 +5888,10 @@ index 0000000..a8f4786
 +}
 diff --git a/bsd/dev/xc5_scsc.c b/bsd/dev/xc5_scsc.c
 new file mode 100644
-index 0000000..9076ad5
+index 0000000..36420ab
 --- /dev/null
 +++ b/bsd/dev/xc5_scsc.c
-@@ -0,0 +1,3741 @@
+@@ -0,0 +1,3756 @@
 +/*
 + * XCover5 (2026-11-27): the Galaxy A50 port's driver (github.com/nespaces/ios-a50-exynos9610,
 + * core/drivers/wifi/hakios.scsc.c at eaccebe, APSL 2.0 as the rest of that port's kernel files; tools/xcover5/a50/
@@ -5906,6 +5930,8 @@ index 0000000..9076ad5
 +#include <sys/hakios.sta.h>
 +#include <sys/hakios.macaddr.h>
 +#include <sys/random.h>
++#include <kern/clock.h>              /* XCover5: the 30 s retry of the standing network */
++#include <mach/mach_time.h>
 +#ifdef HAKIOS_BCM4361_BT
 +#include <kern/clock.h>
 +#include <sys/kern_control.h>
@@ -8633,9 +8659,22 @@ index 0000000..9076ad5
 +		lck_mtx_lock(&hip_lock);
 +		hip_alive = true;
 +		lck_mtx_unlock(&hip_lock);
++		hakios_sta_radio_ready();       /* XCover5: the standing network, now that calls are taken (a50wifi1) */
 +	}
++	uint64_t kick_at = mach_absolute_time();
 +	for (;;) {
 +		int req = 0;
++
++		/* XCover5: while not joined, the standing network is looked for again every 30 s (a hotspot turned on late) */
++		if (hip_alive && !hip_joined_v && hip_req == 0 && hip_job == 0) {
++			uint64_t now = mach_absolute_time(), ns = 0;
++
++			absolutetime_to_nanoseconds(now - kick_at, &ns);
++			if (ns > 30000000000ull) {
++				kick_at = now;
++				hakios_sta_radio_ready();
++			}
++		}
 +
 +		hip_drain(mem, mbox, h);
 +		if (hip_joined_v) {
@@ -10126,10 +10165,10 @@ index 0000000..599a3e7
 +#endif /* _SYS_HAKIOS_NET_H_ */
 diff --git a/bsd/sys/hakios.sta.h b/bsd/sys/hakios.sta.h
 new file mode 100644
-index 0000000..fd4d50b
+index 0000000..664f116
 --- /dev/null
 +++ b/bsd/sys/hakios.sta.h
-@@ -0,0 +1,124 @@
+@@ -0,0 +1,125 @@
 +/*
 + * Darwin-on-hakios: the station boundary.
 + *
@@ -10229,6 +10268,7 @@ index 0000000..fd4d50b
 +/* ---- the station side ---- */
 +void     hakios_sta_attach(const struct hakios_sta_ops *ops);         /* NULL: it is going away (waits for a call under way) */
 +void     hakios_sta_lost(int error);                                   /* the network joined is gone by itself */
++void     hakios_sta_radio_ready(void);     /* XCover5: the radio takes calls now (and is not joined): the standing network */
 +
 +/* ---- who wants a network: each asks and returns; the outcome is an event. 0, or an errno ---- */
 +bool     hakios_sta_present(void);
