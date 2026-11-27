@@ -1,32 +1,17 @@
 /*
- * From y2sios (https://github.com/stormtroopxyz/y2sios, kernel/xnu/files/), MIT License,
- * Copyright (c) 2026 the y2sios contributors; itself after HackiOS by OOSEX GANG (MIT). Taken for the XCover5 port's
- * Wi-Fi (bsd/dev/xc5_wlbt.c supplies the station side); changes marked XCover5.
+ * Darwin-on-hakios: Apple80211, answered in the kernel.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
- * documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
- * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit
- * persons to whom the Software is furnished to do so, subject to the following conditions: The above copyright notice and
- * this permission notice shall be included in all copies or substantial portions of the Software. THE SOFTWARE IS
- * PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
- * HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
- * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- */
-/*
- * Darwin-on-redwood: Apple80211, answered in the kernel.
- *
- * iOS's Wi-Fi side -- wifid, and through it Settings and the status bar -- talks to a Wi-Fi
+ * Darwin's Wi-Fi side -- wifid, and through it Settings and the status bar -- talks to a Wi-Fi
  * driver in requests that were once ioctls and are, where the driver offers no user client,
  * ioctls still: SIOCGA80211 and SIOCSA80211 on any socket, with a struct apple80211req that
  * names the interface, a request type, a value, and a buffer in the caller's memory
  * (IO80211.framework: Apple80211Get/Set and their kin all end there). XNU hands an interface
- * ioctl it does not know to the interface, so they arrive in bsd/dev/redwood_net.c, which
+ * ioctl it does not know to the interface, so they arrive in drivers/net/hakios.net.c, which
  * passes them here when its link is a radio.
  *
- * What is asked is answered from the station boundary (sys/redwood_sta.h): the radio's power,
+ * What is asked is answered from the station boundary (sys/hakios.sta.h): the radio's power,
  * its channels, a scan and what it heard, the network joined. What happens there by itself is
- * told to iOS the way a driver tells it: kernel events of class 6 (IEEE 802.11), subclass 1,
+ * told to Darwin the way a driver tells it: kernel events of class 6 (IEEE 802.11), subclass 1,
  * whose code is Apple80211's own event number and whose data begins with the interface's name
  * in 16 bytes (IO80211.framework reads them from a PF_SYSTEM socket and compares the name).
  *
@@ -35,7 +20,7 @@
  * a network's name or its key may be in there.
  *
  * The request types and the layouts are Apple's. The old ones are as the headers of its open
- * IO80211 sources once described them (apple80211_ioctl.h, apple80211_var.h); where iOS 16.5
+ * IO80211 sources once described them (apple80211_ioctl.h, apple80211_var.h); where Darwin userland 16.5
  * differs the layout was read out of IO80211.framework of 16.5, which fills and reads the same
  * structures on the other side (Apple80211GetWithIOCTL, _getScanData, _addScanResultToList,
  * _performAssociation, _dispatchAsyncAssocEvent, _dispatchLinkChangedEvent).
@@ -53,8 +38,9 @@
 #include <sys/kern_event.h>
 #include <sys/kernel.h>
 #include <sys/proc.h>
-#include <sys/redwood_net.h>
-#include <sys/redwood_sta.h>
+#include <sys/hakios.input.h>
+#include <sys/hakios.net.h>
+#include <sys/hakios.sta.h>
 #include <sys/sockio.h>
 #include <sys/systm.h>
 
@@ -192,33 +178,28 @@ struct apple80211_link_changed {
 };
 
 _Static_assert(sizeof(struct apple80211_assoc) == 592 && offsetof(struct apple80211_assoc, key) == 0x48,
-    "the association request as iOS 16.5 has it");
+    "the association request as Darwin userland 16.5 has it");
 _Static_assert(sizeof(struct apple80211_link_changed) == 32 && offsetof(struct apple80211_link_changed, reason) == 0x14,
-    "the link event as iOS 16.5 reads it");
-_Static_assert(sizeof(struct apple80211_channels) == 4824, "the channel list as iOS 16.5 has it");
+    "the link event as Darwin userland 16.5 reads it");
+_Static_assert(sizeof(struct apple80211_channels) == 4824, "the channel list as Darwin userland 16.5 has it");
 _Static_assert(sizeof(struct apple80211_channels_info) == 10016 && offsetof(struct apple80211_channels_info, number) == 0x32e &&
-    offsetof(struct apple80211_channels_info, flags) == 0x12d0, "the channels' description as iOS 16.5 has it");
+    offsetof(struct apple80211_channels_info, flags) == 0x12d0, "the channels' description as Darwin userland 16.5 has it");
 _Static_assert(sizeof(struct apple80211_scan_request) == 5456 && offsetof(struct apple80211_scan_request, channels) == 0x48 &&
     offsetof(struct apple80211_scan_request, flags) == 0x1308 && offsetof(struct apple80211_scan_request, names) == 0x1318,
-    "the scan request as iOS 16.5 has it");
+    "the scan request as Darwin userland 16.5 has it");
 _Static_assert(sizeof(struct apple80211_scan_result) == 1164 && offsetof(struct apple80211_scan_result, ssid_length) == 0x60 &&
     offsetof(struct apple80211_scan_result, age_ms) == 0x84 && offsetof(struct apple80211_scan_result, elements) == 0x8c,
-    "a scan's result as iOS 16.5 has it");
+    "a scan's result as Darwin userland 16.5 has it");
 
 /* Apple80211's events (APPLE80211_M_...) */
 enum { EVENT_POWER_CHANGED = 1, EVENT_SSID_CHANGED = 2, EVENT_BSSID_CHANGED = 3, EVENT_LINK_CHANGED = 4, EVENT_ASSOC_DONE = 9,
        EVENT_SCAN_DONE = 10 };
 
-static const char interface_name[16] = "en0";   /* (bsd/dev/redwood_net.c makes one interface, and that is its name) */
+static const char interface_name[16] = "en0";   /* (drivers/net/hakios.net.c makes one interface, and that is its name) */
 
-static LCK_GRP_DECLARE(apple80211_lock_group, "redwood-apple80211");
+static LCK_GRP_DECLARE(apple80211_lock_group, "hakios-apple80211");
 static LCK_MTX_DECLARE(apple80211_lock, &apple80211_lock_group);
 static unsigned result_next;                    /* which of what the last scan heard a SCAN_RESULT request gets next */
-/* XCover5: for the heartbeat (bsd/dev/xc5_wlbt.c) -- requests seen, SCAN_RESULTs asked and given, scan-done events */
-unsigned xc5_a80211_requests, xc5_a80211_refused, xc5_a80211_results, xc5_a80211_given, xc5_a80211_scandone;
-int xc5_a80211_last_type, xc5_a80211_last_error;
-unsigned xc5_a80211_joins;
-int xc5_a80211_join_why, xc5_a80211_join_cipher = -1, xc5_a80211_join_keylen = -1;
 static uint32_t join_result;                    /* of the last join asked for: 0 while it runs, then Apple80211's number */
 
 /* ---- channels ---------------------------------------------------------------------------------------- */
@@ -245,8 +226,8 @@ channel_fill(struct apple80211_channel *channel, unsigned frequency, unsigned fl
 {
 	channel->version = 1;
 	channel->channel = channel_number(frequency);
-	channel->flags = CHANNEL_20MHZ | (frequency < 4000 ? CHANNEL_2GHZ : CHANNEL_5GHZ) | (flags & REDWOOD_STA_CHANNEL_PASSIVE ?
-	    0 : CHANNEL_ACTIVE) | (flags & REDWOOD_STA_CHANNEL_RADAR ? CHANNEL_DFS : 0);
+	channel->flags = CHANNEL_20MHZ | (frequency < 4000 ? CHANNEL_2GHZ : CHANNEL_5GHZ) | (flags & HAKIOS_STA_CHANNEL_PASSIVE ?
+	    0 : CHANNEL_ACTIVE) | (flags & HAKIOS_STA_CHANNEL_RADAR ? CHANNEL_DFS : 0);
 }
 
 /* ---- what the caller is given back ------------------------------------------------------------------- */
@@ -261,7 +242,7 @@ give(const struct apple80211req *request, const void *data, size_t length)
 
 /* An access point in the form a scan's result has; the caller has said how much room for elements there is. */
 static int
-give_network(const struct apple80211req *request, const struct redwood_sta_bss *bss)
+give_network(const struct apple80211req *request, const struct hakios_sta_bss *bss)
 {
 	struct apple80211_scan_result *result = kalloc_data(sizeof(*result), Z_WAITOK | Z_ZERO);
 	unsigned room = sizeof(result->elements);
@@ -278,11 +259,6 @@ give_network(const struct apple80211req *request, const struct redwood_sta_bss *
 	result->version = 1;
 	channel_fill(&result->channel, bss->frequency, 0);
 	result->rssi = bss->rssi;
-	if (bss->noise != 0) {
-		/* as a Mac's driver gives them (itlwm, AirportSTAIOCTL.cpp: asr_noise); 0 left a strong signal at one bar */
-		result->noise = bss->noise;
-		result->snr = (int16_t)(bss->rssi - bss->noise);
-	}
 	result->beacon_interval = bss->beacon_interval;
 	result->capability = bss->capability;
 	memcpy(result->bssid, bss->bssid, sizeof(result->bssid));
@@ -312,13 +288,13 @@ give_network(const struct apple80211req *request, const struct redwood_sta_bss *
 static int
 get(struct apple80211req *request)
 {
-	struct redwood_sta_state *state;
+	struct hakios_sta_state *state;
 	int error = 0;
 
 	switch (request->req_type) {
 	case 43:
 	case 44: {                              /* the driver's and the hardware's name: the text alone, in 256 bytes */
-		static const char name[256] = "xc5: Samsung SCSC WLBT (Exynos 850)";      /* XCover5 */
+		static const char name[256] = "hakios: ath11k for the WCN6750";
 
 		return give(request, name, sizeof(name));
 	}
@@ -339,9 +315,9 @@ get(struct apple80211req *request)
 		return give(request, bits, sizeof(bits));
 	}
 	case 19: {                              /* the radio's power: one radio. Until the driver is up it counts as on: it */
-		struct {                        /* is being brought up, and iOS asks this once, early */
+		struct {                        /* is being brought up, and Darwin asks this once, early */
 			uint32_t version, radios, state[4];
-		} answer = { .version = 1, .radios = 1, .state = { !redwood_sta_present() || redwood_sta_powered() } };
+		} answer = { .version = 1, .radios = 1, .state = { !hakios_sta_present() || hakios_sta_powered() } };
 
 		return give(request, &answer, sizeof(answer));
 	}
@@ -351,8 +327,8 @@ get(struct apple80211req *request)
 	case 27:
 	case 254: {                             /* the channels the radio may tune to */
 		struct apple80211_channels *answer;
-		struct redwood_sta_channel channels[96];
-		unsigned count = redwood_sta_channels(channels, 96);
+		struct hakios_sta_channel channels[96];
+		unsigned count = hakios_sta_channels(channels, 96);
 
 		if (count == 0 || (answer = kalloc_data(sizeof(*answer), Z_WAITOK | Z_ZERO)) == NULL) {
 			return count == 0 ? ENXIO : ENOMEM;
@@ -368,8 +344,8 @@ get(struct apple80211req *request)
 	}
 	case 207: {                             /* ... and more of each */
 		struct apple80211_channels_info *answer;
-		struct redwood_sta_channel channels[96];
-		unsigned count = redwood_sta_channels(channels, 96);
+		struct hakios_sta_channel channels[96];
+		unsigned count = hakios_sta_channels(channels, 96);
 
 		if (count == 0 || (answer = kalloc_data(sizeof(*answer), Z_WAITOK | Z_ZERO)) == NULL) {
 			return count == 0 ? ENXIO : ENOMEM;
@@ -380,8 +356,8 @@ get(struct apple80211req *request)
 
 			channel_fill(&channel, channels[i].frequency, channels[i].flags);
 			answer->number[i] = (uint8_t)channel.channel;
-			answer->dfs[i] = (channels[i].flags & REDWOOD_STA_CHANNEL_RADAR) != 0;
-			answer->passive[i] = (channels[i].flags & REDWOOD_STA_CHANNEL_PASSIVE) != 0;
+			answer->dfs[i] = (channels[i].flags & HAKIOS_STA_CHANNEL_RADAR) != 0;
+			answer->passive[i] = (channels[i].flags & HAKIOS_STA_CHANNEL_PASSIVE) != 0;
 			answer->flags[i] = channel.flags;
 		}
 		error = give(request, answer, sizeof(*answer));
@@ -394,8 +370,7 @@ get(struct apple80211req *request)
 		lck_mtx_unlock(&apple80211_lock);
 		return 0;
 	case 11: {                              /* what the last scan heard, one access point a request; EIO: that was all */
-		xc5_a80211_results++;           /* XCover5 */
-		struct redwood_sta_bss *bss = kalloc_data(sizeof(*bss), Z_WAITOK);
+		struct hakios_sta_bss *bss = kalloc_data(sizeof(*bss), Z_WAITOK);
 		unsigned index;
 		bool there;
 
@@ -405,9 +380,8 @@ get(struct apple80211req *request)
 		lck_mtx_lock(&apple80211_lock);
 		index = result_next++;
 		lck_mtx_unlock(&apple80211_lock);
-		there = redwood_sta_heard(index, bss);
+		there = hakios_sta_heard(index, bss);
 		error = there ? give_network(request, bss) : EIO;
-		xc5_a80211_given += there && error == 0;        /* XCover5 */
 		kfree_data(bss, sizeof(*bss));
 		return error;
 	}
@@ -419,21 +393,21 @@ get(struct apple80211req *request)
 	if ((state = kalloc_data(sizeof(*state), Z_WAITOK)) == NULL) {
 		return ENOMEM;
 	}
-	redwood_sta_state(state);
+	hakios_sta_state(state);
 	switch (request->req_type) {
 	case 13:                                /* the state: APPLE80211_S_INIT 0, _SCAN 1, _AUTH 2, _ASSOC 3, _RUN 4 */
-		request->req_val = state->phase == REDWOOD_STA_JOINED ? 4 : state->phase == REDWOOD_STA_JOINING ? 2 :
-		    state->phase == REDWOOD_STA_SCANNING ? 1 : 0;
+		request->req_val = state->phase == HAKIOS_STA_JOINED ? 4 : state->phase == HAKIOS_STA_JOINING ? 2 :
+		    state->phase == HAKIOS_STA_SCANNING ? 1 : 0;
 		break;
 	case 1:                                 /* its name; the length goes back in the request */
-		if (state->phase != REDWOOD_STA_JOINED) {
+		if (state->phase != HAKIOS_STA_JOINED) {
 			error = ENXIO;
 		} else if ((error = give(request, state->bss.ssid, state->bss.ssid_length)) == 0) {
 			request->req_len = state->bss.ssid_length;
 		}
 		break;
 	case 9:                                 /* its access point's address */
-		error = state->phase != REDWOOD_STA_JOINED ? ENXIO : give(request, state->bss.bssid, 6);
+		error = state->phase != HAKIOS_STA_JOINED ? ENXIO : give(request, state->bss.bssid, 6);
 		break;
 	case 4: {                               /* its channel */
 		struct {
@@ -441,7 +415,7 @@ get(struct apple80211req *request)
 			struct apple80211_channel channel;
 		} answer = { .version = 1 };
 
-		if (state->phase != REDWOOD_STA_JOINED) {
+		if (state->phase != HAKIOS_STA_JOINED) {
 			error = ENXIO;
 		} else {
 			channel_fill(&answer.channel, state->bss.frequency, 0);
@@ -456,28 +430,26 @@ get(struct apple80211req *request)
 		} answer = { .version = 1, .radios = 1, .each = { state->bss.rssi }, .all = state->bss.rssi,
 			     .each_ext = { state->bss.rssi }, .all_ext = state->bss.rssi };
 
-		error = state->phase != REDWOOD_STA_JOINED ? ENXIO : give(request, &answer, sizeof(answer));
-		break;
-	}
-	case 17: {                              /* the noise floor, the same way (apple80211_noise_data; 0: dBm) */
-		struct {
-			uint32_t version, radios, unit;
-			int32_t each[4], all, each_ext[4], all_ext;
-		} answer = { .version = 1, .radios = 1, .each = { state->bss.noise }, .all = state->bss.noise,
-			     .each_ext = { state->bss.noise }, .all_ext = state->bss.noise };
-
-		error = state->phase != REDWOOD_STA_JOINED || state->bss.noise == 0 ? ENXIO : give(request, &answer, sizeof(answer));
+		error = state->phase != HAKIOS_STA_JOINED ? ENXIO : give(request, &answer, sizeof(answer));
 		break;
 	}
 	case 103:                               /* all of it, as a scan's result */
-		error = state->phase != REDWOOD_STA_JOINED ? ENXIO : give_network(request, &state->bss);
+		error = state->phase != HAKIOS_STA_JOINED ? ENXIO : give_network(request, &state->bss);
 		break;
-	case 2: {                               /* how it was joined: open system, then WPA2 with a passphrase */
-		struct {
+	case 2: {                               /* how it was joined: open system, then WPA2 with a passphrase -- or */
+		struct {                        /* nothing more, for a network whose beacon has no RSN element (48) */
 			uint32_t version, lower, upper, extended;
 		} answer = { .version = 1, .lower = 1, .upper = 8 };
+		bool secured = false;
 
-		error = state->phase != REDWOOD_STA_JOINED ? ENXIO : give(request, &answer, sizeof(answer));
+		for (unsigned at = 0; at + 2 <= state->bss.elements_length; at += 2 + state->bss.elements[at + 1]) {
+			secured |= state->bss.elements[at] == 48;
+		}
+		if (!secured && state->bss.elements_length != 0) {
+			answer.upper = 0;
+		}
+
+		error = state->phase != HAKIOS_STA_JOINED ? ENXIO : give(request, &answer, sizeof(answer));
 		break;
 	}
 	default:
@@ -494,14 +466,14 @@ static int
 set_scan(const struct apple80211req *request, char *said, size_t said_size)
 {
 	struct apple80211_scan_request *asked;
-	struct redwood_sta_scan *what;
+	struct hakios_sta_scan *what;
 	unsigned unknown = 0;
 	int error;
 
 	if (request->req_len != sizeof(*asked)) {
 		return EINVAL;
 	}
-	if (!redwood_sta_present()) {
+	if (!hakios_sta_present()) {
 		return EBUSY;                   /* (the radio is still being brought up: the framework tries again) */
 	}
 	asked = kalloc_data(sizeof(*asked), Z_WAITOK);
@@ -535,7 +507,7 @@ set_scan(const struct apple80211req *request, char *said, size_t said_size)
 		lck_mtx_lock(&apple80211_lock);
 		result_next = 0;
 		lck_mtx_unlock(&apple80211_lock);
-		error = redwood_sta_ask_scan(what);
+		error = hakios_sta_ask_scan(what);
 	}
 out:
 	if (asked != NULL) {
@@ -551,12 +523,10 @@ static int
 set_join(const struct apple80211req *request, char *said, size_t said_size)
 {
 	struct apple80211_assoc *asked;
-	struct redwood_sta_join *what;
+	struct hakios_sta_join *what;
 	int error;
 
-	xc5_a80211_joins++;                     /* XCover5 */
 	if (request->req_len < offsetof(struct apple80211_assoc, rest)) {
-		xc5_a80211_join_why = 1;
 		return EINVAL;
 	}
 	asked = kalloc_data(sizeof(*asked), Z_WAITOK | Z_ZERO);
@@ -569,10 +539,7 @@ set_join(const struct apple80211req *request, char *said, size_t said_size)
 	snprintf(said, said_size, " (a join: a name of %u bytes, %s access point, authentication %#x/%#x, a key of %u bytes of kind %u)",
 	    asked->ssid_length, asked->bssid[0] | asked->bssid[1] | asked->bssid[2] | asked->bssid[3] | asked->bssid[4] |
 	    asked->bssid[5] ? "a given" : "any", asked->auth_lower, asked->auth_upper, asked->key_length, asked->key_cipher);
-	xc5_a80211_join_cipher = (int)asked->key_cipher;        /* XCover5 */
-	xc5_a80211_join_keylen = (int)asked->key_length;
 	if (asked->ssid_length == 0 || asked->ssid_length > sizeof(what->ssid)) {
-		xc5_a80211_join_why = 2;
 		error = EINVAL;
 		goto out;
 	}
@@ -580,24 +547,22 @@ set_join(const struct apple80211req *request, char *said, size_t said_size)
 	memcpy(what->ssid, asked->ssid, asked->ssid_length);
 	memcpy(what->bssid, asked->bssid, sizeof(what->bssid));
 	if (asked->key_length == 0) {
-		what->security = REDWOOD_STA_OPEN;
+		what->security = HAKIOS_STA_OPEN;
 	} else if (asked->key_cipher == CIPHER_PASSPHRASE && asked->key_length >= 8 && asked->key_length <= 63) {
-		what->security = REDWOOD_STA_WPA2_PSK;
+		what->security = HAKIOS_STA_WPA2_PSK;
 		what->passphrase_length = (uint8_t)asked->key_length;
 		memcpy(what->passphrase, asked->key, asked->key_length);
 	} else if (asked->key_cipher == CIPHER_PMK && asked->key_length == sizeof(what->pmk)) {
-		what->security = REDWOOD_STA_WPA2_PSK;
+		what->security = HAKIOS_STA_WPA2_PSK;
 		memcpy(what->pmk, asked->key, sizeof(what->pmk));
 	} else {
-		xc5_a80211_join_why = 3;        /* XCover5: a key of a kind not taken */
 		error = EINVAL;
 		goto out;
 	}
-	xc5_a80211_join_why = 4;                /* XCover5: handed to the station */
 	lck_mtx_lock(&apple80211_lock);
 	join_result = 0;
 	lck_mtx_unlock(&apple80211_lock);
-	error = redwood_sta_ask_join(what);
+	error = hakios_sta_ask_join(what);
 out:
 	if (asked != NULL) {
 		memset_s(asked, sizeof(*asked), 0, sizeof(*asked));
@@ -617,7 +582,7 @@ set(const struct apple80211req *request, char *said, size_t said_size)
 	case 20:
 		return set_join(request, said, said_size);
 	case 22:                                /* leave the network */
-		return redwood_sta_ask_leave();
+		return hakios_sta_ask_leave();
 	case 19: {                              /* the radio's power */
 		struct {
 			uint32_t version, radios, state[4];
@@ -628,10 +593,19 @@ set(const struct apple80211req *request, char *said, size_t said_size)
 			return request->req_len < sizeof(asked) ? EINVAL : error;
 		}
 		snprintf(said, said_size, " (power: %s)", asked.state[0] ? "on" : "off");
-		return redwood_sta_ask_power(asked.state[0] != 0);
+		return hakios_sta_ask_power(asked.state[0] != 0);
 	}
 	case 10:
 		return set_scan(request, said, said_size);
+	/*
+	 * Requests of iOS 16's wifid that this driver has no use for (383 every five seconds, 4104 bytes; 365; 419): refused,
+	 * wifid retried 383 for 10-15 s, and Settings stood still that long when a network was chosen. Taken and ignored.
+	 */
+	case 383:
+	case 365:
+	case 419:
+		snprintf(said, said_size, " (taken, ignored)");
+		return 0;
 	default:
 		return EOPNOTSUPP;
 	}
@@ -656,46 +630,41 @@ post(uint32_t code, const void *data, uint32_t length)
 	kev_post_msg(&message);
 }
 
-/* What the station side says has happened (bsd/dev/redwood_sta.c calls this, on its thread or the station's). */
+/* What the station side says has happened (drivers/wifi/hakios.sta.c calls this, on its thread or the station's). */
 void
-redwood_apple80211_event(enum redwood_sta_event event, int status)
+hakios_apple80211_event(enum hakios_sta_event event, int status)
 {
 	static unsigned said;
 
 	if (said < 200) {
 		said++;
-		printf("apple80211: the station says: %s, %d\n", event == REDWOOD_STA_POWER ? "power" : event == REDWOOD_STA_SCAN_DONE ?
-		    "a scan is over" : event == REDWOOD_STA_JOIN_DONE ? "a join is over" : "the link", status);
+		printf("apple80211: the station says: %s, %d\n", event == HAKIOS_STA_POWER ? "power" : event == HAKIOS_STA_SCAN_DONE ?
+		    "a scan is over" : event == HAKIOS_STA_JOIN_DONE ? "a join is over" : "the link", status);
 	}
 	switch (event) {
-	case REDWOOD_STA_POWER:
+	case HAKIOS_STA_POWER:
 		post(EVENT_POWER_CHANGED, NULL, 0);
 		break;
-	case REDWOOD_STA_SCAN_DONE:
-		xc5_a80211_scandone++;          /* XCover5 */
+	case HAKIOS_STA_SCAN_DONE:
 		lck_mtx_lock(&apple80211_lock);
 		result_next = 0;
 		lck_mtx_unlock(&apple80211_lock);
 		post(EVENT_SCAN_DONE, NULL, 0);
 		break;
-	case REDWOOD_STA_JOIN_DONE:
+	case HAKIOS_STA_JOIN_DONE:
 		lck_mtx_lock(&apple80211_lock);
 		join_result = status == 0 ? 1 : status == EAUTH ? 21 : status == ETIMEDOUT ? 9 : 2;
 		lck_mtx_unlock(&apple80211_lock);
 		post(EVENT_ASSOC_DONE, NULL, 0);
 		break;
-	case REDWOOD_STA_LINK: {
+	case HAKIOS_STA_LINK: {
 		struct apple80211_link_changed link = { .down = status != 1, .involuntary = status != 1 && status != 0,
 			                                .reason = status != 1 && status != 0 ? 4 : 0 };      /* (4: gone, not asked) */
-		struct redwood_sta_state *state = kalloc_data(sizeof(*state), Z_WAITOK | Z_ZERO);
+		struct hakios_sta_state *state = kalloc_data(sizeof(*state), Z_WAITOK | Z_ZERO);
 
 		if (state != NULL) {
-			redwood_sta_state(state);
+			hakios_sta_state(state);
 			link.rssi = status == 1 ? state->bss.rssi : 0;
-			if (status == 1 && state->bss.noise != 0) {
-				link.noise = (uint16_t)state->bss.noise;
-				link.snr = (uint16_t)(state->bss.rssi - state->bss.noise);
-			}
 			kfree_data(state, sizeof(*state));
 		}
 		post(EVENT_SSID_CHANGED, NULL, 0);
@@ -740,7 +709,7 @@ note(const struct apple80211req *request, bool is_set, int error)
 }
 
 void
-redwood_apple80211_summary(void)
+hakios_apple80211_summary(void)
 {
 	static bool said;
 
@@ -759,7 +728,7 @@ redwood_apple80211_summary(void)
 
 /* An Apple80211 request for the radio's interface, from the process that is running now. */
 errno_t
-redwood_apple80211_ioctl(u_long command, void *data)
+hakios_apple80211_ioctl(u_long command, void *data)
 {
 	static unsigned said;
 	struct apple80211req *request = data;
@@ -773,16 +742,10 @@ redwood_apple80211_ioctl(u_long command, void *data)
 	proc_selfname(who, sizeof(who));
 	error = is_set ? set(request, what, sizeof(what)) : get(request);
 	note(request, is_set, error);
-	xc5_a80211_requests++;                  /* XCover5 */
-	if (error != 0) {
-		xc5_a80211_refused++;
-		xc5_a80211_last_type = (is_set ? 1000 : 0) + request->req_type;
-		xc5_a80211_last_error = error;
-	}
 	/*
 	 * (a request that is repeated for ever is said a few hundred times)
-	 * XCover5 (wifi58): wifid asks CURRENT_NETWORK every second and that filled the RAM log; a request is now said
-	 * the first two times it gets an answer it did not get before. A scan or a join (set 10, 20) is always said.
+	 * XCover5: wifid asks CURRENT_NETWORK every second and that filled the RAM log (wifi58); a request is said the
+	 * first two times it gets an answer it did not get before. A scan or a join (set 10, 20) is always said.
 	 */
 	static uint16_t told[2][512];
 	static int told_error[2][512];

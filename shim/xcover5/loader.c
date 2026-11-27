@@ -234,8 +234,9 @@ static uint32_t fidx[FMAX], fn;
 static int filtered;
 /* a char table, not pointers: the loader has no relocations */
 /* Wi-Fi work (wifi58): the kernel's Wi-Fi lines ("XC5 w ...", "XC5 WLBT", firmware log, configd), crashes, panics */
-static const char fkeys[][12] = { "XC5 w ", "XC5 WLBT", "XC5 wlbt", "XC5 hip", "XC5 FW", "xc5net", "CRASH",
-				  "panic", "heartbeat", "gpusvc", "viva", "" };
+/* (2026-11-27: the A50 port's SCSC driver says "scsc:", its station "wifi:", "apple80211:", "HakiosWLAN") */
+static const char fkeys[][12] = { "XC5 w ", "scsc", "wifi", "XC5 SCSC", "apple80211", "HakiosWLAN", "en0", "CRASH",
+				  "panic", "heartbeat", "gpusvc", "" };
 
 static int line_has(volatile struct prz *z, uint32_t i, const char *k)
 {

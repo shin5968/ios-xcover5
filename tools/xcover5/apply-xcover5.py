@@ -439,7 +439,7 @@ edit('iokit/Kernel/arm/SweetPlatformExpert.cpp', [
      'extern char xcover5_gpusvc_lines[4][120];\n'
      'extern uint32_t xcover5_gpusvc_line;\n'
      'extern uint32_t xcover5_drop_state[5];\n'
-     'void xc5_wlbt_heartbeat(void) __attribute__((weak));   /* bsd/dev/xc5_wlbt.c */\n'
+     'void xc5_wlbt_heartbeat(void) __attribute__((weak));   /* bsd/dev/xc5_scsc.c (the A50 driver) */\n'
      'extern uint32_t xcover5_gl_exit[4];\n'
      'extern uint32_t xcover5_amfi_svc[2], xcover5_amfi_sel[16], xcover5_amfi_dev_reads;\n'
      'extern char xcover5_amfi_last[2][20], xcover5_amfi_dev_last[20];\n'
@@ -1607,29 +1607,33 @@ print('wrote bsd/dev/xc5_drop.c')
 (tree / 'bsd/dev/xc5_pmic.c').write_text(
     (Path(__file__).resolve().parent / 'xc5_pmic.c').read_text())
 print('wrote bsd/dev/xc5_pmic.c')
-# Wi-Fi step 1: start the SCSC WLBT core with Samsung's firmware (bsd/dev/xc5_wlbt.c, boot-arg xc5wifi).
-(tree / 'bsd/dev/xc5_wlbt.c').write_text(
-    (Path(__file__).resolve().parent / 'xc5_wlbt.c').read_text())
-print('wrote bsd/dev/xc5_wlbt.c')
-# Wi-Fi step 4e: iOS's own Wi-Fi side (wifid, Settings) on the kernel's driver, with y2sios's (MIT) station
-# boundary, Apple80211 answers and registry entries (tools/xcover5/y2sios/; boot-arg xc5wifiui).
-_y2s = Path(__file__).resolve().parent / 'y2sios'
-for src, dst in (('redwood_sta.c', 'bsd/dev/redwood_sta.c'), ('redwood_apple80211.c', 'bsd/dev/redwood_apple80211.c'),
-                 ('redwood_sta.h', 'bsd/sys/redwood_sta.h'), ('redwood_net.h', 'bsd/sys/redwood_net.h'),
-                 ('RedwoodWLAN.cpp', 'iokit/Kernel/arm/RedwoodWLAN.cpp'),
-                 ('MiniIONetworkStack.cpp', 'iokit/Kernel/arm/MiniIONetworkStack.cpp')):
-    (tree / dst).write_text((_y2s / src).read_text())
+# Wi-Fi (2026-11-27, the user's choice): the Galaxy A50 port's SCSC driver and its station, Apple80211 answers, en0,
+# registry entries and WPA2 (tools/xcover5/a50/, github.com/nespaces/ios-a50-exynos9610 at eaccebe, APSL 2.0), the
+# driver's platform part made the Exynos 850's (bsd/dev/xc5_scsc.c), what those files ask of the A50's kernel made
+# here (bsd/dev/xc5_hakios_glue.c), and y2sios's IONetworkStack (MIT). Boot-arg scsc=6. It replaces the XCover5's
+# own bsd/dev/xc5_wlbt.c and y2sios's station files (both in git history).
+_here = Path(__file__).resolve().parent
+for src, dst in (('a50/hakios.sta.c', 'bsd/dev/hakios.sta.c'), ('a50/hakios.apple80211.c', 'bsd/dev/hakios.apple80211.c'),
+                 ('a50/hakios.net.c', 'bsd/dev/hakios.net.c'), ('a50/hakios.lx_wpa.c', 'bsd/dev/hakios.lx_wpa.c'),
+                 ('a50/hakios.lx_wpa.h', 'bsd/dev/hakios.lx_wpa.h'), ('a50/hakios.sta.h', 'bsd/sys/hakios.sta.h'),
+                 ('a50/hakios.net.h', 'bsd/sys/hakios.net.h'), ('a50/hakios.macaddr.h', 'bsd/sys/hakios.macaddr.h'),
+                 ('a50/hakios.input.h', 'bsd/sys/hakios.input.h'), ('a50/hakios.wlan.cpp', 'iokit/Kernel/arm/hakios.wlan.cpp'),
+                 ('xc5_scsc.c', 'bsd/dev/xc5_scsc.c'), ('xc5_hakios_glue.c', 'bsd/dev/xc5_hakios_glue.c'),
+                 ('y2sios/MiniIONetworkStack.cpp', 'iokit/Kernel/arm/MiniIONetworkStack.cpp')):
+    (tree / dst).write_text((_here / src).read_text())
     print('wrote ' + dst)
 edit('bsd/conf/files', [
     ('bsd/dev/a5xelte_emmc.c\t\t\tstandard\n',
      'bsd/dev/a5xelte_emmc.c\t\t\tstandard\nbsd/dev/xc5_drop.c\t\t\tstandard\n'
-     'bsd/dev/xc5_pmic.c\t\t\tstandard\nbsd/dev/xc5_wlbt.c\t\t\tstandard\n'
-     'bsd/dev/redwood_sta.c\t\t\tstandard\nbsd/dev/redwood_apple80211.c\t\tstandard\n', 1),
+     'bsd/dev/xc5_pmic.c\t\t\tstandard\nbsd/dev/xc5_scsc.c\t\t\tstandard\n'
+     'bsd/dev/xc5_hakios_glue.c\t\tstandard\nbsd/dev/hakios.sta.c\t\t\tstandard\n'
+     'bsd/dev/hakios.apple80211.c\t\tstandard\nbsd/dev/hakios.net.c\t\t\tstandard\n'
+     'bsd/dev/hakios.lx_wpa.c\t\t\tstandard\n', 1),
 ])
 edit('iokit/conf/files.arm64', [
     ('iokit/Kernel/arm/XC5AMFI.cpp                                     optional iokitcpp\n',
      'iokit/Kernel/arm/XC5AMFI.cpp                                     optional iokitcpp\n'
-     'iokit/Kernel/arm/RedwoodWLAN.cpp                                 optional iokitcpp\n'
+     'iokit/Kernel/arm/hakios.wlan.cpp                                 optional iokitcpp\n'
      'iokit/Kernel/arm/MiniIONetworkStack.cpp                          optional iokitcpp\n', 1),
 ])
 edit('bsd/dev/a5xelte_emmc.c', [
@@ -1686,10 +1690,6 @@ edit('bsd/kern/bsd_init.c', [
      '\t\textern void xc5_pmic_start(void) __attribute__((weak));\n'
      '\t\tif (xc5_pmic_start) {\n'
      '\t\t\txc5_pmic_start();   /* the PMIC power key (xc5pmic) */\n'
-     '\t\t}\n'
-     '\t\textern void xc5_wlbt_start(void) __attribute__((weak));\n'
-     '\t\tif (xc5_wlbt_start) {\n'
-     '\t\t\txc5_wlbt_start();   /* Wi-Fi core (xc5wifi) */\n'
      '\t\t}\n'
      '\t}\n'
      '#endif\n'

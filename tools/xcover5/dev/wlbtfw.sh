@@ -1,5 +1,5 @@
 #!/bin/bash
-# The two binary inputs of the Wi-Fi core (bsd/dev/xc5_wlbt.c), made on this machine and NEVER committed:
+# The binary inputs of the Wi-Fi driver (bsd/dev/xc5_scsc.c, the A50 port's), made on this machine and NEVER committed:
 #   shim/xcover5/out/wifi/mx140.bin  the WLBT firmware, from the stock vendor image (tools/xcover5/dev/stockfw.sh)
 #   shim/xcover5/out/wifi/ka.bin     the PMU boot patch ("KA patch", an 8051 program), as little-endian words, taken
 #                                    from Samsung's GPL driver source (Galaxy A21s kernel, platform_mif_3830.c ka_patch[])
@@ -25,4 +25,7 @@ open(sys.argv[2], 'wb').write(b''.join(struct.pack('<I', w) for w in words))
 print(f'ka.bin: {len(words)} words')
 PY
 rm -f "$OUT/.platform_mif_3830.c"
+# 2026-11-27, the A50 port's driver (bsd/dev/xc5_scsc.c): the country's regulatory rules from the phone's own database
+# (without them the firmware only listens and a join faults, the A50 found), as the drop's wifi/country.bin
+python3 "$REPO/tools/xcover5/dev/scsc-country.py" ~/xc5/stock/vendor/wifi/slsi_reg_database.bin ${XC5_COUNTRY:-KR} "$OUT/country.bin"
 ls -l "$OUT"
