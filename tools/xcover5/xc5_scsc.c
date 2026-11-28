@@ -721,7 +721,14 @@ hip_probe(vm_offset_t mem, vm_offset_t mbox, bool scan)
 static void log_dump(vm_offset_t mem, uint32_t panic_off);
 static uint32_t hip_panic_off;          /* for the firmware's log at a failed join */
 
-#define HIP_SLOTS               4
+/*
+ * XCover5 (a32mtl1): with 4 slots every scan wifid asked for failed with EAGAIN ("a scan is over, 35") for minutes:
+ * all four were still waiting for the firmware to give their buffers back (a request it keeps, or one it never
+ * answered). The control area after the TX data has room for 32 (0x10000 / 2048); 16 are used, and a slot not back
+ * after HIP_SLOT_AGE_S seconds is taken again (counted: reclaimed).
+ */
+#define HIP_SLOTS               16
+#define HIP_SLOT_AGE_S          15
 #define HIP_SLOT_BYTES          2048u
 #define HIP_BSS_MOST            32
 #define HIP_SCAN_ID             0x0100u
@@ -731,6 +738,8 @@ static uint8_t scsc_mac[6] = { 0x02, 0x58, 0x43, 0x35, 0x00, 0x01 };     /* XCov
 static uint32_t hip_version;
 static uint32_t hip_slot_ref[HIP_SLOTS];
 static uint8_t hip_slot_busy[HIP_SLOTS];
+static uint64_t hip_slot_since[HIP_SLOTS];
+static unsigned hip_slot_reclaimed, hip_slot_none;
 static uint16_t hip_sender_next = 0xc010;
 static uint16_t hip_scan_ch[11];
 static unsigned hip_scan_n;
@@ -810,13 +819,42 @@ hip_slots_init(void)
 static int
 hip_slot_get(void)
 {
+	uint64_t now = mach_absolute_time(), age_ns = 0;
+	int oldest = -1;
+
 	for (int i = 0; i < HIP_SLOTS; i++) {
 		if (!hip_slot_busy[i]) {
 			hip_slot_busy[i] = 1;
+			hip_slot_since[i] = now;
 			return i;
 		}
+		if (oldest < 0 || hip_slot_since[i] < hip_slot_since[oldest]) {
+			oldest = i;
+		}
 	}
+	if (oldest >= 0) {
+		absolutetime_to_nanoseconds(now - hip_slot_since[oldest], &age_ns);
+		if (age_ns > (uint64_t)HIP_SLOT_AGE_S * 1000000000ull) {
+			if (hip_slot_reclaimed++ < 8) {
+				say("scsc: TX slot %d not given back in %llu s: taken again\n", oldest, age_ns / 1000000000ull);
+			}
+			hip_slot_since[oldest] = now;
+			return oldest;
+		}
+	}
+	hip_slot_none++;
 	return -1;
+}
+
+static unsigned
+hip_slots_busy(void)
+{
+	unsigned n = 0;
+
+	for (int i = 0; i < HIP_SLOTS; i++) {
+		n += hip_slot_busy[i] != 0;
+	}
+	return n;
 }
 
 static void
@@ -3796,5 +3834,6 @@ void xc5_wlbt_heartbeat(void);
 void
 xc5_wlbt_heartbeat(void)
 {
-	printf("XC5 w scsc wlan %u hip v%u alive %u joined %d\n", wlan_started, hip_version, hip_alive, hip_joined_v);
+	printf("XC5 w scsc wlan %u hip v%u alive %u joined %d slots %u/%u none %u reclaimed %u\n", wlan_started, hip_version,
+	    hip_alive, hip_joined_v, hip_slot_ref[0] != 0 ? hip_slots_busy() : 0, HIP_SLOTS, hip_slot_none, hip_slot_reclaimed);
 }
