@@ -300,9 +300,36 @@ static void *main_sampler(void *arg) {
     return NULL;
 }
 
+/*
+ * With SpringBoard on Metal (M3, boot 78) it aborted in Siri's orb: _MTLReportFailure <- MPSGetImageType <- MPSImage <-
+ * -[SUICOrbView _updateMetalTextureRasterSize:] <- -[SBAssistantController _init]. The Galaxy A32 port (hakios-a32,
+ * docs/metal-a32.md test75, same Mali-G52 and the same y2sios Metal driver) met the same abort and answered
+ * +[SBAssistantController sharedInstance] with nil: Siri is not started, and nothing else in SpringBoard needs the
+ * singleton to be an object. Done here (not in the main bundle's code, only its class's method).
+ * /private/var/xc5/siri.on leaves it alone.
+ */
+static bool siri_done;
+
+static id no_assistant(id self, SEL cmd) {
+    (void)self; (void)cmd;
+    return nil;
+}
+
+static void no_siri(void) {
+    if (siri_done || access(DROP_DIR "siri.on", F_OK) == 0) return;
+    Class cls = objc_getClass("SBAssistantController");
+    if (cls == Nil) return;
+    Method m = class_getClassMethod(cls, sel_registerName("sharedInstance"));
+    if (m == NULL) return;
+    method_setImplementation(m, (IMP)no_assistant);
+    siri_done = true;
+    say("xc5sb: +[SBAssistantController sharedInstance] answers nil: no Siri (its orb aborts in MPS on this GPU)");
+}
+
 static void image_added(const struct mach_header *header, intptr_t image_slide) {
     (void)header; (void)image_slide;
     guard_poster_kit();         /* once PosterKit's classes are there */
+    no_siri();
 }
 
 /*
